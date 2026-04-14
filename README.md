@@ -1,2 +1,1 @@
-# 2026_laglitsynth
-Lagrangian Oceanography Literature Synthesis
+# Lagrangian Oceanography Literature Synthesis
