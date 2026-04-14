@@ -140,10 +140,11 @@ pixi run fetch-publications "lagrangian oceanography" -o custom/path.jsonl
 Arguments:
 - Positional: search query string (required)
 - `-o` / `--output`: output JSONL path (optional; default:
-  `data/openalex/<query_slug>_<ISO8601>.jsonl`, e.g.
-  `data/openalex/lagrangian_oceanography_20260414T152312.jsonl`).
+  `data/openalex/<query_slug>_<ISO8601>.jsonl`). The timestamp is
+  `datetime.now(UTC).isoformat(timespec='microseconds')` with colons replaced
+  by hyphens for filesystem safety, e.g.
+  `data/openalex/lagrangian_oceanography_2026-04-14T15-23-12.123456+00-00.jsonl`.
   The slug is the query lowercased with non-alphanumeric runs replaced by `_`.
-  The timestamp is UTC at invocation time.
 - `--from-year`: filter publications from this year onward (optional, mapped to
   `from_publication_date: "YYYY-01-01"`)
 - `--to-year`: filter publications up to this year (optional, mapped to
