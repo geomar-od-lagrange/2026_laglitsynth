@@ -98,7 +98,7 @@ laglitsynth filter-abstracts INPUT_JSONL PROMPT [options]
 Arguments:
 - Positional: input JSONL path, filter prompt string
 - `-o` / `--output`: output JSONL path (default:
-  `<input_stem>_filtered_<timestamp>.jsonl` in the same directory)
+  `data/filtered/<input_stem>_filtered_<timestamp>.jsonl`)
 - `--model`: Ollama model name (default: `gemma3:4b`)
 - `--threshold`: relevance score cutoff, 0–100 (default: 50)
 - `--base-url`: Ollama API base URL (default: `http://localhost:11434`)
@@ -148,16 +148,18 @@ completion, print summary: accepted/rejected/skipped counts and elapsed time.
    simple.
 
 4. **Output is the same `Work` JSONL format.** The filtered file is readable
-   by any downstream tool that reads `Work` records — no new format. The
-   sidecar `.meta.json` records the filter prompt, model used, threshold,
-   and accept/reject/skip counts.
+   by any downstream tool that reads `Work` records — no new format. Default
+   output goes to `data/filtered/` (not the input file's directory), since
+   filtered results are derived products. The sidecar `.meta.json` records
+   the filter prompt, model used, threshold, and accept/reject/skip counts.
 
 5. **Verdict log.** Write a `_verdicts.jsonl` sidecar with one
    `FilterVerdict` per input work (including rejects and skips). Naming
-   convention: if output is `foo_filtered_2026-...jsonl`, verdicts go to
-   `foo_filtered_2026-...verdicts.jsonl` and metadata to
-   `foo_filtered_2026-...meta.json` (same stem, different suffix — matching
-   the fetch tool's `.meta.json` pattern via `path.with_suffix()`).
+   convention: if output is `data/filtered/foo_filtered_2026-...jsonl`,
+   verdicts go to `data/filtered/foo_filtered_2026-...verdicts.jsonl` and
+   metadata to `data/filtered/foo_filtered_2026-...meta.json` (same stem,
+   different suffix — matching the fetch tool's `.meta.json` pattern via
+   `path.with_suffix()`).
 
 ## Dependencies
 

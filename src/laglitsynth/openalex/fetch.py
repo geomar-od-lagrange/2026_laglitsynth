@@ -152,11 +152,12 @@ def _write_metadata(
         f.write("\n")
 
 
-def main(argv: list[str] | None = None) -> None:
-    load_dotenv()
-
-    parser = argparse.ArgumentParser(
-        description="Fetch publications from OpenAlex and save as JSONL."
+def build_subparser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> argparse.ArgumentParser:
+    parser = subparsers.add_parser(
+        "fetch-publications",
+        help="Fetch publications from OpenAlex and save as JSONL.",
     )
     parser.add_argument("query", help="Search query string")
     parser.add_argument("-o", "--output", type=Path, help="Output JSONL path")
@@ -172,7 +173,12 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="Maximum number of results to fetch (default: 199)",
     )
-    args = parser.parse_args(argv)
+    parser.set_defaults(run=run)
+    return parser
+
+
+def run(args: argparse.Namespace) -> None:
+    load_dotenv()
 
     max_results_defaulted = args.max_results is None
     if max_results_defaulted:
@@ -233,7 +239,3 @@ def main(argv: list[str] | None = None) -> None:
 
     if max_results_defaulted:
         print(max_results_warning, file=sys.stderr)
-
-
-if __name__ == "__main__":
-    main()
