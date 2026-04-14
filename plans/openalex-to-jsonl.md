@@ -133,12 +133,17 @@ Fail fast with a clear error if the key is missing.
 ## CLI interface
 
 ```
-pixi run fetch-publications "lagrangian oceanography" -o results/lagrangian_oceanography.jsonl
+pixi run fetch-publications "lagrangian oceanography"
+pixi run fetch-publications "lagrangian oceanography" -o custom/path.jsonl
 ```
 
 Arguments:
 - Positional: search query string (required)
-- `-o` / `--output`: output JSONL path (required)
+- `-o` / `--output`: output JSONL path (optional; default:
+  `data/openalex/<query_slug>_<ISO8601>.jsonl`, e.g.
+  `data/openalex/lagrangian_oceanography_20260414T152312.jsonl`).
+  The slug is the query lowercased with non-alphanumeric runs replaced by `_`.
+  The timestamp is UTC at invocation time.
 - `--from-year`: filter publications from this year onward (optional, mapped to
   `from_publication_date: "YYYY-01-01"`)
 - `--to-year`: filter publications up to this year (optional, mapped to
@@ -200,10 +205,10 @@ Register `fetch-publications` as a pixi task so it's invocable via
 
 ### 4. Output conventions
 
-- Output directory is the caller's choice (passed via `-o`). The tool creates
+- Default output lands in `data/openalex/` (gitignored). The tool creates
   parent directories if they don't exist.
-- Filename should encode the query for traceability, but that's the caller's
-  responsibility.
+- Each run produces a unique filename via the `<slug>_<ISO8601>` convention,
+  so reruns of the same query don't collide.
 - **Sidecar metadata file**: alongside `output.jsonl`, write `output.meta.json`
   containing `{"query": ..., "fetched_at": ..., "total_count": ..., "records_written": ...}`.
   This keeps the JSONL as a pure stream of `Work` records — no special first-line
