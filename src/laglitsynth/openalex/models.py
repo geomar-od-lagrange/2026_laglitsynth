@@ -16,7 +16,7 @@ class Institution(BaseModel):
 class Author(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    id: str
+    id: str | None = None
     display_name: str
     orcid: str | None = None
 

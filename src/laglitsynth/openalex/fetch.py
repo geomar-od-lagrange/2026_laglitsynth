@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pyalex
+from dotenv import load_dotenv
 from pydantic import ValidationError
 
 from laglitsynth.openalex.models import Work
@@ -151,6 +152,8 @@ def _write_metadata(
 
 
 def main(argv: list[str] | None = None) -> None:
+    load_dotenv()
+
     parser = argparse.ArgumentParser(
         description="Fetch publications from OpenAlex and save as JSONL."
     )
@@ -163,9 +166,20 @@ def main(argv: list[str] | None = None) -> None:
         "--to-year", type=int, help="Filter publications up to this year"
     )
     parser.add_argument(
-        "--max-results", type=int, help="Maximum number of results to fetch"
+        "--max-results",
+        type=int,
+        default=199,
+        help="Maximum number of results to fetch (default: 199)",
     )
     args = parser.parse_args(argv)
+
+    max_results_defaulted = "--max-results" not in (argv or sys.argv[1:])
+    max_results_warning = (
+        "Warning: --max-results not set, defaulting to 199. "
+        "Pass --max-results explicitly to fetch more."
+    )
+    if max_results_defaulted:
+        print(max_results_warning, file=sys.stderr)
 
     api_key = os.environ.get("OPENALEX_API_KEY")
     if not api_key:
@@ -212,6 +226,10 @@ def main(argv: list[str] | None = None) -> None:
     print(
         f"Done: {count} records, {file_size / 1024:.1f} KiB, {elapsed:.1f}s elapsed.",
         file=sys.stderr,
+    )
+
+    if max_results_defaulted:
+        print(max_results_warning, file=sys.stderr,
     )
 
 
