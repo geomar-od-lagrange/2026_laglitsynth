@@ -1,0 +1,22 @@
+# Data model
+
+Pydantic models in [`src/laglitsynth/openalex/models.py`](../src/laglitsynth/openalex/models.py).
+These are the contract between the fetch layer and all downstream consumers
+(BibTeX export, citation graph, filtering). See the source for the full schema.
+
+## Design decisions
+
+- **`ConfigDict(extra="ignore")`** on all models. OpenAlex adds new fields
+  regularly; unknown fields are silently dropped rather than causing errors.
+- **Nullable where OpenAlex is nullable.** Many fields that the OpenAlex schema
+  documents as required can be `null` in practice (errata, old records, data
+  quality issues). The models accept `None` rather than skipping records.
+- **`publication_date` is `date | None`**, not a string. Pydantic validates the
+  format; downstream code gets a real date object.
+- **Abstract stored as plain text.** Reconstructed from OpenAlex's inverted
+  index at ingest time.
+- **`referenced_works` as `list[str]`.** These are OpenAlex IDs. Resolving them
+  to full records is the citation graph tool's job.
+- **No `concepts` field.** Deprecated by OpenAlex (replaced by `topics`).
+- **No `related_works`.** Algorithmically generated, changes frequently, inflates
+  file size. Not useful for literature review.
