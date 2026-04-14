@@ -9,7 +9,9 @@ Each line is a validated `Work` record (see [data model](data-model.md)).
 pixi run fetch-publications "lagrangian oceanography"
 ```
 
-Run `pixi run fetch-publications --help` for all options.
+Run `pixi run fetch-publications --help` for all options. Note:
+`--max-results` defaults to 199 as a safety cap — pass it explicitly to
+fetch more.
 
 ## Output
 

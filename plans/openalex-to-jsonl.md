@@ -261,3 +261,15 @@ At ~80 records/sec with full payload (measured empirically):
 | 10,000      | ~2 min   |
 | 16,000      | ~3.5 min |
 | 100,000     | ~21 min  |
+
+## Post-implementation notes
+
+- **Resumability dropped.** `--resume` was cut during implementation — cursor
+  pagination isn't index-stable between runs, so skipping N records from a
+  fresh query doesn't land on the right spot. Timestamped filenames mean
+  failed fetches can simply be rerun.
+- **Nullable fields relaxed beyond plan.** `Author.id`, `Institution.id`,
+  `Institution.display_name`, and `is_retracted` are nullable in practice
+  despite the OpenAlex schema. Models accept `None` rather than skipping
+  records.
+- **`--max-results` defaults to 199** as a safety cap (plan said no cap).

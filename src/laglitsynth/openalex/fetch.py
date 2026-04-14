@@ -91,10 +91,9 @@ def search_openalex(
     total = works_query.count()
     print(f"Query matches {total} works.", file=sys.stderr)
 
-    n_max = max_results if max_results is not None else total
     yielded = 0
 
-    for page in works_query.paginate(per_page=200, n_max=n_max):
+    for page in works_query.paginate(per_page=200, n_max=max_results):
         for raw in page:
             if max_results is not None and yielded >= max_results:
                 return
@@ -170,12 +169,14 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--max-results",
         type=int,
-        default=199,
+        default=None,
         help="Maximum number of results to fetch (default: 199)",
     )
     args = parser.parse_args(argv)
 
-    max_results_defaulted = "--max-results" not in (argv or sys.argv[1:])
+    max_results_defaulted = args.max_results is None
+    if max_results_defaulted:
+        args.max_results = 199
     max_results_warning = (
         "Warning: --max-results not set, defaulting to 199. "
         "Pass --max-results explicitly to fetch more."
@@ -231,8 +232,7 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     if max_results_defaulted:
-        print(max_results_warning, file=sys.stderr,
-    )
+        print(max_results_warning, file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -28,6 +28,13 @@ structured assessment and synthesis.
   strict mode is the bar — run `pixi run typecheck` before merging.
 - **Link, don't just name.** When markdown references a file path, make it a
   relative markdown link, not a bare backtick path.
+- **None means None.** If upstream data is missing or null, store `None` —
+  don't invent defaults. Science data is messy; downstream consumers must
+  handle incomplete information explicitly.
+- **AI-tool agnostic.** Project configuration, principles, and documentation
+  live in the repo (AGENTS.md, docs/, plans/), not in tool-specific memory
+  or config. Any AI coding assistant should be able to pick up the project
+  from repo contents alone.
 - **Green field, no backwards compatibility.** This pipeline has no external
   consumers. Every user is a developer on the project. We break internal APIs
   freely when it makes the code better — no deprecation cycles, no shims, no
