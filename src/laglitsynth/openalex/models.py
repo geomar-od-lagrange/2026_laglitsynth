@@ -6,8 +6,8 @@ from pydantic import BaseModel, ConfigDict
 class Institution(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    id: str
-    display_name: str
+    id: str | None = None
+    display_name: str | None = None
     ror: str | None = None
     country_code: str | None = None
     type: str | None = None
@@ -118,4 +118,4 @@ class Work(BaseModel):
     topics: list[Topic]
     primary_topic: Topic | None = None
     abstract: str | None = None
-    is_retracted: bool
+    is_retracted: bool | None = None

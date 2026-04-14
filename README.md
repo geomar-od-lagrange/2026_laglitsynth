@@ -14,26 +14,18 @@ pixi install
 ### OpenAlex API key
 
 Since February 2026, OpenAlex requires a (free) API key. Register at
-<https://openalex.org/settings/api> and set the environment variable:
+<https://openalex.org/settings/api> and set the environment variable in `.env`:
 
-```bash
-export OPENALEX_API_KEY="your-key-here"
+```
+OPENALEX_API_KEY=your-key-here
 ```
 
-## Usage
+## Tools
 
-### Fetch publications from OpenAlex
+- `pixi run fetch-publications` — fetch publications from OpenAlex into JSONL.
+  See `--help` for options and `docs/openalex-fetch.md` for details.
 
-```bash
-pixi run fetch-publications "lagrangian oceanography"
-```
+## Documentation
 
-Options:
-
-- `-o` / `--output` — custom output path (default: `data/openalex/<slug>_<timestamp>.jsonl`)
-- `--from-year` — filter publications from this year onward
-- `--to-year` — filter publications up to this year
-- `--max-results` — cap on number of results
-
-Output is a JSONL file where each line is a validated `Work` record, plus a
-`.meta.json` sidecar with query metadata.
+- [OpenAlex fetch tool](docs/openalex-fetch.md)
+- [Data model](docs/data-model.md)

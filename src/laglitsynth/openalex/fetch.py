@@ -141,6 +141,8 @@ def _write_metadata(
 ) -> None:
     """Write sidecar metadata JSON file."""
     meta = {
+        "tool": "laglitsynth.openalex.fetch",
+        "tool_version": "alpha",
         "query": query,
         "fetched_at": fetched_at,
         "total_count": total_count,
