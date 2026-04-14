@@ -11,7 +11,12 @@ Requires [pixi](https://pixi.sh) for environment management.
 pixi install
 ```
 
-### OpenAlex API key
+## Tools
+
+- `fetch-publications` — fetch publications from OpenAlex into JSONL.
+  See `--help` for options and [`docs/`](docs/) for details.
+
+## OpenAlex API key
 
 Since February 2026, OpenAlex requires a (free) API key. Register at
 <https://openalex.org/settings/api> and set the environment variable in `.env`:
@@ -19,13 +24,3 @@ Since February 2026, OpenAlex requires a (free) API key. Register at
 ```
 OPENALEX_API_KEY=your-key-here
 ```
-
-## Tools
-
-- `pixi run fetch-publications` — fetch publications from OpenAlex into JSONL.
-  See `--help` for options and `docs/openalex-fetch.md` for details.
-
-## Documentation
-
-- [OpenAlex fetch tool](docs/openalex-fetch.md)
-- [Data model](docs/data-model.md)

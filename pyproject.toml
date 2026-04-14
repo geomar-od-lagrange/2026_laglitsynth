@@ -13,6 +13,9 @@ dependencies = [
 test = ["pytest", "pytest-cov"]
 typecheck = ["mypy"]
 
+[project.scripts]
+fetch-publications = "laglitsynth.openalex.fetch:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -25,7 +28,7 @@ platforms = ["osx-arm64", "osx-64", "linux-64"]
 laglitsynth = { path = ".", editable = true, extras = ["test", "typecheck"] }
 
 [tool.pixi.tasks]
-fetch-publications = { cmd = "python -m laglitsynth.openalex.fetch", description = "Fetch publications from OpenAlex" }
+fetch-publications = { cmd = "fetch-publications", description = "Fetch publications from OpenAlex" }
 test = { cmd = "pytest --cov=laglitsynth --cov-report=term-missing", description = "Run tests" }
 typecheck = { cmd = "mypy --strict src/", description = "Run type checker" }
 

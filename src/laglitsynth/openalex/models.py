@@ -3,9 +3,11 @@ from datetime import date
 from pydantic import BaseModel, ConfigDict
 
 
-class Institution(BaseModel):
+class _Base(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
+
+class Institution(_Base):
     id: str | None = None
     display_name: str | None = None
     ror: str | None = None
@@ -13,17 +15,13 @@ class Institution(BaseModel):
     type: str | None = None
 
 
-class Author(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+class Author(_Base):
     id: str | None = None
     display_name: str
     orcid: str | None = None
 
 
-class Authorship(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+class Authorship(_Base):
     author_position: str
     author: Author
     institutions: list[Institution]
@@ -32,9 +30,7 @@ class Authorship(BaseModel):
     raw_affiliation_strings: list[str]
 
 
-class Source(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+class Source(_Base):
     id: str
     display_name: str
     issn_l: str | None = None
@@ -43,9 +39,7 @@ class Source(BaseModel):
     host_organization_name: str | None = None
 
 
-class Location(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+class Location(_Base):
     is_oa: bool | None = None
     landing_page_url: str | None = None
     pdf_url: str | None = None
@@ -54,33 +48,25 @@ class Location(BaseModel):
     license: str | None = None
 
 
-class OpenAccess(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+class OpenAccess(_Base):
     is_oa: bool | None = None
     oa_status: str | None = None
     oa_url: str | None = None
 
 
-class Biblio(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+class Biblio(_Base):
     volume: str | None = None
     issue: str | None = None
     first_page: str | None = None
     last_page: str | None = None
 
 
-class TopicHierarchy(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+class TopicHierarchy(_Base):
     id: str
     display_name: str
 
 
-class Topic(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+class Topic(_Base):
     id: str
     display_name: str
     score: float
@@ -89,17 +75,13 @@ class Topic(BaseModel):
     domain: TopicHierarchy
 
 
-class Keyword(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+class Keyword(_Base):
     id: str
     display_name: str
     score: float
 
 
-class Work(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+class Work(_Base):
     id: str
     doi: str | None = None
     title: str | None = None

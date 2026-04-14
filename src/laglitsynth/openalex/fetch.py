@@ -21,7 +21,7 @@ from laglitsynth.openalex.models import Work
 
 logger = logging.getLogger(__name__)
 
-FIELDS = [
+FIELDS = (
     "id",
     "doi",
     "title",
@@ -41,7 +41,7 @@ FIELDS = [
     "primary_topic",
     "abstract_inverted_index",
     "is_retracted",
-]
+)
 
 
 def _reconstruct_abstract(inverted_index: dict[str, list[int]] | None) -> str | None:
