@@ -26,11 +26,11 @@ that pass the filter.
 ## Example usage
 
 ```
-pixi run filter-abstracts data/openalex/lagrangian_oceanography_2026-...jsonl \
+laglitsynth filter-abstracts data/openalex/lagrangian_oceanography_2026-...jsonl \
   "Make sure this abstract is about Lagrangian particle tracking and touches on submesoscale dynamics"
 
 # with a stricter threshold (default: 50)
-pixi run filter-abstracts input.jsonl "..." --threshold 70
+laglitsynth filter-abstracts input.jsonl "..." --threshold 70
 ```
 
 ## Data flow
@@ -52,7 +52,7 @@ Three files:
   The LLM returns `relevance_score` and `reason`; `accepted` is computed
   client-side from the threshold so you can re-threshold without re-running.
 
-### `filter.py` — core logic + CLI
+### `filter.py` — core logic
 
 - `classify_abstract(abstract: str, prompt: str, *, model: str, base_url: str)
   -> FilterVerdict` — Sends one abstract to Ollama via its OpenAI-compatible
@@ -63,14 +63,16 @@ Three files:
   FilterVerdict]]` — Reads JSONL line by line, calls `classify_abstract` for
   each work that has a non-None abstract, yields `(work, verdict)` pairs. Works
   with `abstract is None` are skipped (logged).
-- `main()` — CLI entrypoint with argparse.
+- `build_subparser(subparsers)` — registers the `filter-abstracts` subcommand
+  with its arguments on a parent subparsers object.
+- `run(args)` — executes the command from parsed args.
 
 ### `__init__.py` — empty
 
 ## CLI interface
 
 ```
-filter-abstracts INPUT_JSONL PROMPT [options]
+laglitsynth filter-abstracts INPUT_JSONL PROMPT [options]
 ```
 
 Arguments:
@@ -112,18 +114,34 @@ Arguments:
 
 - `httpx` — for calling the Ollama API. Add to `pyproject.toml` dependencies.
 
-## Entrypoint + pixi task
+## Unified CLI
 
-Add to `pyproject.toml` — both a package-level script entrypoint (like
-`fetch-publications`) and a pixi task:
+All commands live under a single `laglitsynth` entrypoint using argparse
+subparsers. This is a cross-cutting change that also migrates the existing
+`fetch-publications` command.
+
+### New file: `src/laglitsynth/cli.py`
+
+Top-level CLI dispatcher using `argparse` with `add_subparsers`. Each
+component registers its subcommand via a `build_subparser(subparsers)`
+function. Unified `laglitsynth --help` lists all available commands.
+
+### Changes to `pyproject.toml`
 
 ```toml
-# [project.scripts]
-filter-abstracts = "laglitsynth.llmfilter.filter:main"
+# Replace individual script entrypoints with one:
+[project.scripts]
+laglitsynth = "laglitsynth.cli:main"
 
-# [tool.pixi.tasks]
-filter-abstracts = { cmd = "filter-abstracts", description = "Filter abstracts with a local LLM via Ollama" }
+# Remove pixi tasks that just wrap entrypoints (fetch-publications, etc.)
 ```
+
+### Migration of `fetch.py`
+
+Refactor `fetch.py:main()` to expose `build_subparser(subparsers)` and
+`run(args)`, matching the same pattern as `filter.py`. The existing
+`main(argv)` can remain for backwards compatibility / direct invocation
+during the transition but is no longer the primary entrypoint.
 
 ## What this plan does NOT cover
 
