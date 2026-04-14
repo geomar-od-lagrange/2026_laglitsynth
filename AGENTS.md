@@ -24,6 +24,8 @@ structured assessment and synthesis.
   matters (retries, resumability for long fetches), over-engineering doesn't.
 - **Separate concerns.** Each tool does one thing. They communicate through
   shared data formats and pydantic models.
+- **Typed Python throughout.** All code uses type annotations. Mypy with
+  strict mode is the bar — run `pixi run typecheck` before merging.
 - **Green field, no backwards compatibility.** This pipeline has no external
   consumers. Every user is a developer on the project. We break internal APIs
   freely when it makes the code better — no deprecation cycles, no shims, no

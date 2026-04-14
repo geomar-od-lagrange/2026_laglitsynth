@@ -11,6 +11,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest", "pytest-cov"]
+typecheck = ["mypy"]
 
 [build-system]
 requires = ["hatchling"]
@@ -21,8 +22,14 @@ channels = ["conda-forge"]
 platforms = ["osx-arm64", "osx-64", "linux-64"]
 
 [tool.pixi.pypi-dependencies]
-laglitsynth = { path = ".", editable = true, extras = ["test"] }
+laglitsynth = { path = ".", editable = true, extras = ["test", "typecheck"] }
 
 [tool.pixi.tasks]
 fetch-publications = { cmd = "python -m laglitsynth.openalex.fetch", description = "Fetch publications from OpenAlex" }
 test = { cmd = "pytest --cov=laglitsynth --cov-report=term-missing", description = "Run tests" }
+typecheck = { cmd = "mypy --strict src/", description = "Run type checker" }
+
+[tool.mypy]
+[[tool.mypy.overrides]]
+module = ["pyalex", "pyalex.*"]
+ignore_missing_imports = true
