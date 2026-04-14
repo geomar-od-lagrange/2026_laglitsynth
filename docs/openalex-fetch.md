@@ -20,8 +20,8 @@ Each run produces two files:
 - **`<slug>_<timestamp>.meta.json`** — sidecar with query metadata: tool name,
   query string, timestamp, record count.
 
-Default output directory is `data/openalex/`. Timestamped filenames prevent
-collisions between runs.
+Default output directory is [`data/openalex/`](../data/openalex/). Timestamped
+filenames prevent collisions between runs.
 
 ## Abstract reconstruction
 

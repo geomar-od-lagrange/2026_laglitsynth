@@ -26,6 +26,8 @@ structured assessment and synthesis.
   shared data formats and pydantic models.
 - **Typed Python throughout.** All code uses type annotations. Mypy with
   strict mode is the bar — run `pixi run typecheck` before merging.
+- **Link, don't just name.** When markdown references a file path, make it a
+  relative markdown link, not a bare backtick path.
 - **Green field, no backwards compatibility.** This pipeline has no external
   consumers. Every user is a developer on the project. We break internal APIs
   freely when it makes the code better — no deprecation cycles, no shims, no
@@ -35,11 +37,11 @@ structured assessment and synthesis.
 ## Environment
 
 pixi for environment and package management. Project metadata and dependencies
-in `pyproject.toml`.
+in [`pyproject.toml`](pyproject.toml).
 
 ## Project structure
 
-- `plans/` — implementation plans (written before code)
-- `docs/` — documentation of what's actually implemented
-- Source code in `src/laglitsynth/` (subpackages per component, e.g.
-  `src/laglitsynth/openalex/`)
+- [`plans/`](plans/) — implementation plans (written before code)
+- [`docs/`](docs/) — documentation of what's actually implemented
+- Source code in [`src/laglitsynth/`](src/laglitsynth/) (subpackages per
+  component, e.g. [`src/laglitsynth/openalex/`](src/laglitsynth/openalex/))

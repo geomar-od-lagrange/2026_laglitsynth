@@ -1,8 +1,8 @@
 # Data model
 
-Pydantic models in `src/laglitsynth/openalex/models.py`. These are the contract
-between the fetch layer and all downstream consumers (BibTeX export, citation
-graph, filtering).
+Pydantic models in [`src/laglitsynth/openalex/models.py`](../src/laglitsynth/openalex/models.py).
+These are the contract between the fetch layer and all downstream consumers
+(BibTeX export, citation graph, filtering).
 
 ## Work
 
