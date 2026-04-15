@@ -25,7 +25,7 @@ The pre-registered plan for the entire review: search strategy,
 eligibility criteria, data-extraction plan, and synthesis approach. In
 systematic-review methodology this is a required document (PRISMA-P).
 
-## Corpus and records
+## Catalogue, corpus, and records
 
 ### work
 
@@ -34,22 +34,31 @@ schema. Contains metadata (title, authors, date, DOI, topics,
 referenced_works) and an abstract. Does *not* include full text until the
 retrieval stage.
 
+### catalogue
+
+The collection of work records before full-text retrieval: metadata and
+abstracts, but no full paper text. The early pipeline stages (fetch,
+deduplication, screening, adjudication) operate on the catalogue.
+Qualifiers indicate the pipeline phase: *retrieved catalogue* (everything
+fetched), *deduplicated catalogue*, *screened catalogue* (after automated
+screening), *included catalogue* (after adjudication, ready for full-text
+retrieval).
+
 ### corpus
 
-The collection of works under consideration, including whatever
-text content we have for them. In NLP and corpus linguistics, a corpus is a
-collection of *texts*, not just metadata — so our corpus includes abstracts
-and, where available, full text. The corpus is enriched as it moves through
-the pipeline. Qualifiers indicate the pipeline phase: *retrieved corpus*
-(everything fetched), *screened corpus* (after automated + human screening),
-*included corpus* (after eligibility, ready for data extraction).
+The collection of works enriched with full paper text. In NLP and corpus
+linguistics, a corpus is a collection of *texts* — so we reserve "corpus"
+for the stage where we actually have texts. The catalogue becomes a corpus
+at full-text retrieval. Not all works will have retrievable full text;
+those that don't are abstract-only works and are tracked explicitly via the
+source basis field. Qualifiers indicate the pipeline phase: *full-text
+corpus* (after retrieval), *eligible corpus* (after eligibility assessment).
 
 ### full text
 
-The complete text of a paper, retrieved after screening. Not
-all works will have retrievable full text; those that don't are
-abstract-only works. Full text is part of the corpus — it enriches the
-work record rather than living in a separate artifact.
+The complete text of a paper, retrieved after adjudication. Full text is
+what turns the catalogue into a corpus. Not all works will have retrievable
+full text; those that don't are abstract-only works.
 
 ## Search
 
@@ -110,12 +119,20 @@ and abstract). In our pipeline this happens after full-text retrieval.
 ### eligibility criteria
 
 The formal inclusion/exclusion rules that determine
-whether a work enters the included corpus. Defined in the protocol.
+whether a work enters the eligible corpus. Defined in the protocol.
 
-### included corpus
+### included catalogue
 
-Works that have passed screening, adjudication, and
-eligibility. The authoritative input to data extraction.
+Works that have passed screening and adjudication. The included catalogue
+is the input to full-text retrieval. It is still a catalogue (metadata +
+abstracts, no full text).
+
+### eligible corpus
+
+Works that have passed screening, adjudication, full-text retrieval, and
+eligibility. The authoritative input to data extraction. This is where the
+catalogue becomes a corpus — it now contains full paper text (or is
+explicitly flagged as abstract-only).
 
 ## Data extraction
 
