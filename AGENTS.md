@@ -32,6 +32,12 @@ structured assessment and synthesis.
   strict mode is the bar — run `pixi run typecheck` before merging.
 - **Link, don't just name.** When markdown references a file path, make it a
   relative markdown link, not a bare backtick path.
+- **Plain markdown headings over bold-text formatting.** Use the heading
+  hierarchy (`##`, `###`, `####`, `#####`) for document structure. Never
+  simulate headings with `**Bold:**` paragraphs or `- **Bold.** text` list
+  items when a heading at the appropriate level would do. Bold-text headings
+  break TOC generation, linking, and navigation. If you need a sub-section
+  under an H3, use H4; if you need named items under that, use H5.
 - **None means None.** If upstream data is missing or null, store `None` —
   don't invent defaults. Science data is messy; downstream consumers must
   handle incomplete information explicitly.
