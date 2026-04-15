@@ -13,8 +13,16 @@ pixi install
 
 ## Tools
 
-- `fetch-publications` — fetch publications from OpenAlex into JSONL.
-  See `--help` for options and [`docs/`](docs/) for details.
+All tools are accessed via the `laglitsynth` CLI:
+
+```bash
+laglitsynth --help
+```
+
+- `laglitsynth fetch-publications` — search OpenAlex by keyword and store
+  results as JSONL. See [`docs/fetch-publications.md`](docs/fetch-publications.md).
+- `laglitsynth filter-abstracts` — filter abstracts by relevance using a
+  local Ollama-hosted LLM. See [`docs/filter-abstracts.md`](docs/filter-abstracts.md).
 
 ## OpenAlex API key
 
@@ -24,3 +32,20 @@ Since February 2026, OpenAlex requires a (free) API key. Register at
 ```
 OPENALEX_API_KEY=your-key-here
 ```
+
+## Ollama (for LLM filtering)
+
+The filter tool requires a running Ollama instance:
+
+```bash
+ollama serve
+ollama pull gemma3:4b
+```
+
+See [`docs/filter-abstracts.md`](docs/filter-abstracts.md) for details.
+
+## Documentation
+
+- [`docs/`](docs/) — component documentation
+- [`plans/`](plans/) — implementation plans
+- [`AGENTS.md`](AGENTS.md) — project principles and structure

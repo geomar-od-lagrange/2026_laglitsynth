@@ -12,6 +12,10 @@ structured assessment and synthesis.
 
 ## Principles
 
+- **Plan before code.** Every new component starts with a plan in
+  [`plans/`](plans/). Write the plan, get it reviewed, then implement.
+  The plan is the spec — it records the design decisions and scope so
+  they're visible in the repo, not buried in chat history.
 - **Use what exists.** Don't reimplement what a mature library already does.
   Prefer established packages over hand-rolled alternatives.
 - **Typed data, not dicts.** Pydantic models are the contract between
@@ -48,7 +52,8 @@ in [`pyproject.toml`](pyproject.toml).
 
 ## Project structure
 
-- [`plans/`](plans/) — implementation plans (written before code)
+- [`plans/`](plans/) — implementation plans (written before code);
+  completed plans move to [`plans/done/`](plans/done/)
 - [`docs/`](docs/) — documentation of what's actually implemented
 - Source code in [`src/laglitsynth/`](src/laglitsynth/) (subpackages per
   component, e.g. [`src/laglitsynth/openalex/`](src/laglitsynth/openalex/))

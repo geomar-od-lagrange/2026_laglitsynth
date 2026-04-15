@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
 import re
@@ -17,7 +16,8 @@ import pyalex
 from dotenv import load_dotenv
 from pydantic import ValidationError
 
-from laglitsynth.openalex.models import Work
+from laglitsynth.io import write_jsonl, write_meta
+from laglitsynth.openalex.models import FetchMeta, Work
 
 logger = logging.getLogger(__name__)
 
@@ -118,45 +118,27 @@ def search_openalex(
                 )
 
 
-def write_jsonl(works: Iterator[Work], output: Path) -> int:
-    """Write Work records to a JSONL file. Returns count of records written."""
-    output.parent.mkdir(parents=True, exist_ok=True)
-    count = 0
-    with open(output, "x") as f:
-        for work in works:
-            f.write(work.model_dump_json())
-            f.write("\n")
-            count += 1
-    return count
-
-
-def _write_metadata(
-    meta_path: Path,
-    *,
-    query: str,
-    fetched_at: str,
-    total_count: int,
-    records_written: int,
-) -> None:
-    """Write sidecar metadata JSON file."""
-    meta = {
-        "tool": "laglitsynth.openalex.fetch",
-        "tool_version": "alpha",
-        "query": query,
-        "fetched_at": fetched_at,
-        "total_count": total_count,
-        "records_written": records_written,
-    }
-    with open(meta_path, "w") as f:
-        json.dump(meta, f, indent=2)
-        f.write("\n")
-
-
-def main(argv: list[str] | None = None) -> None:
+def _preflight(args: argparse.Namespace) -> None:
     load_dotenv()
 
-    parser = argparse.ArgumentParser(
-        description="Fetch publications from OpenAlex and save as JSONL."
+    api_key = os.environ.get("OPENALEX_API_KEY")
+    if not api_key:
+        raise SystemExit(
+            "OPENALEX_API_KEY environment variable is not set.\n"
+            "Register at https://openalex.org/settings/api to get a free key."
+        )
+
+    pyalex.config.api_key = api_key
+    pyalex.config.max_retries = 3
+    pyalex.config.retry_backoff_factor = 0.5
+
+
+def build_subparser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> argparse.ArgumentParser:
+    parser = subparsers.add_parser(
+        "fetch-publications",
+        help="Fetch publications from OpenAlex and save as JSONL.",
     )
     parser.add_argument("query", help="Search query string")
     parser.add_argument("-o", "--output", type=Path, help="Output JSONL path")
@@ -167,42 +149,30 @@ def main(argv: list[str] | None = None) -> None:
         "--to-year", type=int, help="Filter publications up to this year"
     )
     parser.add_argument(
-        "--max-results",
+        "--max-records",
         type=int,
         default=None,
         help="Maximum number of results to fetch (default: 199)",
     )
-    args = parser.parse_args(argv)
+    parser.set_defaults(run=run)
+    return parser
 
-    max_results_defaulted = args.max_results is None
-    if max_results_defaulted:
-        args.max_results = 199
-    max_results_warning = (
-        "Warning: --max-results not set, defaulting to 199. "
-        "Pass --max-results explicitly to fetch more."
+
+def run(args: argparse.Namespace) -> None:
+    _preflight(args)
+
+    max_records_defaulted = args.max_records is None
+    if max_records_defaulted:
+        args.max_records = 199
+    max_records_warning = (
+        "Warning: --max-records not set, defaulting to 199. "
+        "Pass --max-records explicitly to fetch more."
     )
-    if max_results_defaulted:
-        print(max_results_warning, file=sys.stderr)
-
-    api_key = os.environ.get("OPENALEX_API_KEY")
-    if not api_key:
-        print(
-            "Error: OPENALEX_API_KEY environment variable is not set.\n"
-            "Register at https://openalex.org/settings/api to get a free key.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    pyalex.config.api_key = api_key
-    pyalex.config.max_retries = 3
-    pyalex.config.retry_backoff_factor = 0.5
+    if max_records_defaulted:
+        print(max_records_warning, file=sys.stderr)
 
     output = args.output or _default_output_path(args.query)
     meta_path = output.with_suffix(".meta.json")
-
-    if output.exists():
-        print(f"Error: output file already exists: {output}", file=sys.stderr)
-        sys.exit(1)
 
     print(f"Output: {output}", file=sys.stderr)
     t0 = time.monotonic()
@@ -211,19 +181,21 @@ def main(argv: list[str] | None = None) -> None:
         args.query,
         from_year=args.from_year,
         to_year=args.to_year,
-        max_results=args.max_results,
+        max_results=args.max_records,
     )
 
     count = write_jsonl(works_iter, output)
     elapsed = time.monotonic() - t0
     file_size = output.stat().st_size
 
-    _write_metadata(
+    write_meta(
         meta_path,
-        query=args.query,
-        fetched_at=datetime.now(UTC).isoformat(timespec="microseconds"),
-        total_count=count,
-        records_written=count,
+        FetchMeta(
+            query=args.query,
+            fetched_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+            total_count=count,
+            records_written=count,
+        ),
     )
 
     print(
@@ -231,9 +203,5 @@ def main(argv: list[str] | None = None) -> None:
         file=sys.stderr,
     )
 
-    if max_results_defaulted:
-        print(max_results_warning, file=sys.stderr)
-
-
-if __name__ == "__main__":
-    main()
+    if max_records_defaulted:
+        print(max_records_warning, file=sys.stderr)

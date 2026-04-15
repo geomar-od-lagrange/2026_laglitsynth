@@ -1,10 +1,6 @@
 from datetime import date
 
-from pydantic import BaseModel, ConfigDict
-
-
-class _Base(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+from laglitsynth.models import _Base
 
 
 class Institution(_Base):
@@ -101,3 +97,12 @@ class Work(_Base):
     primary_topic: Topic | None = None
     abstract: str | None = None
     is_retracted: bool | None = None
+
+
+class FetchMeta(_Base):
+    tool: str = "laglitsynth.openalex.fetch"
+    tool_version: str = "alpha"
+    query: str
+    fetched_at: str
+    total_count: int
+    records_written: int
