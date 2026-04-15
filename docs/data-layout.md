@@ -33,7 +33,11 @@ details, and a `.meta.json` sidecar with filter configuration and counts.
 Every JSONL output file has a companion `.meta.json` sidecar (same stem,
 `.meta.json` suffix). The sidecar records tool name, version, run
 parameters, and summary statistics. This keeps the JSONL as a pure stream
-of records with no special first-line handling.
+of records with no special first-line handling. Sidecars are typed Pydantic
+models (`FetchMeta` in
+[`openalex/models.py`](../src/laglitsynth/openalex/models.py), `FilterMeta`
+in [`llmfilter/models.py`](../src/laglitsynth/llmfilter/models.py)) written
+via the shared `write_meta()` utility.
 
 The filter tool also produces a `.verdicts.jsonl` sidecar with one
 `FilterVerdict` per processed work (including rejects and skips). This

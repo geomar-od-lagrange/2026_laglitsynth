@@ -33,7 +33,7 @@ laglitsynth filter-abstracts input.jsonl "..." --threshold 70
 laglitsynth filter-abstracts input.jsonl "..." -o data/filtered/my_output.jsonl
 
 # prompt tuning: process first 20 works, print verdicts, don't write output
-laglitsynth filter-abstracts input.jsonl "..." --dry-run --limit 20
+laglitsynth filter-abstracts input.jsonl "..." --dry-run --max-records 20
 
 # save rejected works for auditing
 laglitsynth filter-abstracts input.jsonl "..." --reject-file data/filtered/rejected.jsonl
@@ -50,7 +50,7 @@ laglitsynth filter-abstracts input.jsonl "..." --reject-file data/filtered/rejec
 | `--threshold` | Relevance score cutoff, 0--100 (default: 50). |
 | `--base-url` | Ollama API base URL (default: `http://localhost:11434`). |
 | `--reject-file` | Optional path to write rejected works (for auditing). |
-| `--limit` | Process only the first N works. Useful with `--dry-run`. |
+| `--max-records` | Process only the first N works. Useful with `--dry-run`. |
 | `--dry-run` | Print verdicts to stderr without writing any output files. |
 
 ## Output format
@@ -68,14 +68,14 @@ the `-o` path):
 
 ## Tips for prompt tuning
 
-Use `--dry-run --limit N` to iterate on your prompt without writing output
+Use `--dry-run --max-records N` to iterate on your prompt without writing output
 files. This processes the first N works and prints each verdict to stderr so
 you can quickly check whether the LLM is scoring sensibly.
 
 ```bash
 laglitsynth filter-abstracts input.jsonl \
   "Does this abstract study Lagrangian particle dispersion?" \
-  --dry-run --limit 10
+  --dry-run --max-records 10
 ```
 
 Adjust the prompt wording and `--threshold` until the accept/reject split

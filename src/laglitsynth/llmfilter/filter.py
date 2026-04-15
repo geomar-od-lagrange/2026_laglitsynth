@@ -13,8 +13,8 @@ from pathlib import Path
 
 from openai import OpenAI
 
-from laglitsynth.io import read_works_jsonl
-from laglitsynth.llmfilter.models import FilterVerdict
+from laglitsynth.io import read_works_jsonl, write_meta
+from laglitsynth.llmfilter.models import FilterMeta, FilterVerdict
 from laglitsynth.openalex.models import Work
 
 logger = logging.getLogger(__name__)
@@ -66,11 +66,11 @@ def filter_works(
     model: str,
     base_url: str,
     threshold: int,
-    limit: int | None,
+    max_records: int | None,
 ) -> Iterator[tuple[Work, FilterVerdict]]:
     processed = 0
     for work in read_works_jsonl(input_path):
-        if limit is not None and processed >= limit:
+        if max_records is not None and processed >= max_records:
             return
         if work.abstract is None:
             logger.warning("Skipping work %s: no abstract", work.id)
@@ -85,17 +85,14 @@ def filter_works(
         processed += 1
 
 
-def _check_ollama(base_url: str, model: str) -> None:
-    """Verify Ollama is reachable by making a lightweight request."""
+def _preflight(args: argparse.Namespace) -> None:
     try:
-        client = OpenAI(base_url=f"{base_url}/v1", api_key="ollama")
-        client.models.retrieve(model)
+        client = OpenAI(base_url=f"{args.base_url}/v1", api_key="ollama")
+        client.models.retrieve(args.model)
     except Exception:
-        print(
-            f"Cannot reach Ollama at {base_url}. Is `ollama serve` running?",
-            file=sys.stderr,
+        raise SystemExit(
+            f"Cannot reach Ollama at {args.base_url}. Is `ollama serve` running?"
         )
-        sys.exit(1)
 
 
 def _default_output_path(input_path: Path) -> Path:
@@ -133,7 +130,7 @@ def build_subparser(
         help="Optional path to write rejected works",
     )
     parser.add_argument(
-        "--limit",
+        "--max-records",
         type=int,
         default=None,
         help="Process only the first N works",
@@ -148,17 +145,12 @@ def build_subparser(
 
 
 def run(args: argparse.Namespace) -> None:
-    _check_ollama(args.base_url, args.model)
+    _preflight(args)
 
     output: Path = args.output or _default_output_path(args.input)
     verdicts_path = output.with_suffix(".verdicts.jsonl")
     meta_path = output.with_suffix(".meta.json")
 
-    if not args.dry_run and output.exists():
-        print(f"Error: output file already exists: {output}", file=sys.stderr)
-        sys.exit(1)
-
-    # Count total works for progress reporting
     total = sum(1 for _ in read_works_jsonl(args.input))
 
     print(f"Filtering {total} works with model {args.model}", file=sys.stderr)
@@ -185,27 +177,15 @@ def run(args: argparse.Namespace) -> None:
             reject_file = open(args.reject_file, "x")
 
     try:
-        for work in read_works_jsonl(args.input):
-            if args.limit is not None and index >= args.limit:
-                break
-
-            if work.abstract is None:
-                skipped_count += 1
-                logger.warning("Skipping work %s: no abstract", work.id)
-                continue
-
+        for work, verdict in filter_works(
+            args.input,
+            args.prompt,
+            model=args.model,
+            base_url=args.base_url,
+            threshold=args.threshold,
+            max_records=args.max_records,
+        ):
             index += 1
-            verdict = classify_abstract(
-                work.id,
-                work.abstract,
-                args.prompt,
-                model=args.model,
-                base_url=args.base_url,
-            )
-            verdict = verdict.model_copy(
-                update={"accepted": verdict.relevance_score >= args.threshold}
-            )
-
             status = "accepted" if verdict.accepted else "rejected"
             title_trunc = (work.title or "")[:40]
             work_id_trunc = work.id[-12:]
@@ -218,17 +198,14 @@ def run(args: argparse.Namespace) -> None:
             if verdict.accepted:
                 accepted_count += 1
                 if output_file is not None:
-                    output_file.write(work.model_dump_json())
-                    output_file.write("\n")
+                    output_file.write(work.model_dump_json() + "\n")
             else:
                 rejected_count += 1
                 if reject_file is not None:
-                    reject_file.write(work.model_dump_json())
-                    reject_file.write("\n")
+                    reject_file.write(work.model_dump_json() + "\n")
 
             if verdicts_file is not None:
-                verdicts_file.write(verdict.model_dump_json())
-                verdicts_file.write("\n")
+                verdicts_file.write(verdict.model_dump_json() + "\n")
 
     finally:
         if output_file is not None:
@@ -237,6 +214,9 @@ def run(args: argparse.Namespace) -> None:
             verdicts_file.close()
         if reject_file is not None:
             reject_file.close()
+
+    # Count skipped works (those without abstracts)
+    skipped_count = total - accepted_count - rejected_count
 
     elapsed = time.monotonic() - t0
 
@@ -247,17 +227,15 @@ def run(args: argparse.Namespace) -> None:
     )
 
     if not args.dry_run:
-        meta = {
-            "tool": "laglitsynth.llmfilter.filter",
-            "tool_version": "alpha",
-            "prompt": args.prompt,
-            "model": args.model,
-            "threshold": args.threshold,
-            "filtered_at": datetime.now(UTC).isoformat(timespec="microseconds"),
-            "accepted_count": accepted_count,
-            "rejected_count": rejected_count,
-            "skipped_count": skipped_count,
-        }
-        with open(meta_path, "w") as f:
-            json.dump(meta, f, indent=2)
-            f.write("\n")
+        write_meta(
+            meta_path,
+            FilterMeta(
+                prompt=args.prompt,
+                model=args.model,
+                threshold=args.threshold,
+                filtered_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+                accepted_count=accepted_count,
+                rejected_count=rejected_count,
+                skipped_count=skipped_count,
+            ),
+        )

@@ -4,6 +4,14 @@ Pydantic models in [`src/laglitsynth/openalex/models.py`](../src/laglitsynth/ope
 These are the contract between the fetch layer and all downstream consumers
 (BibTeX export, citation graph, filtering). See the source for the full schema.
 
+The pipeline builds on the OpenAlex data model. `Work` and its nested types
+(`Authorship`, `Source`, `Topic`, etc.) are OpenAlex's schema expressed as
+Pydantic models, not a generic abstraction. All downstream components consume
+`Work` records. The shared `_Base` in
+[`src/laglitsynth/models.py`](../src/laglitsynth/models.py) is a convenience
+base class (`extra="ignore"`) -- the domain models themselves are
+OpenAlex-specific.
+
 ## Design decisions
 
 - **`ConfigDict(extra="ignore")`** on all models. OpenAlex adds new fields

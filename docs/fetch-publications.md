@@ -8,7 +8,7 @@ Each line is a validated [`Work`](data-model.md) record.
 ```bash
 laglitsynth fetch-publications "lagrangian oceanography"
 laglitsynth fetch-publications "lagrangian oceanography" --from-year 2020 --to-year 2025
-laglitsynth fetch-publications "submesoscale dynamics" -o data/openalex/custom.jsonl --max-results 500
+laglitsynth fetch-publications "submesoscale dynamics" -o data/openalex/custom.jsonl --max-records 500
 ```
 
 ## CLI arguments
@@ -19,7 +19,7 @@ laglitsynth fetch-publications "submesoscale dynamics" -o data/openalex/custom.j
 | `-o` / `--output` | Output JSONL path. Default: `data/openalex/<slug>_<timestamp>.jsonl`. |
 | `--from-year` | Filter publications from this year onward. |
 | `--to-year` | Filter publications up to this year. |
-| `--max-results` | Cap on number of results. Defaults to 199 as a safety cap -- pass explicitly to fetch more. |
+| `--max-records` | Cap on number of results. Defaults to 199 as a safety cap -- pass explicitly to fetch more. |
 
 ## Output format
 
