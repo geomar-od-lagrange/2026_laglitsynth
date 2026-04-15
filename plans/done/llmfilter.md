@@ -33,7 +33,7 @@ laglitsynth filter-abstracts data/openalex/lagrangian_oceanography_2026-...jsonl
 laglitsynth filter-abstracts input.jsonl "..." --threshold 70
 
 # prompt tuning: process first 20 works, print verdicts, don't write output
-laglitsynth filter-abstracts input.jsonl "..." --dry-run --limit 20
+laglitsynth filter-abstracts input.jsonl "..." --dry-run --max-records 20
 ```
 
 ## Data flow
@@ -64,25 +64,33 @@ Three files:
 ### `models.py` — filter result model
 
 - `FilterVerdict`: Pydantic model with `work_id: str`,
-  `relevance_score: int` (0–100, LLM's confidence in relevance),
-  `accepted: bool` (derived: `relevance_score >= threshold`),
-  `reason: str` (short LLM-generated explanation).
-  The LLM returns `relevance_score` and `reason`; `accepted` is computed
-  client-side from the threshold so you can re-threshold without re-running.
+  `relevance_score: int | None` (0–100, LLM's confidence in relevance),
+  `accepted: bool | None` (derived: `relevance_score >= threshold`),
+  `reason: str | None` (short LLM-generated explanation).
+  All fields except `work_id` are nullable — `None` indicates the work was
+  skipped (no abstract) or the LLM returned unparseable output. `accepted`
+  is computed client-side from the threshold so you can re-threshold without
+  re-running.
+- `FilterMeta`: Pydantic model for the `.meta.json` sidecar with prompt,
+  model, threshold, timestamp, and accept/reject/skip counts.
 
 ### `filter.py` — core logic
 
+- `ClassifyError` — exception raised when the LLM response cannot be parsed.
 - `classify_abstract(work_id: str, abstract: str, prompt: str, *, model: str,
   base_url: str) -> FilterVerdict` — Sends one abstract to Ollama via the
   OpenAI-compatible `/v1/chat/completions` endpoint using the `openai` Python
   library. Sets `response_format={"type": "json_object"}` to activate Ollama's
   JSON mode. The system prompt instructs the LLM to return
   `{"relevance_score": 0-100, "reason": "..."}`. Returns parsed
-  `FilterVerdict` with `work_id` attached.
+  `FilterVerdict` with `work_id` attached. Raises `ClassifyError` if the
+  response is not valid JSON or missing required fields.
 - `filter_works(input_path: Path, prompt: str, ...) -> Iterator[tuple[Work,
-  FilterVerdict]]` — Uses `read_works_jsonl` to iterate records, calls
-  `classify_abstract` for each work that has a non-None abstract, yields
-  `(work, verdict)` pairs. Works with `abstract is None` are skipped (logged).
+  FilterVerdict]]` — Uses `read_works_jsonl` to iterate records. For works
+  with abstracts, calls `classify_abstract`; catches `ClassifyError` and
+  yields a verdict with `None` fields. Works without abstracts also yield
+  `None`-field verdicts. Every work counts toward `max_records` (including
+  skipped and invalid). This is the testable unit — `run()` consumes it.
 - `build_subparser(subparsers)` — registers the `filter-abstracts` subcommand
   with its arguments on a parent subparsers object.
 - `run(args)` — executes the command from parsed args.
@@ -103,8 +111,9 @@ Arguments:
 - `--threshold`: relevance score cutoff, 0–100 (default: 50)
 - `--base-url`: Ollama API base URL (default: `http://localhost:11434`)
 - `--reject-file`: optional path to write rejected works (for auditing)
-- `--limit`: process only the first N works (useful with `--dry-run` for
-  prompt tuning)
+- `--max-records`: process only the first N works (counts all works including
+  those without abstracts; useful with `--dry-run` for prompt tuning, or for
+  binning work across LLM instances)
 - `--dry-run`: print verdicts to stderr without writing output
 
 ## Error handling
