@@ -3,9 +3,9 @@ from laglitsynth.models import _Base
 
 class FilterVerdict(_Base):
     work_id: str
-    relevance_score: int
-    accepted: bool
-    reason: str
+    relevance_score: int | None = None
+    accepted: bool | None = None
+    reason: str | None = None
 
 
 class FilterMeta(_Base):

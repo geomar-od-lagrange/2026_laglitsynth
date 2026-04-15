@@ -29,6 +29,10 @@ You must return a JSON object with exactly two fields:
 Return ONLY the JSON object, nothing else."""
 
 
+class ClassifyError(Exception):
+    """Raised when the LLM response cannot be parsed into a FilterVerdict."""
+
+
 def classify_abstract(
     work_id: str,
     abstract: str,
@@ -50,13 +54,20 @@ def classify_abstract(
         ],
     )
     content = response.choices[0].message.content or "{}"
-    parsed = json.loads(content)
-    return FilterVerdict(
-        work_id=work_id,
-        relevance_score=int(parsed.get("relevance_score", 0)),
-        accepted=False,  # caller sets this based on threshold
-        reason=str(parsed.get("reason", "")),
-    )
+    try:
+        parsed = json.loads(content)
+        score = parsed["relevance_score"]
+        reason = parsed["reason"]
+        return FilterVerdict(
+            work_id=work_id,
+            relevance_score=int(score),
+            accepted=False,  # caller sets this based on threshold
+            reason=str(reason),
+        )
+    except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
+        raise ClassifyError(
+            f"Failed to parse LLM response for {work_id}: {exc}"
+        ) from exc
 
 
 def filter_works(
@@ -72,17 +83,25 @@ def filter_works(
     for work in read_works_jsonl(input_path):
         if max_records is not None and processed >= max_records:
             return
+        processed += 1
         if work.abstract is None:
             logger.warning("Skipping work %s: no abstract", work.id)
+            yield work, FilterVerdict(work_id=work.id)
             continue
-        verdict = classify_abstract(
-            work.id, work.abstract, prompt, model=model, base_url=base_url
-        )
-        verdict = verdict.model_copy(
-            update={"accepted": verdict.relevance_score >= threshold}
-        )
+        try:
+            verdict = classify_abstract(
+                work.id, work.abstract, prompt, model=model, base_url=base_url
+            )
+            verdict = verdict.model_copy(
+                update={
+                    "accepted": verdict.relevance_score is not None
+                    and verdict.relevance_score >= threshold
+                }
+            )
+        except ClassifyError:
+            logger.warning("LLM parse failure for %s, recording as invalid", work.id)
+            verdict = FilterVerdict(work_id=work.id)
         yield work, verdict
-        processed += 1
 
 
 def _preflight(args: argparse.Namespace) -> None:
@@ -186,21 +205,35 @@ def run(args: argparse.Namespace) -> None:
             max_records=args.max_records,
         ):
             index += 1
-            status = "accepted" if verdict.accepted else "rejected"
             title_trunc = (work.title or "")[:40]
             work_id_trunc = work.id[-12:]
-            print(
-                f"  [{index}/{total}] {status} (score: {verdict.relevance_score})"
-                f" — {work_id_trunc} \"{title_trunc}\"",
-                file=sys.stderr,
-            )
 
-            if verdict.accepted:
+            if verdict.accepted is None:
+                # No abstract or LLM parse failure
+                skipped_count += 1
+                print(
+                    f"  [{index}/{total}] skipped"
+                    f" — {work_id_trunc} \"{title_trunc}\"",
+                    file=sys.stderr,
+                )
+            elif verdict.accepted:
                 accepted_count += 1
+                print(
+                    f"  [{index}/{total}] accepted"
+                    f" (score: {verdict.relevance_score})"
+                    f" — {work_id_trunc} \"{title_trunc}\"",
+                    file=sys.stderr,
+                )
                 if output_file is not None:
                     output_file.write(work.model_dump_json() + "\n")
             else:
                 rejected_count += 1
+                print(
+                    f"  [{index}/{total}] rejected"
+                    f" (score: {verdict.relevance_score})"
+                    f" — {work_id_trunc} \"{title_trunc}\"",
+                    file=sys.stderr,
+                )
                 if reject_file is not None:
                     reject_file.write(work.model_dump_json() + "\n")
 
@@ -214,9 +247,6 @@ def run(args: argparse.Namespace) -> None:
             verdicts_file.close()
         if reject_file is not None:
             reject_file.close()
-
-    # Count skipped works (those without abstracts)
-    skipped_count = total - accepted_count - rejected_count
 
     elapsed = time.monotonic() - t0
 
