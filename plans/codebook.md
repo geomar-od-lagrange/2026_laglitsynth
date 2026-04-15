@@ -1,7 +1,7 @@
 # Codebook development
 
 The codebook defines what to extract from each paper and how. It is the
-schema for stage 7 (data extraction) and the input to stages 9–11
+schema for stage 8 (data extraction) and the input to stages 10–12
 (synthesis). The codebook does not exist yet — it must be built
 iteratively from the actual corpus.
 
@@ -31,8 +31,8 @@ parcels, tracers, objects) and varying in documentation quality. The LLM
 fills all codebook fields. Output is a JSONL of extraction records — one
 per paper.
 
-This is not a one-off experiment. It is the first real run of stage 7. The
-extraction records flow into stages 9–11 and produce (likely poor) synthesis
+This is not a one-off experiment. It is the first real run of stage 8. The
+extraction records flow into stages 10–12 and produce (likely poor) synthesis
 output. The value is that the full pipeline stands end to end, even if the
 results are unvalidated.
 
@@ -65,7 +65,7 @@ the codebook itself. Common findings:
 After review, revise the codebook and re-run extraction. The
 extract–review–revise loop converges when the human reviewer stops finding
 schema problems (correctness and completeness errors are expected and
-handled by adjudication, stage 8).
+handled by adjudication, stage 9).
 
 ## Seed codebook fields
 
@@ -130,7 +130,7 @@ actually describe their methods.
 
 The glossary defines rationale as "the reason a paper gives for a
 particular numerical choice." Separating by choice type makes thematic
-synthesis (stage 10) cleaner — integration rationales cluster separately
+synthesis (stage 11) cleaner — integration rationales cluster separately
 from time-step rationales.
 
 ### passage_locations is load-bearing
@@ -156,9 +156,9 @@ compatibility constraints.
 
 - The Pydantic model for the extraction record. That is defined when the
   codebook stabilises after phase 3.
-- The LLM prompt for extraction. That is part of the stage 7 plan, not the
+- The LLM prompt for extraction. That is part of the stage 8 plan, not the
   codebook plan.
-- Adjudication workflow (stage 8). Adjudication consumes the codebook but
+- Adjudication workflow (stage 9). Adjudication consumes the codebook but
   does not change it.
 - Enumeration of allowed values for enum fields. That is the output of
   phase 3, not an input.

@@ -54,7 +54,7 @@ rather than building fragile publisher-specific scrapers.
 Use GROBID to convert PDFs to TEI XML. GROBID is the gold standard for
 scientific PDF parsing and the only tool that reliably recovers section
 structure (Introduction, Methods, Results, etc.). Section structure is
-essential for Stage 7 (data extraction) -- the two-pass extraction pattern
+essential for stage 8 (data extraction) -- the two-pass extraction pattern
 from [two-pass-extraction.md](two-pass-extraction.md) depends on being able
 to identify the methods section.
 
@@ -193,7 +193,7 @@ File names must be the OpenAlex ID (e.g. `W1234567890.pdf`) so the pipeline
 can match them to work records. The CLI prints the expected file names when
 reporting unretrieved works.
 
-The `fulltext.jsonl` file is the artifact consumed by Stage 6 and beyond.
+The `fulltext.jsonl` file is the artifact consumed by stage 7 and beyond.
 PDFs are retained but not consumed by downstream stages -- all downstream
 access goes through the parsed `FullText` records.
 

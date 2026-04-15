@@ -6,10 +6,12 @@ not covered here.
 
 ## Tier 1 — Hard problems
 
-### Stage 5: full-text-retrieval
+### Stages 5–6: full-text-retrieval and full-text-extraction
 
-The single hardest stage. The challenges are fundamentally external, not
-algorithmic.
+The single hardest area. The challenges are fundamentally external, not
+algorithmic. Stage 5 (retrieval) gets PDFs; stage 6 (extraction) parses
+them into structured sections. They are covered here together because the
+challenges are intertwined.
 
 #### Challenges
 
@@ -25,7 +27,7 @@ Scientific PDFs are hostile to text extraction — two-column layouts,
 equations inline with text, figure captions interleaved with body text,
 supplementary materials. Tools like GROBID or PyMuPDF each fail differently.
 Key decision: extract structured sections (intro/methods/results) or raw
-text? Structured is far more useful for stage 7 but far harder.
+text? Structured is far more useful for stage 8 (data extraction) but far harder.
 
 ##### Legal/licensing constraints
 
@@ -51,7 +53,7 @@ must handle the two-track reality gracefully.
 - Define a retrieval-status enum early: `open_access | institutional |
   preprint | abstract_only | failed`. This drives downstream logic.
 
-### Stage 7: data-extraction
+### Stage 8: data-extraction
 
 The intellectual core of the pipeline — and the hardest LLM task.
 
@@ -95,7 +97,7 @@ correct but makes the two tracks very different in practice.
 - Pydantic model for the extraction record from day one — force LLM output
   through validation. Reject and retry on schema failures.
 
-### Stage 10: thematic-synthesis
+### Stage 11: thematic-synthesis
 
 #### Challenges
 
@@ -175,7 +177,7 @@ re-screens — but when to stop?
 - Record decisions as a JSONL adjudication log.
 - Compute agreement rate (human vs. LLM) as a summary statistic.
 
-### Stage 6: eligibility
+### Stage 7: eligibility
 
 #### Challenges
 
@@ -187,7 +189,7 @@ re-screens — but when to stop?
 - May reject very few papers if screening was good, making it feel
   low-value — but methodologically required for PRISMA compliance.
 
-### Stage 8: adjudication (extraction)
+### Stage 9: adjudication (extraction)
 
 #### Challenges
 
@@ -198,14 +200,14 @@ re-screens — but when to stop?
 
 ## Tier 3 — Relatively straightforward
 
-### Stage 9: quantitative-synthesis
+### Stage 10: quantitative-synthesis
 
 Aggregation and counting over structured records. The data model does the
 heavy lifting. Main challenge is propagating uncertainty from `source_basis`
 — how much less to trust abstract-only extractions. This is a
 methodological decision more than a technical one.
 
-### Stage 11: narrative-synthesis
+### Stage 12: narrative-synthesis
 
 Templated prose generation from statistics and taxonomy. The LLM is good at
 this. The challenge is editorial — ensuring every claim is traceable to
@@ -216,7 +218,7 @@ linking narrative claims to extraction records to source works.
 
 | Priority | Stage | Rationale |
 |----------|-------|-----------|
-| 1 | 5. full-text-retrieval | Unblocks everything from stage 6 onward; longest lead time due to access issues |
-| 2 | 7. data-extraction | Requires the codebook, which needs iterative design with domain expertise |
+| 1 | 5–6. full-text-retrieval and extraction | Unblocks everything from stage 7 onward; longest lead time due to access issues |
+| 2 | 8. data-extraction | Requires the codebook, which needs iterative design with domain expertise |
 | 3 | 2. deduplication | Quick win; unblocks clean screening runs on merged search results |
 | 4 | 4. adjudication | Needed before trusting the screened catalogue enough to proceed |

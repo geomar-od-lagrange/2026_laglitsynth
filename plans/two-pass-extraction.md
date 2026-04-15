@@ -54,19 +54,19 @@ validation error appended to the prompt.
 
 ## Applicability in this pipeline
 
-### Stage 6 (eligibility assessment)
+### Stage 7 (eligibility assessment)
 
 Pass 1: locate the methods/approach section. Pass 2: determine whether the
 paper describes computational Lagrangian methods (yes/no with evidence
 quote).
 
-### Stage 7 (data extraction)
+### Stage 8 (data extraction)
 
 Pass 1: locate passages describing numerical methods, time-stepping,
 interpolation, software tools. Pass 2: extract codebook fields from those
 passages.
 
-### Stage 10 (thematic synthesis)
+### Stage 11 (thematic synthesis)
 
 Pass 1: retrieve rationale passages across the corpus for a given numerical
 choice. Pass 2: cluster or summarize the rationales.

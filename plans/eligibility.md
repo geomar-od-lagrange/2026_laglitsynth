@@ -1,4 +1,4 @@
-# Eligibility (stage 6)
+# Eligibility (stage 7)
 
 Full-text assessment of whether each work meets the review's inclusion
 criteria. Distinct from screening (stage 3), which uses only title and
@@ -75,7 +75,7 @@ data/eligibility/
 The `verdicts.jsonl` file contains all verdicts (eligible and excluded),
 mirroring the screened/rejected pattern from stage 3. The `eligible.jsonl`
 file contains only the works that passed — this is the eligible corpus
-consumed by stage 7.
+consumed by stage 8.
 
 ## CLI interface
 
@@ -121,6 +121,6 @@ validation pattern is identical to `filter-abstracts`.
 
 - Fine-grained exclusion reasons (enum of why a paper was excluded).
 - Multi-criteria assessment (separate verdict per criterion).
-- Calibration against human judgments (that is stage 4/8 territory).
+- Calibration against human judgments (that is stage 4/9 territory).
 - Threshold-based re-eligibility (currently binary; could add a score
   like screening does).

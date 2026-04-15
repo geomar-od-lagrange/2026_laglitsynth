@@ -1,9 +1,9 @@
-# Full-text extraction
+# Full-text extraction (stage 6)
 
-Parse retrieved PDFs into structured sections. This is not a numbered
-pipeline stage — it is a processing step that stage 5 (retrieval) produces
-input for and that downstream stages (eligibility, data extraction) consume
-output from. Separating extraction from retrieval means:
+Parse retrieved PDFs into structured sections. Stage 5 (retrieval)
+produces the input (PDFs on disk); downstream stages (eligibility, data
+extraction) consume the output. Separating extraction from retrieval
+means:
 
 - Retrieval can run without GROBID (just get the PDFs).
 - Extraction can be re-run when parsing logic or tools improve.

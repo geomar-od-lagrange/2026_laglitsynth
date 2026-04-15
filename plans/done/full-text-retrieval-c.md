@@ -313,7 +313,7 @@ section structure.
 
 Mitigation: the `Section` model is deliberately simple (title + text). Bad
 parsing degrades gracefully -- the text is still there, just in fewer or
-wrongly-titled sections. Downstream extraction (stage 7) uses the two-pass
+wrongly-titled sections. Downstream extraction (stage 8) uses the two-pass
 pattern, which is robust to imperfect section boundaries because pass 1
 searches all text regardless of section labels.
 

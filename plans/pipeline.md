@@ -5,8 +5,8 @@ backbone (split synthesis stages) with additions from the comparative review:
 deduplication and eligibility as distinct stages.
 
 Stages 1–4 operate on the **catalogue** (metadata + abstracts, no full text).
-From stage 5 onward, full paper text is available and we work with the
-**corpus**.
+Stage 5 retrieves PDFs; stage 6 extracts structured text from them. From
+stage 6 onward we work with the **corpus**.
 
 ## Stages
 
@@ -48,23 +48,35 @@ receive priority attention. Produces a reconciled, human-approved catalogue.
 - **Consumes:** screened catalogue, rejected records
 - **Produces:** included catalogue — reconciled, human-approved records
 
-*Optional: findings from adjudication may feed back to Stage 1 (refined
-keywords) or Stage 3 (screening calibration). See [Optional
+*Optional: findings from adjudication may feed back to stage 1 (refined
+keywords) or stage 3 (screening calibration). See [Optional
 extensions](#optional-extensions).*
 
 ### 5. full-text-retrieval
 
-Retrieves full paper text via open-access sources, DOI resolution, or
-institutional access. This is where the catalogue becomes a corpus. Papers
-not retrievable fall back to abstract-only processing, which is tracked
-explicitly via the source basis field. Full text is essential for RQ1.1
-(Reproducibility) and RQ1.3 (Rationale).
+Retrieves PDFs via open-access sources, DOI resolution, preprint servers,
+or manual batch download. The output is PDFs on disk and a retrieval
+status record per work. Papers not retrievable are flagged as
+abstract-only. Full text is essential for RQ1.1 (Reproducibility) and
+RQ1.3 (Rationale).
 
 - **Consumes:** included catalogue (DOIs, URLs)
-- **Produces:** full-text corpus — work records enriched with retrieved
-  documents; source basis flag on each record
+- **Produces:** PDFs on disk, retrieval status records (per-work retrieval
+  outcome and source)
 
-### 6. eligibility
+### 6. full-text-extraction
+
+Parses retrieved PDFs into structured sections (title + body text per
+section). GROBID is the extraction tool. The extraction is decoupled from
+retrieval so that PDFs can also be consumed directly by other tools (e.g.
+a long-context LLM reviewing a raw PDF). Not all downstream stages require
+structured sections — some may work with the PDF directly.
+
+- **Consumes:** PDFs from stage 5
+- **Produces:** full-text corpus — structured section text per work;
+  source basis flag on each record
+
+### 7. eligibility
 
 Full-text assessment of whether each work meets the review's eligibility
 criteria. Distinct from screening (which uses only title and abstract).
@@ -77,7 +89,7 @@ a recorded reason.
   protocol)
 - **Produces:** eligible corpus — works confirmed for data extraction
 
-### 7. data-extraction
+### 8. data-extraction
 
 An LLM processes each paper against the codebook, extracting: sub-discipline
 classification (water parcels / tracers / objects), numerical integration
@@ -88,7 +100,7 @@ Each extraction record flags its source basis (full text vs. abstract-only).
 - **Consumes:** eligible corpus, full texts, codebook
 - **Produces:** extraction records — one structured record per paper
 
-### 8. adjudication (extraction)
+### 9. adjudication (extraction)
 
 Spot-checks a random sample of extraction records, verifying extracted facts
 match the source text. Corrections are written back. Inter-rater agreement
@@ -102,7 +114,7 @@ publication.
 *Optional: findings may feed back to the codebook and trigger re-extraction.
 See [Optional extensions](#optional-extensions).*
 
-### 9. quantitative-synthesis
+### 10. quantitative-synthesis
 
 Validated extraction records are aggregated to produce quantitative answers to
 RQ1.1 (Reproducibility) and RQ1.2 (Prevalence): fraction of papers providing
@@ -113,7 +125,7 @@ sub-discipline. Uncertainty is propagated from the source basis field
 - **Consumes:** validated extraction records
 - **Produces:** `statistics.json` — tabulated counts, proportions, breakdowns
 
-### 10. thematic-synthesis
+### 11. thematic-synthesis
 
 The stated rationales for numerical choices — a free-text field in the
 codebook — are gathered and thematically clustered to address RQ1.3
@@ -126,7 +138,7 @@ human**.
 - **Produces:** `rationale-taxonomy.json` — coded categories with supporting
   quotations and paper references
 
-### 11. narrative-synthesis
+### 12. narrative-synthesis
 
 Statistics and rationale taxonomy are combined into a structured narrative
 addressing each research question. RQ1.1 and RQ1.2 get quantitative
@@ -143,15 +155,15 @@ These are not core pipeline stages but may be added if they prove valuable.
 
 ### Search–screening feedback loop
 
-Adjudication findings (Stage 4) feed back to refine the search strategy (Stage 1) or
-screening calibration (Stage 3). Useful when systematic misses or false
+Adjudication findings (stage 4) feed back to refine the search strategy (stage 1) or
+screening calibration (stage 3). Useful when systematic misses or false
 positives reveal gaps in the search strategy. Requires convergence criteria
 to avoid endless iteration.
 
 ### Extract–codebook feedback loop
 
-Adjudication of extraction records (Stage 8) feeds back to revise the
-codebook and trigger re-extraction (Stage 7). Useful when the codebook
+Adjudication of extraction records (stage 9) feeds back to revise the
+codebook and trigger re-extraction (stage 8). Useful when the codebook
 categories turn out to be too coarse or when unanticipated numerical choices
 emerge. Again requires convergence criteria.
 
@@ -160,7 +172,7 @@ emerge. Again requires convergence criteria.
 The citation graph embedded in the work records can identify foundational
 methodological papers (high centrality within the corpus) and reveal whether
 numerical choices propagate by citation inheritance or arise independently.
-Results would feed into quantitative synthesis (Stage 9) as contextual
+Results would feed into quantitative synthesis (stage 10) as contextual
 annotations on prevalence findings. Uses co-citation analysis and
 bibliographic coupling.
 
@@ -182,6 +194,7 @@ graph TD
     SCAT[(screened catalogue)]
     REJ[(rejected records)]
     ICAT[(included catalogue)]
+    PDFS[(PDFs on disk)]
     FTC[(full-text corpus)]
     ECORP[(eligible corpus)]
     EXT[(extraction records)]
@@ -195,6 +208,7 @@ graph TD
     SCREEN[screen-abstracts]
     ADJUD[adjudication]
     RETRIEVE[full-text-retrieval]
+    GROBID[full-text-extraction]
     ELIG[eligibility]
     EXTRACT[data-extraction]
     ADJUD2[adjudication - extraction]
@@ -214,8 +228,11 @@ graph TD
     REJ --> ADJUD
     ADJUD --> ICAT
     ICAT --> RETRIEVE
-    RETRIEVE --> FTC
+    RETRIEVE --> PDFS
+    PDFS --> GROBID
+    GROBID --> FTC
     FTC --> ELIG
+    PDFS --> EXTRACT
     ELIG --> ECORP
     ECORP --> EXTRACT
     FTC --> EXTRACT
