@@ -63,8 +63,11 @@ in [`pyproject.toml`](pyproject.toml).
 
 ## Project structure
 
-- [`plans/`](plans/) — implementation plans (written before code);
-  completed plans move to [`plans/done/`](plans/done/)
-- [`docs/`](docs/) — documentation of what's actually implemented
+- [`plans/`](plans/) — prescriptive documents consumed once during
+  implementation: what to build, in what order, what to defer, what
+  risks to watch for. Completed plans move to [`plans/done/`](plans/done/).
+- [`docs/`](docs/) — descriptive documents that remain useful after
+  implementation as ongoing references: present tense, states facts,
+  no build sequencing or risk assessment.
 - Source code in [`src/laglitsynth/`](src/laglitsynth/) (subpackages per
   component, e.g. [`src/laglitsynth/openalex/`](src/laglitsynth/openalex/))

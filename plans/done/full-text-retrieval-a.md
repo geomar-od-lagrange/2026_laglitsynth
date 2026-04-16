@@ -68,7 +68,7 @@ pragmatic choice.
 Use GROBID to parse PDFs into TEI XML. GROBID produces structured sections
 (introduction, methods, results, etc.), which is far more useful for
 downstream extraction than raw text. The [GROBID operational
-lessons](grobid-lessons.md) from the litrag prototype apply directly.
+lessons](../../docs/grobid-lessons.md) from the litrag prototype apply directly.
 
 Key decisions:
 
@@ -89,7 +89,7 @@ Key decisions:
 
 Parse GROBID's TEI XML output into a list of sections, each with a heading and
 body text. The parser must handle the failure modes documented in
-[grobid-lessons.md](grobid-lessons.md):
+[grobid-lessons.md](../../docs/grobid-lessons.md):
 
 - Missing `<head>` elements: use "Untitled section" or infer from position.
 - No `<div>` sections at all: treat the full `<body>` as a single section.

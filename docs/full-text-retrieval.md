@@ -137,7 +137,7 @@ PDFs are not committed to git. Add `data/fulltext/pdfs/` to `.gitignore`.
 
 ```
 laglitsynth retrieve \
-    --input data/screening/included.jsonl \
+    --input data/adjudication/included.jsonl \
     --output-dir data/fulltext/ \
     --email user@example.com \
     [--manual-dir data/fulltext/manual/] \

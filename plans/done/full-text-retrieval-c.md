@@ -68,7 +68,7 @@ hundred papers is not worth the engineering effort or the legal risk.
 ## PDF to structured text
 
 Use GROBID for all PDF-to-text conversion. The [GROBID operational
-lessons](grobid-lessons.md) from litrag confirm it is the right tool: it
+lessons](../../docs/grobid-lessons.md) from litrag confirm it is the right tool: it
 produces TEI XML with section structure, which is substantially more useful
 for downstream extraction than raw text.
 

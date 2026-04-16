@@ -76,7 +76,7 @@ handled by adjudication, stage 9).
 ## Seed codebook fields
 
 Derived from the research questions and domain terms in the
-[glossary](../docs/glossary.md).
+[glossary](glossary.md).
 
 ### Field structure: value + context snippet
 

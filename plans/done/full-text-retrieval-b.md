@@ -55,10 +55,10 @@ Use GROBID to convert PDFs to TEI XML. GROBID is the gold standard for
 scientific PDF parsing and the only tool that reliably recovers section
 structure (Introduction, Methods, Results, etc.). Section structure is
 essential for stage 8 (data extraction) -- the two-pass extraction pattern
-from [two-pass-extraction.md](two-pass-extraction.md) depends on being able
+from [two-pass-extraction.md](../../docs/two-pass-extraction.md) depends on being able
 to identify the methods section.
 
-Operational details (from [grobid-lessons.md](grobid-lessons.md)):
+Operational details (from [grobid-lessons.md](../../docs/grobid-lessons.md)):
 
 - Run GROBID as a Docker container (`lfoppiano/grobid:0.8.0`).
 - Use `processFulltextDocument` endpoint only. Do not use GROBID's metadata
