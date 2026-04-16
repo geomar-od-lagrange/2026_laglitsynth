@@ -68,6 +68,8 @@ in [`pyproject.toml`](pyproject.toml).
   risks to watch for. Completed plans move to [`plans/done/`](plans/done/).
 - [`docs/`](docs/) — descriptive documents that remain useful after
   implementation as ongoing references: present tense, states facts,
-  no build sequencing or risk assessment.
+  no build sequencing or risk assessment. (Some existing stage docs
+  predate this convention and contain plan-like sections. These are
+  rewritten to descriptive style when each stage is implemented.)
 - Source code in [`src/laglitsynth/`](src/laglitsynth/) (subpackages per
   component, e.g. [`src/laglitsynth/openalex/`](src/laglitsynth/openalex/))

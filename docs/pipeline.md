@@ -76,8 +76,7 @@ a long-context LLM reviewing a raw PDF). Not all downstream stages require
 structured sections — some may work with the PDF directly.
 
 - **Consumes:** PDFs from stage 5
-- **Produces:** full-text corpus — structured section text per work;
-  source basis flag on each record
+- **Produces:** full-text corpus — structured section text per work
 
 ### 7. eligibility
 
@@ -163,6 +162,17 @@ verdict or extracted values, the LLM's reasoning, and enough metadata
 general pattern for human oversight: export a sample, review, feed
 corrections back.
 
+## Shared resources
+
+### Vocabulary
+
+A concept-tagged term list ([vocabulary.md](vocabulary.md)) for
+deterministic keyword matching against text. Useful in multiple contexts:
+keyword-based screening alongside LLM screening, locating methods sections
+during [two-pass extraction](two-pass-extraction.md), and refining the
+search strategy. Not a pipeline stage — a helper resource available to any
+stage that needs term matching.
+
 ## Optional extensions
 
 These are not core pipeline stages but may be added if they prove valuable.
@@ -246,7 +256,6 @@ graph TD
     PDFS --> GROBID
     GROBID --> FTC
     FTC --> ELIG
-    PDFS --> EXTRACT
     ELIG --> ECORP
     ECORP --> EXTRACT
     FTC --> EXTRACT
