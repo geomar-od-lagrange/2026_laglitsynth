@@ -41,6 +41,11 @@ structured assessment and synthesis.
 - **None means None.** If upstream data is missing or null, store `None` —
   don't invent defaults. Science data is messy; downstream consumers must
   handle incomplete information explicitly.
+- **No fabricated numbers in plans.** Plans must not contain made-up estimates
+  for paper counts, data volumes, throughput, feasibility, or run times.
+  Estimating scale is the job of the humans designing the process — not of
+  plan documents or AI assistants. Stay fact-based: if a number has not been
+  measured, do not write it down.
 - **AI-tool agnostic.** Project configuration, principles, and documentation
   live in the repo (AGENTS.md, docs/, plans/), not in tool-specific memory
   or config. Any AI coding assistant should be able to pick up the project

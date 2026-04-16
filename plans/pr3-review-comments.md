@@ -36,8 +36,10 @@ a reply that reframes or partially addresses the point.
 > easy to swap this out or cross check or whatever later.
 
 **Takeaway:** OpenAlex is a provisional choice for prototyping. The Clarivate API
-key application is pending. The data model must support swapping or cross-checking
-sources. No open decision — revisit once the API key arrives.
+key application is pending. The data model must document sources and support
+merging catalogues from different sources (e.g. OpenAlex + WoS), with
+deduplication early in the pipeline. No open decision — revisit once the API key
+arrives.
 
 ### [Line 78](https://github.com/geomar-od-lagrange/2026_laglitsynth/blob/d15dd94/docs/glossary.md#L78) — LLM validation for relevance screening [RESOLVED]
 
@@ -60,9 +62,11 @@ sources. No open decision — revisit once the API key arrives.
 > main branch goes through hundreds of abstracts in a few minutes on my macbook.
 
 **Takeaway:** Approach agreed (spot-test, rule out bad LLMs), but the specifics
-are undefined. Still open: what does a validation protocol for screening look
-like? A small gold-standard set of pre-labelled abstracts would make LLM
-selection and prompt tuning testable. This applies to every LLM-driven stage.
+are undefined. This raises a general question: how are intermediate results
+stored for human inspection? No GUI or detailed CLI — a simple export (e.g.
+Excel) of a random sample of N papers (selectable via CLI flags) for human
+review, then cycle back. This inspect-and-cycle pattern applies to every
+LLM-driven stage.
 
 ### [Line 141](https://github.com/geomar-od-lagrange/2026_laglitsynth/blob/d15dd94/docs/glossary.md#L141) — Extraction scope bug [RESOLVED]
 
@@ -87,8 +91,8 @@ on the full paper, not just the abstract.
 > Yes. This is what needs to reflect RQ1.1-3 and WP1.1.
 
 **Takeaway:** Agreement that the codebook is the central artifact requiring full
-team sign-off. It must be grounded in RQ1.1-3 and WP1.1. Decision needed:
-schedule a dedicated codebook design session before implementation.
+team sign-off. It must be grounded in RQ1.1-3 and WP1.1. The team should take
+effort to ensure everyone is fine with codebook.md before implementation.
 
 ### [Line 176](https://github.com/geomar-od-lagrange/2026_laglitsynth/blob/d15dd94/docs/glossary.md#L176) — LLM trust for adjudication [RESOLVED]
 
@@ -99,9 +103,9 @@ schedule a dedicated codebook design session before implementation.
 > No. And I'm not sure we really need this part. It's essential for review-heavy
 > fields like medicine, I think, though.
 
-**Takeaway:** LLM adjudication is rejected. Decision: remove or redesign the
-adjudication stage. If disagreement resolution is still needed, it will require
-a human-in-the-loop process.
+**Takeaway:** Adjudication by less powerful local LLMs is rejected. Plan for
+human adjudication. The exact design of the adjudication stage can be deferred —
+not urgent at the plumbing stage.
 
 ---
 
@@ -137,6 +141,8 @@ accepted. But the core request — a proper team discussion before the codebook 
 finalized — remains open. Decision needed: schedule a codebook design session.
 The tagging-vs-classification reframe should be an input to that session.
 
+FB: See above. Let's make sure everyone's fine with the codebook.md
+
 ### [Line 130](https://github.com/geomar-od-lagrange/2026_laglitsynth/blob/d15dd94/plans/pipeline.md#L130) — Qualitative analysis expertise [OPEN]
 
 **nvogtvincent:**
@@ -144,10 +150,10 @@ The tagging-vs-classification reframe should be an input to that session.
 > in this area, might be worth chatting to someone who does to see whether this
 > sounds like a sensible way of analysing the qualitative data?
 
-**Takeaway:** No one on the team claims qualitative analysis expertise. Decision
-needed: either consult a qualitative-methods expert to sanity-check the approach,
-or simplify/drop the qualitative synthesis stage and stick to quantitative
-extraction. This is a gap that blocks the synthesis end of the pipeline.
+**Takeaway:** No one on the team claims qualitative analysis expertise. The
+concern is valid and important but not urgent — at this plumbing-focused stage,
+later pipeline stages can be deferred. Revisit when the extraction pipeline
+produces actual data.
 
 ### [Line 250](https://github.com/geomar-od-lagrange/2026_laglitsynth/blob/d15dd94/plans/pipeline.md#L250) — General approval
 
@@ -176,9 +182,10 @@ extraction. This is a gap that blocks the synthesis end of the pipeline.
 > etc.
 
 **Takeaway:** Preprints stay in the catalogue for prototyping and vocabulary
-discovery but must be excluded from quantitative RQ analyses. The data model
-needs a preprint-vs-accepted flag and ideally a journal-trustworthiness
-classifier. No remaining decision — this is settled as a design requirement.
+discovery but must be excludable from quantitative RQ analyses. The data model
+must carry over all info needed for later assessing trustworthiness — not compute
+a score, but preserve the raw metadata (journal, preprint status, etc.) so that
+the final result can be filtered by any of these dimensions.
 
 ### [Line 208](https://github.com/geomar-od-lagrange/2026_laglitsynth/blob/d15dd94/plans/full-text-retrieval.md#L208) — OA coverage and scale [RESOLVED]
 
@@ -197,11 +204,9 @@ classifier. No remaining decision — this is settled as a design requirement.
 > structured extraction (PDF-->XML) for digital age publications is not too slow
 > as well. Biggest task will be the actually getting our hands on the PDFs.
 
-**Takeaway:** Compute is not the bottleneck — PDF acquisition is. The reviewer's
-concern about manual retrieval at scale is valid, but the constraint is access,
-not processing. Still open: what is the concrete strategy for acquiring non-OA
-PDFs at scale? Institutional access, interlibrary loan automation, or accepting
-an OA-only subset?
+**Takeaway:** Compute is not the bottleneck — PDF acquisition is. For the
+plumbing stage, use OA papers only. Non-OA acquisition is an important task to
+tackle later, widely and exploratively.
 
 ### [Line 227](https://github.com/geomar-od-lagrange/2026_laglitsynth/blob/d15dd94/plans/full-text-retrieval.md#L227) — Restrictive search terms needed for 1000 papers [RESOLVED]
 
@@ -212,9 +217,10 @@ an OA-only subset?
 **willirath:**
 > Agreed. These estimates are all off.
 
-**Takeaway:** The corpus-size estimates in the plan are acknowledged as wrong.
-Action: redo the estimates once search terms are tested against the actual
-catalogue. The pipeline plan should not commit to a specific number until then.
+**Takeaway:** Drop all fabricated estimates from the plans. Plans must not contain
+made-up numbers about paper counts, data volumes, throughput, feasibility, or run
+times — that is the job of the humans designing the process. Add a note to
+AGENTS.md: stay fact-based, no fabricated numbers in plans.
 
 ---
 
@@ -252,10 +258,9 @@ entropy) could serve as an automated quality gate.
 > reviewed PDFs, we'll become more strict. Most important step now is to have an
 > eligibility filter at all with tunable criteria.
 
-**Takeaway:** For prototyping, anything with content is welcome. For production,
-DOI-based filtering is a reasonable simplification. The filter should be tunable
-(a parameter, not a hard gate) so the team can tighten criteria without changing
-code. Consistent with theme 2: annotate and retain, don't discard.
+**Takeaway:** The Works data model must carry all available info. Filtering to
+"only with DOI" or any other criterion is trivial if the data is there. Don't
+sort but search. Don't classify but tag.
 
 ---
 
@@ -269,12 +274,11 @@ code. Consistent with theme 2: annotate and retain, don't discard.
 > would be extremely poor practice, but I don't think that disqualifies a paper
 > from being relevant.
 
-**Takeaway:** Decision needed: remove or relax eligibility criterion 3 ("must
-describe numerical methods"). The reviewer's argument is that poor practice does
-not equal irrelevance. This aligns with the broad-now philosophy — a paper that
-omits method details is still data about reporting practices, which is itself
-relevant to RQ1.1.
-
+**Takeaway:** At this plumbing stage, the priority is having a data model for
+eligibility with explicit, debatable criteria that can be adapted later.
+Eligibility.md needs a thorough look to make it less specific — treat it as a
+reasonable placeholder for "here, the human turns knobs once the pipeline runs."
+The specific question of criterion 3 is deferred to that review.
 ---
 
 ## [plans/codebook.md](https://github.com/geomar-od-lagrange/2026_laglitsynth/blob/d15dd94/plans/codebook.md)
@@ -306,11 +310,10 @@ context/snippet companion field. Defer specifics to the codebook design session.
 > This is going to require some more thought, e.g. particle tracking boundary
 > conditions are important.
 
-**Takeaway:** The numerical-choices section of the codebook is incomplete.
-Boundary conditions are a domain-critical parameter not currently captured. This
-requires domain expertise to enumerate properly. Defer to the codebook design
-session — a walkthrough of a real Lagrangian tracking paper would surface the
-missing fields.
+**Takeaway:** The numerical-choices section of the codebook is incomplete (e.g.
+boundary conditions not captured). Rather than trying to enumerate all fields
+upfront, the codebook design must allow for bootstrapping — discover what to
+capture through early extraction runs and adapt based on what is found.
 
 ### [Line 89](https://github.com/geomar-od-lagrange/2026_laglitsynth/blob/d15dd94/plans/codebook.md#L89) — Remove time_step_value [PARTIAL]
 
@@ -324,12 +327,10 @@ missing fields.
 > it is, but 10k-50k snippets are a lot easier to handle than 10k-50k whole
 > papers.
 
-**Takeaway:** Partial resolution. The reviewer says drop `time_step_value`; the
-reply proposes extracting verbatim snippets instead of structured values. This is
-a significant design shift: snippet-based extraction sidesteps the
-"interpretable in isolation?" problem for all context-dependent fields, not just
-this one. Decision needed: confirm the snippet approach as the default for
-context-dependent numerical fields, then identify which fields this applies to.
+**Takeaway:** Don't fix individual fields — discover what fields make sense
+through extraction runs. Always track context for later refinement. The snippet
+approach sidesteps the "interpretable in isolation?" problem for all
+context-dependent fields.
 
 ### [Line 91](https://github.com/geomar-od-lagrange/2026_laglitsynth/blob/d15dd94/plans/codebook.md#L91) — Integration scheme inferrable from software [OPEN]
 
@@ -337,11 +338,12 @@ context-dependent numerical fields, then identify which fields this applies to.
 > Although can be inferred from the particle tracking software if they only offer
 > one option.
 
-**Takeaway:** Some codebook fields are inferrable from other fields (e.g.
-integration scheme from software choice). This raises a broader question: which
-fields are independently informative and which are derivable? A redundancy audit
-of the codebook should identify all such cases. Derivable fields can be computed
-post-extraction rather than extracted directly.
+**Takeaway:** Some fields are inferrable from others, but the deeper point is
+about the extraction philosophy: tag, don't classify. Processing will be
+concurrent across papers, across humans, and possibly across multiple
+non-deterministic LLM passes over the same item. Consolidation of terms, tags,
+and names will be needed anyway. So extract tags and context freely, then
+associate and deduplicate tags in a later stage.
 
 ### [Line 100](https://github.com/geomar-od-lagrange/2026_laglitsynth/blob/d15dd94/plans/codebook.md#L100) — Reporting-quality section redundant? [RESOLVED]
 
@@ -365,11 +367,9 @@ rely on field completeness + context snippets instead.
 > software, (ii) scripts used to set up experiments (preprocessing and within
 > particle tracking software), and (iii) scripts used for analysis.
 
-**Takeaway:** The current "code availability" field is too coarse. It should
-distinguish at minimum: (i) particle tracking software used, (ii) experiment
-setup / preprocessing scripts, (iii) analysis scripts. Decision needed: define
-the granularity. This is domain-specific and should be part of the codebook
-design session.
+**Takeaway:** Use the suggested three-way granularity for now: (i) particle
+tracking software, (ii) experiment setup / preprocessing scripts, (iii) analysis
+scripts. Extract context alongside each.
 
 ### [Line 104](https://github.com/geomar-od-lagrange/2026_laglitsynth/blob/d15dd94/plans/codebook.md#L104) — Justification as inline field per choice [RESOLVED]
 
@@ -384,11 +384,10 @@ design session.
 > info. So replacing the "method details" and the the "rationale" with some
 > context is probably the way to go.
 
-**Takeaway:** Resolved. The ideal `{value, reason}` structure per field is
-acknowledged as hard to extract reliably. The pragmatic alternative: replace the
-separate "method details" and "rationale" sections with a context snippet
-attached to each field. This should become the default codebook field structure:
-`{value, context_snippet}`.
+**Takeaway:** Resolved. The default codebook field structure should be
+`{value, context_snippet}`. Extracting reliable structured rationale is too hard,
+but sweeping context fields with specific questions later will be relatively
+easy.
 
 ---
 
