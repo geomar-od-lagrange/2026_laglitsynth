@@ -25,21 +25,14 @@ times and combining results) is a planned optional extension; see
 ### Resolution
 
 A shared `resolve` module joins the deduplicated catalogue against verdict
-sidecars and `data/params.json` to produce the active work set for a given
-pipeline stage. Every stage from 5 onward uses this module. The resolve
-logic lives in one place, not duplicated per stage.
+sidecars and caller-supplied thresholds to produce the active work set for
+a given pipeline stage. Every stage from 5 onward uses this module. The
+resolve logic lives in one place, not duplicated per stage.
 
-`data/params.json` holds tunable thresholds:
-
-```json
-{
-  "screening_threshold": 50,
-  "eligibility_threshold": null
-}
-```
-
-`null` means no numeric threshold (the verdict is a binary LLM decision).
-This file is human-edited and version-controlled.
+Thresholds are CLI flags (e.g. `--screening-threshold 50`), passed through
+to the resolve module. Each run's threshold is recorded in the stage's meta
+sidecar for provenance. A pipeline-level config file may replace CLI flags
+once thresholds are tuned on real data.
 
 ## Artifact map
 
@@ -71,7 +64,7 @@ meta files stay as per-run provenance records — they are not merged.
 
 Verdicts cover all works in the deduplicated catalogue, not just accepted
 ones. The accept/reject decision is derived from the relevance score and
-the threshold in `data/params.json` at read time. No `screened.jsonl` or
+the threshold passed to the resolve module at read time. No `screened.jsonl` or
 `rejected.jsonl` — the verdict sidecar is the only output.
 
 The existing code writes to `data/filtered/` with timestamped filenames
@@ -160,12 +153,6 @@ replacements. Downstream stages apply corrections at read time.
 | Path | Model | Description |
 |---|---|---|
 | `data/synthesis/synthesis-draft.md` | (markdown) | Narrative keyed to research questions |
-
-### Pipeline-level
-
-| Path | Model | Description |
-|---|---|---|
-| `data/params.json` | (plain JSON) | Tunable thresholds (screening, eligibility) |
 
 ## Inconsistencies to resolve
 
@@ -424,6 +411,6 @@ laglitsynth synthesize-narrative \
 ### Resolve module
 
 The `laglitsynth.resolve` module does not exist yet. It must join the
-deduplicated catalogue against verdict sidecars and `data/params.json`
+deduplicated catalogue against verdict sidecars and caller-supplied
 thresholds. This is the single most important new piece of shared
 infrastructure — every stage from 5 onward depends on it.
