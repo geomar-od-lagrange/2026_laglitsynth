@@ -71,5 +71,9 @@ in [`pyproject.toml`](pyproject.toml).
   no build sequencing or risk assessment. (Some existing stage docs
   predate this convention and contain plan-like sections. These are
   rewritten to descriptive style when each stage is implemented.)
+- [`docs/explorations/`](docs/explorations/) — investigative write-ups
+  and proof-of-concept results: what was tried, what worked, what
+  broke, preliminary timings. Not authoritative references — these
+  capture spike results that may feed into future plans.
 - Source code in [`src/laglitsynth/`](src/laglitsynth/) (subpackages per
   component, e.g. [`src/laglitsynth/openalex/`](src/laglitsynth/openalex/))
