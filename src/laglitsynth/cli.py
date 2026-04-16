@@ -13,6 +13,9 @@ from laglitsynth.screening_abstracts.screen import (
 from laglitsynth.screening_adjudication.adjudicate import (
     build_subparser as build_adjudication_subparser,
 )
+from laglitsynth.fulltext_extraction.extract import (
+    build_subparser as build_extraction_subparser,
+)
 from laglitsynth.fulltext_retrieval.retrieve import (
     build_subparser as build_retrieve_subparser,
 )
@@ -30,6 +33,7 @@ def main(argv: list[str] | None = None) -> None:
     build_filter_subparser(subparsers)
     build_adjudication_subparser(subparsers)
     build_retrieve_subparser(subparsers)
+    build_extraction_subparser(subparsers)
 
     args = parser.parse_args(argv)
 
