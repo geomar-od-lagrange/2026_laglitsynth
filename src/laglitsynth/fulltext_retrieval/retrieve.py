@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import shutil
 import sys
 import tempfile
@@ -10,13 +11,15 @@ import time
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 
+from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.fulltext_retrieval.models import RetrievalMeta, RetrievalRecord, RetrievalStatus
 from laglitsynth.io import append_jsonl, read_jsonl, read_works_jsonl, write_meta
-from laglitsynth.catalogue_fetch.models import Work
+
+logger = logging.getLogger(__name__)
 
 _last_request: dict[str, float] = {}
 
@@ -87,7 +90,8 @@ def _try_oa_urls(
         try:
             _download_pdf(url, pdf_dest, client=client)
             return RetrievalStatus.retrieved_oa, url
-        except Exception:
+        except Exception as exc:
+            logger.debug("OA download failed for %s: %s", url, exc)
             continue
     return None
 
@@ -102,7 +106,10 @@ def _try_unpaywall(
     if work.doi is None:
         return None
     doi = work.doi.replace("https://doi.org/", "")
-    api_url = f"https://api.unpaywall.org/v2/{doi}?email={email}"
+    api_url = (
+        f"https://api.unpaywall.org/v2/{quote(doi, safe='')}"
+        f"?email={quote(email, safe='@.')}"
+    )
     domain = "api.unpaywall.org"
     _rate_limit(domain)
     response = client.get(api_url, follow_redirects=True)
@@ -212,8 +219,8 @@ def _retrieve_one(
                 pdf_path=pdf_rel,
                 retrieved_at=now,
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Unpaywall failed for %s: %s", work.id, exc)
 
     # 4. No source
     return RetrievalRecord(

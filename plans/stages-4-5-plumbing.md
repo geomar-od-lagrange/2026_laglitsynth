@@ -33,21 +33,24 @@ resolve module can be built when we have real adjudication.
 ## New files
 
 ```
-src/laglitsynth/dedup/
+src/laglitsynth/catalogue_dedup/
     __init__.py
     models.py          # DeduplicationMeta
     deduplicate.py     # build_subparser, run (pass-all)
 
-src/laglitsynth/adjudication/
+src/laglitsynth/screening_adjudication/
     __init__.py
     models.py          # AdjudicationMeta
     screening.py       # build_subparser, run (pass-through)
 
-src/laglitsynth/fulltext/
+src/laglitsynth/fulltext_retrieval/
     __init__.py
-    models.py          # RetrievalStatus, RetrievalRecord, RetrievalMeta,
-                       # TextSection, ExtractedDocument, ExtractionMeta
+    models.py          # RetrievalStatus, RetrievalRecord, RetrievalMeta
     retrieve.py        # build_subparser, run, download logic, Unpaywall client
+
+src/laglitsynth/fulltext_extraction/
+    __init__.py
+    models.py          # TextSection, ExtractedDocument, ExtractionMeta
 
 tests/
     test_dedup.py
@@ -58,7 +61,7 @@ tests/
 ## Modified files
 
 - [`src/laglitsynth/cli.py`](../src/laglitsynth/cli.py) -- register
-  `deduplicate`, `adjudicate-screening`, and `retrieve` subcommands
+  `catalogue-dedup`, `screening-adjudication`, and `fulltext-retrieval` subcommands
 - [`src/laglitsynth/io.py`](../src/laglitsynth/io.py) -- add
   `append_jsonl` for streaming/resumable writes and generic `read_jsonl`
 - [`pyproject.toml`](../pyproject.toml) -- add `httpx` and `lxml`
@@ -72,7 +75,7 @@ Per [deduplication.md](../docs/deduplication.md):
 
 ```python
 class DeduplicationMeta(_Base):
-    tool: str = "laglitsynth.dedup.deduplicate"
+    tool: str = "laglitsynth.catalogue_dedup.deduplicate"
     tool_version: str = "alpha"
     deduplicated_at: str
     input_count: int
@@ -84,9 +87,9 @@ class DeduplicationMeta(_Base):
 ### CLI
 
 ```
-laglitsynth deduplicate \
-    --input data/openalex/combined.jsonl \
-    --output-dir data/dedup/
+laglitsynth catalogue-dedup \
+    --input data/catalogue-fetch/combined.jsonl \
+    --output-dir data/catalogue-dedup/
 ```
 
 ### Behavior (pass-all MVP)
@@ -100,7 +103,7 @@ laglitsynth deduplicate \
 
 The output files (`deduplicated.jsonl`, `dropped.jsonl`, `dedup-meta.json`)
 match the storage layout in `deduplication.md` exactly. Downstream stages
-consume `deduplicated.jsonl`.
+consume `data/catalogue-dedup/deduplicated.jsonl`.
 
 ~40 lines of code.
 
@@ -110,7 +113,7 @@ consume `deduplicated.jsonl`.
 
 ```python
 class AdjudicationMeta(_Base):
-    tool: str = "laglitsynth.adjudication.screening"
+    tool: str = "laglitsynth.screening_adjudication.screening"
     tool_version: str = "alpha"
     adjudicated_at: str
     mode: str = "pass_through"
@@ -122,9 +125,9 @@ class AdjudicationMeta(_Base):
 ### CLI
 
 ```
-laglitsynth adjudicate-screening \
-    --input data/screening/accepted.jsonl \
-    --output-dir data/adjudication/
+laglitsynth screening-adjudication \
+    --input data/screening-abstracts/accepted.jsonl \
+    --output-dir data/screening-adjudication/
 ```
 
 ### Behavior
@@ -158,7 +161,7 @@ class RetrievalRecord(_Base):
     retrieved_at: str
 
 class RetrievalMeta(_Base):
-    tool: str = "laglitsynth.fulltext.retrieve"
+    tool: str = "laglitsynth.fulltext_retrieval.retrieve"
     tool_version: str = "alpha"
     retrieved_at: str
     total_works: int
@@ -175,11 +178,11 @@ Defined now so the module is complete; implementation deferred.
 ### CLI
 
 ```
-laglitsynth retrieve \
-    --input data/adjudication/included.jsonl \
-    --output-dir data/fulltext/ \
+laglitsynth fulltext-retrieval \
+    --input data/screening-adjudication/included.jsonl \
+    --output-dir data/fulltext-retrieval/ \
     --email user@example.com \
-    [--manual-dir data/fulltext/manual/] \
+    [--manual-dir data/fulltext-retrieval/manual/] \
     [--skip-existing] \
     [--dry-run]
 ```
@@ -325,19 +328,19 @@ pixi run typecheck            # mypy --strict passes
 pixi run test                 # all tests pass
 
 # Manual smoke test for stage 2:
-laglitsynth deduplicate \
+laglitsynth catalogue-dedup \
     --input <any-works.jsonl> \
     --output-dir /tmp/dedup-test/
 cat /tmp/dedup-test/dedup-meta.json
 
 # Manual smoke test for stage 4:
-laglitsynth adjudicate-screening \
+laglitsynth screening-adjudication \
     --input /tmp/dedup-test/deduplicated.jsonl \
     --output-dir /tmp/adj-test/
 cat /tmp/adj-test/adjudication-meta.json
 
 # Manual smoke test for stage 5 (needs real data):
-laglitsynth retrieve \
+laglitsynth fulltext-retrieval \
     --input /tmp/adj-test/included.jsonl \
     --output-dir /tmp/retrieval-test/ \
     --email rath.willi@googlemail.com \

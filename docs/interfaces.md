@@ -7,7 +7,7 @@ each stage can be implemented independently.
 ## Design principle: flag, don't filter
 
 Gate stages (3, 4, 7) write verdict sidecars but never copy or split Work
-records. The deduplicated catalogue (`data/dedup/deduplicated.jsonl`) is
+records. The deduplicated catalogue (`data/catalogue-dedup/deduplicated.jsonl`) is
 the single source of Work records for the entire pipeline. Downstream
 stages determine their active work set at read time by joining the
 catalogue against upstream verdicts and thresholds.

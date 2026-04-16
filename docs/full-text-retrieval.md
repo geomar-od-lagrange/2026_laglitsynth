@@ -67,7 +67,7 @@ the decoupled retrieval/extraction split.
 
 ## Data model
 
-New models in [`src/laglitsynth/fulltext/models.py`](../src/laglitsynth/fulltext/models.py).
+New models in [`src/laglitsynth/fulltext_retrieval/models.py`](../src/laglitsynth/fulltext_retrieval/models.py).
 
 ### RetrievalStatus (enum)
 
@@ -106,7 +106,7 @@ Run-level metadata, following the `FetchMeta` / `FilterMeta` pattern.
 
 ```python
 class RetrievalMeta(_Base):
-    tool: str = "laglitsynth.fulltext.retrieve"
+    tool: str = "laglitsynth.fulltext_retrieval.retrieve"
     tool_version: str = "alpha"
     retrieved_at: str
     total_works: int
@@ -119,7 +119,7 @@ class RetrievalMeta(_Base):
 ## Storage layout
 
 ```
-data/fulltext/
+data/fulltext-retrieval/
   retrieval.jsonl       # one RetrievalRecord per work
   retrieval-meta.json   # RetrievalMeta
   pdfs/                 # raw PDFs, named by OpenAlex work ID
@@ -131,16 +131,16 @@ PDFs are named by OpenAlex ID (the `W...` suffix). The manual directory
 uses the same naming convention — the CLI prints expected filenames when
 reporting unretrieved works.
 
-PDFs are not committed to git. Add `data/fulltext/pdfs/` to `.gitignore`.
+PDFs are not committed to git. Add `data/fulltext-retrieval/pdfs/` to `.gitignore`.
 
 ## CLI interface
 
 ```
-laglitsynth retrieve \
-    --input data/adjudication/included.jsonl \
-    --output-dir data/fulltext/ \
+laglitsynth fulltext-retrieval \
+    --input data/screening-adjudication/included.jsonl \
+    --output-dir data/fulltext-retrieval/ \
     --email user@example.com \
-    [--manual-dir data/fulltext/manual/] \
+    [--manual-dir data/fulltext-retrieval/manual/] \
     [--skip-existing] \
     [--dry-run]
 ```
@@ -198,7 +198,7 @@ Also write the list of unretrieved DOIs (abstract-only + failed) to
 - Unpaywall API client.
 - Manual PDF directory scanner.
 - `RetrievalRecord` / `RetrievalMeta` models and JSONL output.
-- The `retrieve` CLI subcommand with `--skip-existing`.
+- The `fulltext-retrieval` CLI subcommand with `--skip-existing`.
 - Summary report and unretrieved DOI list.
 
 ### Defer

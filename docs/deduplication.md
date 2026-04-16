@@ -54,7 +54,7 @@ schema as the input, just fewer of them.
 
 ```python
 class DeduplicationMeta(_Base):
-    tool: str = "laglitsynth.dedup.deduplicate"
+    tool: str = "laglitsynth.catalogue_dedup.dedup"
     tool_version: str = "alpha"
     deduplicated_at: str
     input_count: int
@@ -66,7 +66,7 @@ class DeduplicationMeta(_Base):
 ## Storage layout
 
 ```
-data/dedup/
+data/catalogue-dedup/
   deduplicated.jsonl      # Work records after deduplication
   dedup-meta.json         # DeduplicationMeta
   dropped.jsonl           # dropped records with merge reason
@@ -75,9 +75,9 @@ data/dedup/
 ## CLI interface
 
 ```
-laglitsynth deduplicate \
-    --input data/openalex/combined.jsonl \
-    --output-dir data/dedup/
+laglitsynth catalogue-dedup \
+    --input data/catalogue-fetch/combined.jsonl \
+    --output-dir data/catalogue-dedup/
 ```
 
 If multiple search result files need to be combined first, concatenate
