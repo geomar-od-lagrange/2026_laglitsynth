@@ -4,6 +4,43 @@ Cross-cutting view of the pipeline's artifacts, CLI commands, and Pydantic
 models. Makes the input/output chain across all 12 stages explicit so that
 each stage can be implemented independently.
 
+## Design principle: flag, don't filter
+
+Gate stages (3, 4, 7) write verdict sidecars but never copy or split Work
+records. The deduplicated catalogue (`data/dedup/deduplicated.jsonl`) is
+the single source of Work records for the entire pipeline. Downstream
+stages determine their active work set at read time by joining the
+catalogue against upstream verdicts and thresholds.
+
+This means re-thresholding (e.g. changing the screening threshold from 50
+to 40) does not require re-running the LLM or re-splitting files. The
+scores already exist in the verdict sidecar. Downstream stages re-run
+with `--skip-existing` and only process newly-included works.
+
+See [retuning-propagation.md](../plans/retuning-propagation.md) for the
+full design rationale. Multi-run consensus (running LLM stages multiple
+times and combining results) is a planned optional extension; see
+[multi-run-consensus.md](../plans/multi-run-consensus.md).
+
+### Resolution
+
+A shared `resolve` module joins the deduplicated catalogue against verdict
+sidecars and `data/params.json` to produce the active work set for a given
+pipeline stage. Every stage from 5 onward uses this module. The resolve
+logic lives in one place, not duplicated per stage.
+
+`data/params.json` holds tunable thresholds:
+
+```json
+{
+  "screening_threshold": 50,
+  "eligibility_threshold": null
+}
+```
+
+`null` means no numeric threshold (the verdict is a binary LLM decision).
+This file is human-edited and version-controlled.
+
 ## Artifact map
 
 ### Stage 1 — search *(exists)*
@@ -11,48 +48,59 @@ each stage can be implemented independently.
 | Path | Model | Description |
 |---|---|---|
 | `data/openalex/<slug>_<ts>.jsonl` | [`Work`](../src/laglitsynth/openalex/models.py) | Retrieved catalogue records |
-| `data/openalex/<slug>_<ts>.meta.json` | [`FetchMeta`](../src/laglitsynth/openalex/models.py) | Query, timestamp, counts |
+| `data/openalex/<slug>_<ts>.meta.json` | [`FetchMeta`](../src/laglitsynth/openalex/models.py) | Per-run provenance |
 
-Multiple runs produce separate timestamped files; concatenation for stage 2
-is a manual `cat` step.
+Multiple search runs produce separate timestamped files. Only the JSONL
+records are concatenated for stage 2 (`cat data/openalex/*.jsonl`). The
+meta files stay as per-run provenance records — they are not merged.
 
 ### Stage 2 — deduplication
 
 | Path | Model | Description |
 |---|---|---|
-| `data/dedup/deduplicated.jsonl` | [`Work`](../src/laglitsynth/openalex/models.py) | Deduplicated catalogue |
+| `data/dedup/deduplicated.jsonl` | [`Work`](../src/laglitsynth/openalex/models.py) | Deduplicated catalogue — single source of Work records for the pipeline |
 | `data/dedup/dropped.jsonl` | Work + merge reason (TBD) | Dropped duplicates with reason |
 | `data/dedup/dedup-meta.json` | `DeduplicationMeta` (new) | Counts by matching rule |
 
-### Stage 3 — screen-abstracts *(exists, needs path change)*
+### Stage 3 — screen-abstracts *(exists, needs update)*
 
 | Path | Model | Description |
 |---|---|---|
-| `data/screening/screened.jsonl` | [`Work`](../src/laglitsynth/openalex/models.py) | Accepted work records |
-| `data/screening/rejected.jsonl` | [`Work`](../src/laglitsynth/openalex/models.py) | Rejected work records |
-| `data/screening/verdicts.jsonl` | [`FilterVerdict`](../src/laglitsynth/llmfilter/models.py) | Per-work relevance scores |
-| `data/screening/screening-meta.json` | [`FilterMeta`](../src/laglitsynth/llmfilter/models.py) | Prompt, model, threshold, counts |
+| `data/screening/verdicts.jsonl` | [`FilterVerdict`](../src/laglitsynth/llmfilter/models.py) | Relevance score and reason for every work |
+| `data/screening/screening-meta.json` | [`FilterMeta`](../src/laglitsynth/llmfilter/models.py) | Prompt, model, counts |
 
-The existing code writes to `data/filtered/` with timestamped filenames.
-This must change to `data/screening/` with fixed filenames. The timestamp
-moves into the meta sidecar. See [Inconsistencies to
-resolve](#inconsistencies-to-resolve).
+Verdicts cover all works in the deduplicated catalogue, not just accepted
+ones. The accept/reject decision is derived from the relevance score and
+the threshold in `data/params.json` at read time. No `screened.jsonl` or
+`rejected.jsonl` — the verdict sidecar is the only output.
+
+The existing code writes to `data/filtered/` with timestamped filenames
+and splits accepted/rejected Work records into separate files. Both must
+change: rename the directory to `data/screening/`, write only verdicts,
+drop the Work-record split.
 
 ### Stage 4 — adjudication (screening)
 
 | Path | Model | Description |
 |---|---|---|
-| `data/adjudication/included.jsonl` | [`Work`](../src/laglitsynth/openalex/models.py) | Included catalogue |
+| `data/adjudication/verdicts.jsonl` | `AdjudicationVerdict` (new) | Human overrides (accept/reject/skip per work) |
 | `data/adjudication/adjudication-meta.json` | `AdjudicationMeta` (new) | Mode, counts |
+
+The adjudication tool resolves the current accepted set (screening scores
+above threshold) and presents unreviewed works for human judgment. Human
+decisions are recorded as verdicts, not as copies of Work records.
 
 ### Stage 5 — full-text-retrieval
 
 | Path | Model | Description |
 |---|---|---|
-| `data/fulltext/retrieval.jsonl` | `RetrievalRecord` (new) | Per-work retrieval outcome |
+| `data/fulltext/retrieval.jsonl` | `RetrievalRecord` (new) | Per-work retrieval outcome and PDF location |
 | `data/fulltext/retrieval-meta.json` | `RetrievalMeta` (new) | Counts by source |
 | `data/fulltext/pdfs/<work_id>.pdf` | (binary) | Raw PDFs |
 | `data/fulltext/unretrieved.txt` | (plain text) | DOIs for manual download |
+
+`RetrievalRecord` flags each work's retrieval status (success, failed,
+abstract-only) and the PDF path. Already follows the flag pattern.
 
 ### Stage 6 — full-text-extraction
 
@@ -66,9 +114,12 @@ resolve](#inconsistencies-to-resolve).
 
 | Path | Model | Description |
 |---|---|---|
-| `data/eligibility/eligible.jsonl` | [`Work`](../src/laglitsynth/openalex/models.py) | Eligible corpus |
 | `data/eligibility/verdicts.jsonl` | `EligibilityVerdict` (new) | Per-work eligibility decision |
 | `data/eligibility/eligibility-meta.json` | `EligibilityMeta` (new) | Counts by source basis |
+
+Verdicts cover all works that the resolve module passes to this stage.
+No `eligible.jsonl` — downstream stages resolve the eligible set from
+the verdict sidecar.
 
 ### Stage 8 — data-extraction
 
@@ -86,8 +137,11 @@ The meta file is named `data-extraction-meta.json` (not
 
 | Path | Model | Description |
 |---|---|---|
-| `data/adjudication-extraction/validated.jsonl` | `ExtractionRecord` | Corrected extraction records |
+| `data/adjudication-extraction/corrections.jsonl` | `ExtractionCorrection` (new) | Per-field corrections with original and corrected values |
 | `data/adjudication-extraction/adjudication-meta.json` | `ExtractionAdjudicationMeta` (new) | Mode, counts, agreement metrics |
+
+Corrections are stored alongside original extraction records, not as
+replacements. Downstream stages apply corrections at read time.
 
 ### Stage 10 — quantitative-synthesis
 
@@ -107,21 +161,20 @@ The meta file is named `data-extraction-meta.json` (not
 |---|---|---|
 | `data/synthesis/synthesis-draft.md` | (markdown) | Narrative keyed to research questions |
 
+### Pipeline-level
+
+| Path | Model | Description |
+|---|---|---|
+| `data/params.json` | (plain JSON) | Tunable thresholds (screening, eligibility) |
+
 ## Inconsistencies to resolve
 
-### Stage 3 output directory (code change needed)
+### Stage 3 implementation (code change needed)
 
-The implemented code writes to `data/filtered/` with timestamped filenames.
-Downstream plans expect `data/screening/screened.jsonl`. Two changes:
-(a) rename the output directory from `filtered` to `screening`, and
-(b) switch from timestamped filenames to fixed names. The timestamp moves
-into the meta sidecar.
-
-### Stage 5 input path (fixed)
-
-The [retrieval spec](full-text-retrieval.md) CLI example previously said
-`--input data/screening/included.jsonl`. Already corrected to
-`--input data/adjudication/included.jsonl`.
+The existing code writes to `data/filtered/`, uses timestamped filenames,
+and splits Work records into accepted/rejected files. All three must
+change: rename directory to `data/screening/`, write only
+`verdicts.jsonl` (scores for all works), drop the Work-record split.
 
 ## CLI contract
 
@@ -140,9 +193,8 @@ laglitsynth filter-abstracts INPUT PROMPT \
 
 These use positional arguments. All new subcommands use `--input` /
 `--output-dir` keyword flags instead. The existing commands should be
-harmonized to keyword flags when stage 3 is updated for the path change.
-No backwards compatibility constraints
-([AGENTS.md](../AGENTS.md)).
+harmonized to keyword flags when stage 3 is updated. No backwards
+compatibility constraints ([AGENTS.md](../AGENTS.md)).
 
 ### Planned subcommands
 
@@ -154,12 +206,12 @@ laglitsynth deduplicate \
 
 # Stage 4 — adjudication (screening)
 laglitsynth adjudicate-screening \
-    --input data/screening/screened.jsonl \
+    --data-dir data/ \
     --output-dir data/adjudication/
 
 # Stage 5 — full-text retrieval
 laglitsynth retrieve \
-    --input data/adjudication/included.jsonl \
+    --data-dir data/ \
     --output-dir data/fulltext/ \
     --email EMAIL \
     [--manual-dir DIR] [--skip-existing] [--dry-run]
@@ -173,31 +225,31 @@ laglitsynth extract \
 
 # Stage 7 — eligibility
 laglitsynth assess-eligibility \
-    --catalogue data/adjudication/included.jsonl \
+    --data-dir data/ \
     --extractions data/fulltext/extraction.jsonl \
     --output-dir data/eligibility/ \
     [--skip-existing]
 
 # Stage 8 — data extraction
 laglitsynth extract-data \
-    --catalogue data/eligibility/eligible.jsonl \
+    --data-dir data/ \
     --extractions data/fulltext/extraction.jsonl \
     --output-dir data/extraction/ \
     [--skip-existing]
 
 # Stage 9 — adjudication (extraction)
 laglitsynth adjudicate-extraction \
-    --input data/extraction/records.jsonl \
+    --data-dir data/ \
     --output-dir data/adjudication-extraction/
 
 # Stage 10 — quantitative synthesis
 laglitsynth synthesize-quantitative \
-    --input data/adjudication-extraction/validated.jsonl \
+    --data-dir data/ \
     --output-dir data/synthesis/
 
 # Stage 11 — thematic synthesis
 laglitsynth synthesize-thematic \
-    --input data/adjudication-extraction/validated.jsonl \
+    --data-dir data/ \
     --output-dir data/synthesis/
 
 # Stage 12 — narrative synthesis
@@ -218,7 +270,7 @@ laglitsynth fetch-publications "lagrangian particle tracking" \
 laglitsynth fetch-publications "ocean tracer simulation" \
     -o data/openalex/search_b.jsonl
 
-# Manual: concatenate search results
+# Manual: concatenate search result records (not meta files)
 cat data/openalex/search_*.jsonl > data/openalex/combined.jsonl
 
 # 2. Deduplicate
@@ -226,20 +278,20 @@ laglitsynth deduplicate \
     --input data/openalex/combined.jsonl \
     --output-dir data/dedup/
 
-# 3. Screen abstracts
-laglitsynth filter-abstracts data/dedup/deduplicated.jsonl \
-    "Is this about computational Lagrangian methods in oceanography?" \
-    -o data/screening/screened.jsonl \
-    --reject-file data/screening/rejected.jsonl
+# 3. Screen abstracts (scores all works, no split)
+laglitsynth filter-abstracts \
+    --input data/dedup/deduplicated.jsonl \
+    --prompt "Is this about computational Lagrangian methods in oceanography?" \
+    --output-dir data/screening/
 
 # 4. Adjudicate screening (pass-through in prototype)
 laglitsynth adjudicate-screening \
-    --input data/screening/screened.jsonl \
+    --data-dir data/ \
     --output-dir data/adjudication/
 
-# 5. Retrieve full texts
+# 5. Retrieve full texts (resolve determines which works to retrieve)
 laglitsynth retrieve \
-    --input data/adjudication/included.jsonl \
+    --data-dir data/ \
     --output-dir data/fulltext/ \
     --email user@example.com \
     --skip-existing
@@ -257,29 +309,29 @@ laglitsynth extract \
 
 # 7. Assess eligibility
 laglitsynth assess-eligibility \
-    --catalogue data/adjudication/included.jsonl \
+    --data-dir data/ \
     --extractions data/fulltext/extraction.jsonl \
     --output-dir data/eligibility/
 
 # 8. Extract data against codebook
 laglitsynth extract-data \
-    --catalogue data/eligibility/eligible.jsonl \
+    --data-dir data/ \
     --extractions data/fulltext/extraction.jsonl \
     --output-dir data/extraction/
 
 # 9. Adjudicate extraction (pass-through in prototype)
 laglitsynth adjudicate-extraction \
-    --input data/extraction/records.jsonl \
+    --data-dir data/ \
     --output-dir data/adjudication-extraction/
 
 # 10. Quantitative synthesis
 laglitsynth synthesize-quantitative \
-    --input data/adjudication-extraction/validated.jsonl \
+    --data-dir data/ \
     --output-dir data/synthesis/
 
 # 11. Thematic synthesis
 laglitsynth synthesize-thematic \
-    --input data/adjudication-extraction/validated.jsonl \
+    --data-dir data/ \
     --output-dir data/synthesis/
 
 # 12. Narrative synthesis
@@ -296,7 +348,7 @@ laglitsynth synthesize-narrative \
 | Model | Module | Used by stages |
 |---|---|---|
 | [`_Base`](../src/laglitsynth/models.py) | `laglitsynth.models` | All (base class) |
-| [`Work`](../src/laglitsynth/openalex/models.py) | `laglitsynth.openalex.models` | 1, 2, 3, 4, 5, 7, 8 |
+| [`Work`](../src/laglitsynth/openalex/models.py) | `laglitsynth.openalex.models` | 1, 2, 3 |
 | [`FetchMeta`](../src/laglitsynth/openalex/models.py) | `laglitsynth.openalex.models` | 1 |
 | [`FilterVerdict`](../src/laglitsynth/llmfilter/models.py) | `laglitsynth.llmfilter.models` | 3 |
 | [`FilterMeta`](../src/laglitsynth/llmfilter/models.py) | `laglitsynth.llmfilter.models` | 3 |
@@ -306,6 +358,7 @@ laglitsynth synthesize-narrative \
 | Model | Planned module | Stage | Defined in |
 |---|---|---|---|
 | `DeduplicationMeta` | `laglitsynth.dedup.models` | 2 | [deduplication.md](deduplication.md) |
+| `AdjudicationVerdict` | `laglitsynth.adjudication.models` | 4 | — |
 | `AdjudicationMeta` | `laglitsynth.adjudication.models` | 4 | [adjudication-screening.md](adjudication-screening.md) |
 | `RetrievalStatus` (enum) | `laglitsynth.fulltext.models` | 5 | [full-text-retrieval.md](full-text-retrieval.md) |
 | `RetrievalRecord` | `laglitsynth.fulltext.models` | 5 | [full-text-retrieval.md](full-text-retrieval.md) |
@@ -317,6 +370,7 @@ laglitsynth synthesize-narrative \
 | `EligibilityMeta` | `laglitsynth.eligibility.models` | 7 | [eligibility.md](eligibility.md) |
 | `ExtractionRecord` | `laglitsynth.extraction.models` | 8, 9, 10, 11 | Not yet defined. Must encode the [codebook](codebook.md) fields. |
 | `DataExtractionMeta` | `laglitsynth.extraction.models` | 8 | Not yet defined |
+| `ExtractionCorrection` | `laglitsynth.adjudication.models` | 9 | — |
 | `ExtractionAdjudicationMeta` | `laglitsynth.adjudication.models` | 9 | [adjudication-extraction.md](adjudication-extraction.md) |
 | `SynthesisStatistics` | `laglitsynth.synthesis.models` | 10 | Not yet planned |
 | `RationaleTaxonomy` | `laglitsynth.synthesis.models` | 11 | Not yet planned |
@@ -327,15 +381,15 @@ laglitsynth synthesize-narrative \
 |---|---|---|
 | 1. search | — | Work, FetchMeta |
 | 2. deduplication | Work | Work, DeduplicationMeta |
-| 3. screen-abstracts | Work | Work, FilterVerdict, FilterMeta |
-| 4. adjudication | Work | Work, AdjudicationMeta |
-| 5. retrieval | Work | RetrievalRecord, RetrievalMeta |
+| 3. screen-abstracts | Work | FilterVerdict, FilterMeta |
+| 4. adjudication | FilterVerdict (via resolve) | AdjudicationVerdict, AdjudicationMeta |
+| 5. retrieval | Work (via resolve) | RetrievalRecord, RetrievalMeta |
 | 6. extraction | (PDFs) | ExtractedDocument, ExtractionMeta |
-| 7. eligibility | Work, ExtractedDocument | Work, EligibilityVerdict, EligibilityMeta |
-| 8. data-extraction | Work, ExtractedDocument | ExtractionRecord, DataExtractionMeta |
-| 9. adjudication (extr.) | ExtractionRecord | ExtractionRecord, ExtractionAdjudicationMeta |
-| 10. quant-synthesis | ExtractionRecord | SynthesisStatistics |
-| 11. thematic-synthesis | ExtractionRecord | RationaleTaxonomy |
+| 7. eligibility | Work, ExtractedDocument (via resolve) | EligibilityVerdict, EligibilityMeta |
+| 8. data-extraction | Work, ExtractedDocument (via resolve) | ExtractionRecord, DataExtractionMeta |
+| 9. adjudication (extr.) | ExtractionRecord (via resolve) | ExtractionCorrection, ExtractionAdjudicationMeta |
+| 10. quant-synthesis | ExtractionRecord (via resolve) | SynthesisStatistics |
+| 11. thematic-synthesis | ExtractionRecord (via resolve) | RationaleTaxonomy |
 | 12. narrative-synthesis | SynthesisStatistics, RationaleTaxonomy | (markdown) |
 
 ## Gaps
@@ -359,7 +413,17 @@ laglitsynth synthesize-narrative \
   reproducibility indicators, extraction metadata), each as a value +
   context-snippet pair. The codebook explicitly defers the Pydantic model
   to after phase 3 iteration.
+- `AdjudicationVerdict` — human accept/reject/skip per work with reason.
+- `ExtractionCorrection` — per-field corrections with original and
+  corrected values.
 - `SynthesisStatistics` — depends on which breakdowns are needed (by
   sub-discipline, by year, by source basis).
 - `RationaleTaxonomy` — depends on how thematic clusters are represented
   (category label, supporting quotes, paper references).
+
+### Resolve module
+
+The `laglitsynth.resolve` module does not exist yet. It must join the
+deduplicated catalogue against verdict sidecars and `data/params.json`
+thresholds. This is the single most important new piece of shared
+infrastructure — every stage from 5 onward depends on it.
