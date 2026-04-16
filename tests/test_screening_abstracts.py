@@ -1,4 +1,4 @@
-"""Tests for the llmfilter submodule."""
+"""Tests for the screening_abstracts submodule."""
 
 from __future__ import annotations
 
@@ -8,13 +8,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from laglitsynth.llmfilter.filter import (
+from laglitsynth.screening_abstracts.screen import (
     ClassifyError,
     classify_abstract,
     filter_works,
 )
-from laglitsynth.llmfilter.models import FilterMeta, FilterVerdict
-from laglitsynth.openalex.models import Work
+from laglitsynth.screening_abstracts.models import FilterMeta, FilterVerdict
+from laglitsynth.catalogue_fetch.models import Work
 
 
 def _make_work(
@@ -52,7 +52,7 @@ def _mock_openai_response(content: str) -> MagicMock:
 
 def test_classify_abstract_valid_response() -> None:
     resp = _mock_openai_response('{"relevance_score": 85, "reason": "relevant"}')
-    with patch("laglitsynth.llmfilter.filter.OpenAI") as mock_cls:
+    with patch("laglitsynth.screening_abstracts.screen.OpenAI") as mock_cls:
         mock_cls.return_value.chat.completions.create.return_value = resp
         verdict = classify_abstract(
             "W1", "some abstract", "about oceans", model="m", base_url="http://x"
@@ -65,7 +65,7 @@ def test_classify_abstract_valid_response() -> None:
 
 def test_classify_abstract_malformed_json() -> None:
     resp = _mock_openai_response("this is not json at all")
-    with patch("laglitsynth.llmfilter.filter.OpenAI") as mock_cls:
+    with patch("laglitsynth.screening_abstracts.screen.OpenAI") as mock_cls:
         mock_cls.return_value.chat.completions.create.return_value = resp
         with pytest.raises(ClassifyError):
             classify_abstract(
@@ -75,7 +75,7 @@ def test_classify_abstract_malformed_json() -> None:
 
 def test_classify_abstract_missing_fields() -> None:
     resp = _mock_openai_response('{"relevance_score": 50}')
-    with patch("laglitsynth.llmfilter.filter.OpenAI") as mock_cls:
+    with patch("laglitsynth.screening_abstracts.screen.OpenAI") as mock_cls:
         mock_cls.return_value.chat.completions.create.return_value = resp
         with pytest.raises(ClassifyError):
             classify_abstract(
@@ -85,7 +85,7 @@ def test_classify_abstract_missing_fields() -> None:
 
 def test_classify_abstract_wrong_types() -> None:
     resp = _mock_openai_response('{"relevance_score": "high", "reason": "good"}')
-    with patch("laglitsynth.llmfilter.filter.OpenAI") as mock_cls:
+    with patch("laglitsynth.screening_abstracts.screen.OpenAI") as mock_cls:
         mock_cls.return_value.chat.completions.create.return_value = resp
         with pytest.raises(ClassifyError):
             classify_abstract(
@@ -146,7 +146,7 @@ def test_filter_works_basic(tmp_path: Path) -> None:
     }
 
     with patch(
-        "laglitsynth.llmfilter.filter.classify_abstract",
+        "laglitsynth.screening_abstracts.screen.classify_abstract",
         side_effect=_mock_classify(classify_results),
     ):
         results = list(
@@ -190,7 +190,7 @@ def test_filter_works_max_records_counts_all(tmp_path: Path) -> None:
     }
 
     with patch(
-        "laglitsynth.llmfilter.filter.classify_abstract",
+        "laglitsynth.screening_abstracts.screen.classify_abstract",
         side_effect=_mock_classify(classify_results),
     ):
         results = list(
@@ -223,7 +223,7 @@ def test_filter_works_llm_failure(tmp_path: Path) -> None:
     }
 
     with patch(
-        "laglitsynth.llmfilter.filter.classify_abstract",
+        "laglitsynth.screening_abstracts.screen.classify_abstract",
         side_effect=_mock_classify(classify_results),
     ):
         results = list(
@@ -281,7 +281,7 @@ def test_filter_meta_serialization() -> None:
         skipped_count=2,
     )
     data = meta.model_dump()
-    assert data["tool"] == "laglitsynth.llmfilter.filter"
+    assert data["tool"] == "laglitsynth.screening_abstracts.screen"
     assert data["accepted_count"] == 10
 
 
@@ -289,13 +289,13 @@ def test_filter_meta_serialization() -> None:
 
 
 def test_preflight_raises_on_connection_failure() -> None:
-    from laglitsynth.llmfilter.filter import _preflight
+    from laglitsynth.screening_abstracts.screen import _preflight
 
     args = MagicMock()
     args.base_url = "http://localhost:99999"
     args.model = "nonexistent"
 
-    with patch("laglitsynth.llmfilter.filter.OpenAI") as mock_cls:
+    with patch("laglitsynth.screening_abstracts.screen.OpenAI") as mock_cls:
         mock_cls.return_value.models.retrieve.side_effect = Exception("connection refused")
         with pytest.raises(SystemExit):
             _preflight(args)
@@ -328,13 +328,13 @@ def test_run_dry_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None
     args.reject_file = None
 
     with (
-        patch("laglitsynth.llmfilter.filter._preflight"),
+        patch("laglitsynth.screening_abstracts.screen._preflight"),
         patch(
-            "laglitsynth.llmfilter.filter.classify_abstract",
+            "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=_mock_classify(classify_results),
         ),
     ):
-        from laglitsynth.llmfilter.filter import run
+        from laglitsynth.screening_abstracts.screen import run
 
         run(args)
 
@@ -370,13 +370,13 @@ def test_run_writes_output_files(tmp_path: Path) -> None:
     args.reject_file = reject
 
     with (
-        patch("laglitsynth.llmfilter.filter._preflight"),
+        patch("laglitsynth.screening_abstracts.screen._preflight"),
         patch(
-            "laglitsynth.llmfilter.filter.classify_abstract",
+            "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=_mock_classify(classify_results),
         ),
     ):
-        from laglitsynth.llmfilter.filter import run
+        from laglitsynth.screening_abstracts.screen import run
 
         run(args)
 

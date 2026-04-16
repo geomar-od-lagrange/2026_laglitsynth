@@ -9,7 +9,7 @@ class FilterVerdict(_Base):
 
 
 class FilterMeta(_Base):
-    tool: str = "laglitsynth.llmfilter.filter"
+    tool: str = "laglitsynth.screening_abstracts.screen"
     tool_version: str = "alpha"
     prompt: str
     model: str

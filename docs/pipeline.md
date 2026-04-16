@@ -10,6 +10,21 @@ stage 6 onward we work with the **corpus**.
 
 ## Stages
 
+| # | Stage | Domain |
+|---|---|---|
+| 1 | [catalogue-fetch](#1-search-exists) | catalogue |
+| 2 | [catalogue-dedup](#2-deduplication) | catalogue |
+| 3 | [screening-abstracts](#3-screen-abstracts-exists) | catalogue |
+| 4 | [screening-adjudication](#4-adjudication) | catalogue |
+| 5 | [fulltext-retrieval](#5-full-text-retrieval) | catalogue → corpus |
+| 6 | [fulltext-extraction](#6-full-text-extraction) | corpus |
+| 7 | [fulltext-eligibility](#7-eligibility) | corpus |
+| 8 | [extraction-codebook](#8-data-extraction) | corpus |
+| 9 | [extraction-adjudication](#9-adjudication-extraction) | corpus |
+| 10 | [synthesis-quantitative](#10-quantitative-synthesis) | synthesis |
+| 11 | [synthesis-thematic](#11-thematic-synthesis) | synthesis |
+| 12 | [synthesis-narrative](#12-narrative-synthesis) | synthesis |
+
 ### 1. search *(exists)*
 
 Queries OpenAlex using the search strategy and retrieves validated

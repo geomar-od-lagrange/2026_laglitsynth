@@ -100,7 +100,7 @@ class Work(_Base):
 
 
 class FetchMeta(_Base):
-    tool: str = "laglitsynth.openalex.fetch"
+    tool: str = "laglitsynth.catalogue_fetch.fetch"
     tool_version: str = "alpha"
     query: str
     fetched_at: str
