@@ -1,4 +1,4 @@
-# Full-text extraction (stage 6)
+# Full-text extraction
 
 Parse retrieved PDFs into structured sections. Stage 5 (retrieval)
 produces the input (PDFs on disk); downstream stages (eligibility, data

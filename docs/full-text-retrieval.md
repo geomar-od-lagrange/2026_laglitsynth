@@ -1,4 +1,4 @@
-# Full-text retrieval (stage 5)
+# Full-text retrieval
 
 Retrieve PDFs for works in the included catalogue. This is where the
 catalogue becomes a corpus. The output is PDFs on disk and a retrieval

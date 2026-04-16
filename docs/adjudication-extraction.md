@@ -1,4 +1,4 @@
-# Adjudication — extraction (stage 9)
+# Adjudication — extraction
 
 Human review of LLM extraction records. A sample of records is
 spot-checked against source text, corrections are logged, and inter-rater

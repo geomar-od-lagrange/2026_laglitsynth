@@ -1,4 +1,4 @@
-# Deduplication (stage 2)
+# Deduplication
 
 Remove duplicate records from the retrieved catalogue before screening
 effort is spent. Duplicates arise when multiple keyword searches return

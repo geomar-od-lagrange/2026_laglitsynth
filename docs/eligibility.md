@@ -1,4 +1,4 @@
-# Eligibility (stage 7)
+# Eligibility
 
 Full-text assessment of whether each work meets the review's inclusion
 criteria. Distinct from screening (stage 3), which uses only title and

@@ -1,4 +1,4 @@
-# Adjudication — screening (stage 4)
+# Adjudication — screening
 
 Human review of LLM screening decisions. A stratified sample of accepted
 and rejected records is inspected, and the screening threshold is adjusted
