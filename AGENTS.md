@@ -32,9 +32,20 @@ structured assessment and synthesis.
   strict mode is the bar — run `pixi run typecheck` before merging.
 - **Link, don't just name.** When markdown references a file path, make it a
   relative markdown link, not a bare backtick path.
+- **Plain markdown headings over bold-text formatting.** Use the heading
+  hierarchy (`##`, `###`, `####`, `#####`) for document structure. Never
+  simulate headings with `**Bold:**` paragraphs or `- **Bold.** text` list
+  items when a heading at the appropriate level would do. Bold-text headings
+  break TOC generation, linking, and navigation. If you need a sub-section
+  under an H3, use H4; if you need named items under that, use H5.
 - **None means None.** If upstream data is missing or null, store `None` —
   don't invent defaults. Science data is messy; downstream consumers must
   handle incomplete information explicitly.
+- **No fabricated numbers in plans.** Plans must not contain made-up estimates
+  for paper counts, data volumes, throughput, feasibility, or run times.
+  Estimating scale is the job of the humans designing the process — not of
+  plan documents or AI assistants. Stay fact-based: if a number has not been
+  measured, do not write it down.
 - **AI-tool agnostic.** Project configuration, principles, and documentation
   live in the repo (AGENTS.md, docs/, plans/), not in tool-specific memory
   or config. Any AI coding assistant should be able to pick up the project
@@ -52,8 +63,13 @@ in [`pyproject.toml`](pyproject.toml).
 
 ## Project structure
 
-- [`plans/`](plans/) — implementation plans (written before code);
-  completed plans move to [`plans/done/`](plans/done/)
-- [`docs/`](docs/) — documentation of what's actually implemented
+- [`plans/`](plans/) — prescriptive documents consumed once during
+  implementation: what to build, in what order, what to defer, what
+  risks to watch for. Completed plans move to [`plans/done/`](plans/done/).
+- [`docs/`](docs/) — descriptive documents that remain useful after
+  implementation as ongoing references: present tense, states facts,
+  no build sequencing or risk assessment. (Some existing stage docs
+  predate this convention and contain plan-like sections. These are
+  rewritten to descriptive style when each stage is implemented.)
 - Source code in [`src/laglitsynth/`](src/laglitsynth/) (subpackages per
   component, e.g. [`src/laglitsynth/openalex/`](src/laglitsynth/openalex/))
