@@ -56,6 +56,22 @@ has a title and body text. Handle known failure modes:
 Output is plain text organized by section. No XML, no HTML. Downstream
 stages consume text.
 
+### Extraction quality gate
+
+GROBID failures are binary in practice: the output is either clearly
+usable (full sentences in paragraphs, recognisable headings) or clearly
+broken (garbled text from column-gap misreads, OCR artefacts, or
+non-standard layouts). An automated quality gate catches the obvious
+failures before they flow downstream.
+
+Action: investigate whether GROBID exposes quality scores or flags
+programmatically (e.g. confidence on parsed elements). If GROBID does
+not provide usable quality signals, implement simple heuristics as a
+fallback: median sentence length, character-class entropy, ratio of
+non-ASCII characters. Documents that fail the quality gate are flagged
+in the extraction record and excluded from downstream LLM stages. This
+is flagged for implementation alongside the TEI parser, not deferred.
+
 ### Metadata authority
 
 Per grobid-lessons: **OpenAlex remains the metadata authority.** Do not
@@ -65,7 +81,7 @@ body text only.
 
 ## Data model
 
-New models in `src/laglitsynth/fulltext/models.py` (same module as
+New models in [`src/laglitsynth/fulltext/models.py`](../src/laglitsynth/fulltext/models.py) (same module as
 retrieval models).
 
 ### TextSection
@@ -186,10 +202,11 @@ command to start it.
 Some sub-fields produce PDFs that GROBID handles poorly (scanned older
 papers, unusual layouts, non-standard fonts).
 
-Mitigation: track failure rate. If it exceeds ~10%, evaluate PyMuPDF or
-marker as a fallback and add a second extraction path. The
-`ExtractedDocument` model does not encode the extraction tool — widening
-out is a code change, not a schema change.
+Mitigation: track the failure rate on the actual corpus and decide based
+on observed numbers whether a fallback is needed. If the rate justifies
+it, evaluate PyMuPDF or marker as a fallback and add a second extraction
+path. The `ExtractedDocument` model does not encode the extraction tool —
+widening out is a code change, not a schema change.
 
 ### GROBID infrastructure friction
 

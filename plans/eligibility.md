@@ -13,17 +13,19 @@ works). Same pattern as the existing `filter-abstracts` stage: structured
 JSON output, Pydantic validation, verdicts stored separately for
 re-thresholding.
 
-The eligibility criteria are simple for the prototype:
+The eligibility criteria below are provisional placeholders for the
+prototype. They are deliberately broad — designed to let papers through,
+not to be the final filter. The human turns knobs once the pipeline runs
+and produces reviewable output. False positives are acceptable in the
+prototype; false negatives are not.
 
 1. The paper describes a computation that tracks particles, tracers, or
    objects in an ocean flow field.
 2. The paper is primary research (not a review, editorial, or commentary).
 3. The paper contains at least some description of the numerical methods
-   used.
-
-These criteria will be tightened during tuning. For now, they are broad
-enough to let most screened papers through — false positives are acceptable
-in the prototype; false negatives are not.
+   used. (Under discussion: lack of method description is poor practice
+   but may not disqualify a paper from relevance. This criterion may be
+   relaxed in a later iteration.)
 
 ## Input
 
@@ -116,6 +118,14 @@ Respond with JSON: {"eligible": true/false, "reason": "...",
 
 The prompt will be refined during tuning. The structured output and
 validation pattern is identical to `filter-abstracts`.
+
+## Export for human review
+
+Eligibility verdicts are exported as a flat table (e.g. CSV) for
+spot-checking. The table contains one row per work: work ID, title,
+verdict, reason, confidence, and source basis. This follows the general
+pattern that every LLM-driven stage produces output reviewable by a
+human without specialised tooling.
 
 ## What to defer
 

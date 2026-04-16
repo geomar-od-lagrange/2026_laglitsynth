@@ -30,9 +30,12 @@ systematic-review methodology this is a required document (PRISMA-P).
 ### work
 
 A single publication record, modelled after the OpenAlex `Work`
-schema. Contains metadata (title, authors, date, DOI, topics,
-referenced_works) and an abstract. Does *not* include full text until the
-retrieval stage.
+schema. (OpenAlex is the current catalogue source; the data model
+supports swapping or merging catalogue sources. A Clarivate API key
+application is pending, which may allow using Web of Science as an
+additional or alternative source.) Contains metadata (title, authors,
+date, DOI, topics, referenced_works) and an abstract. Does *not*
+include full text until the retrieval stage.
 
 ### catalogue
 
@@ -138,7 +141,7 @@ explicitly flagged as abstract-only).
 
 ### data extraction
 
-Reading a work's text (full text or abstract) and
+Reading a work's full text and
 producing a structured record of facts relevant to the research questions.
 The NLP community calls the underlying technique *information extraction*.
 
@@ -187,9 +190,13 @@ research-on-research and open-science communities. Mapped to RQ1.1.
 
 ### sub-discipline
 
-One of the three branches of computational Lagrangian
-oceanography identified in the project proposal: *water parcels*, *tracers*,
-and *objects*. Each work is classified into one or more of these.
+A thematic grouping within computational Lagrangian
+oceanography. The project proposal identifies three illustrative
+sub-disciplines — *water parcels*, *tracers*, and *objects* — but these
+are starting points, not an exhaustive taxonomy. Extraction tags each work
+with whatever sub-discipline terms best fit, in the paper's own vocabulary.
+The actual set of sub-disciplines emerges from the corpus and is
+consolidated in a later pipeline stage.
 
 ### numerical choice
 

@@ -14,8 +14,9 @@ Try sources in this order for each work. Stop at the first success.
 
 The `Work` model already carries `open_access.oa_url` and
 `primary_location.pdf_url`. These come from Unpaywall data aggregated by
-OpenAlex. For oceanography, expect 40–60% OA coverage. This is the cheapest
-source: no additional API calls, URLs already in the data.
+OpenAlex. OA coverage for oceanography is unknown and should be measured
+on a sample before committing to a retrieval strategy. This is the
+cheapest source: no additional API calls, URLs already in the data.
 
 ### 2. Unpaywall API
 
@@ -30,6 +31,12 @@ Check for arXiv or ESSOAr versions via DOI resolution or OpenAlex's
 `locations` list. For arXiv, construct the PDF URL directly from the arXiv
 ID. Preprints may differ from the published version but for our purposes
 (extracting numerical methods) the differences are rarely material.
+
+Preprints are retained for prototyping and vocabulary discovery. For
+quantitative RQ analyses, preprints must be excludable — the data model
+carries peer-review status so that downstream stages can filter by
+publication type. Preprint retrieval does not imply preprint inclusion in
+quantitative results.
 
 ### 4. Manual batch
 
@@ -60,7 +67,7 @@ the decoupled retrieval/extraction split.
 
 ## Data model
 
-New models in `src/laglitsynth/fulltext/models.py`.
+New models in [`src/laglitsynth/fulltext/models.py`](../src/laglitsynth/fulltext/models.py).
 
 ### RetrievalStatus (enum)
 
@@ -166,17 +173,18 @@ are retried (the failure may have been transient). Works with
 
 ### Reporting
 
-Print a summary to stderr after the run:
+Print a summary to stderr after the run (example format, numbers are
+placeholders):
 
 ```
 Retrieval summary:
-  Total works:            312
-  Retrieved (OA):         148  (47.4%)
-  Retrieved (Unpaywall):   41  (13.1%)
-  Retrieved (preprint):    23   (7.4%)
-  Retrieved (manual):      17   (5.4%)
-  Abstract-only:           78  (25.0%)
-  Failed:                   5   (1.6%)
+  Total works:            NNN
+  Retrieved (OA):         NNN  (NN.N%)
+  Retrieved (Unpaywall):  NNN  (NN.N%)
+  Retrieved (preprint):   NNN  (NN.N%)
+  Retrieved (manual):     NNN  (NN.N%)
+  Abstract-only:          NNN  (NN.N%)
+  Failed:                 NNN  (NN.N%)
 ```
 
 Also write the list of unretrieved DOIs (abstract-only + failed) to
@@ -205,10 +213,10 @@ Also write the list of unretrieved DOIs (abstract-only + failed) to
 
 ### OA coverage lower than expected
 
-If OA sources cover less than 40%, the manual burden grows. Mitigation: run
-retrieval early on a 50-work sample to measure actual coverage before
-committing. If coverage is poor, prioritise the manual path and consider
-adding Semantic Scholar as a source.
+If OA coverage is low, the manual burden grows. Mitigation: run retrieval
+early on a 50-work sample to measure actual coverage before committing.
+If coverage is poor, prioritise the manual path and consider adding
+Semantic Scholar as a source.
 
 ### Publisher rate-limiting or blocking
 

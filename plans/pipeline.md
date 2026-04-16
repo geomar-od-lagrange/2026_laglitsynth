@@ -15,7 +15,9 @@ stage 6 onward we work with the **corpus**.
 Queries OpenAlex using the search strategy and retrieves validated
 bibliographic records. The output is intentionally broad — it captures the
 full relevant search space before any screening. Multiple searches may be
-needed to cover the three sub-disciplines (water parcels, tracers, objects).
+needed to cover different sub-disciplines (initially targeting water parcels,
+tracers, and objects, but the search space may expand as vocabulary
+discovery reveals additional groupings).
 
 - **Consumes:** OpenAlex API, search strategy
 - **Produces:** retrieved catalogue — unscreened work records
@@ -57,8 +59,9 @@ extensions](#optional-extensions).*
 Retrieves PDFs via open-access sources, DOI resolution, preprint servers,
 or manual batch download. The output is PDFs on disk and a retrieval
 status record per work. Papers not retrievable are flagged as
-abstract-only. Full text is essential for RQ1.1 (Reproducibility) and
-RQ1.3 (Rationale).
+abstract-only. Full text is essential for RQ1.1 (Reproducibility),
+RQ1.2 (Prevalence), and RQ1.3 (Rationale). Numerical choices are
+rarely stated in abstracts.
 
 - **Consumes:** included catalogue (DOIs, URLs)
 - **Produces:** PDFs on disk, retrieval status records (per-work retrieval
@@ -92,9 +95,9 @@ a recorded reason.
 ### 8. data-extraction
 
 An LLM processes each paper against the codebook, extracting: sub-discipline
-classification (water parcels / tracers / objects), numerical integration
-scheme, time-step strategy, interpolation method, reproducibility assessment
-(code or method availability), and stated rationale for numerical choices.
+tags (e.g. water parcels, tracers, objects — not a fixed set), numerical integration scheme,
+time-step strategy, interpolation method, reproducibility indicators (code
+and method availability), and context snippets for numerical choices.
 Each extraction record flags its source basis (full text vs. abstract-only).
 
 - **Consumes:** eligible corpus, full texts, codebook
@@ -102,10 +105,10 @@ Each extraction record flags its source basis (full text vs. abstract-only).
 
 ### 9. adjudication (extraction)
 
-Spot-checks a random sample of extraction records, verifying extracted facts
-match the source text. Corrections are written back. Inter-rater agreement
-metrics are recorded to support methodological transparency in the eventual
-publication.
+A human reviewer spot-checks a random sample of extraction records, verifying
+extracted facts match the source text. Corrections are written back.
+Inter-rater agreement metrics (human vs. LLM, not LLM vs. LLM) are
+recorded to support methodological transparency in the eventual publication.
 
 - **Consumes:** extraction records, full texts
 - **Produces:** validated extraction records — corrected records plus a
@@ -132,7 +135,8 @@ codebook — are gathered and thematically clustered to address RQ1.3
 (Rationale). An LLM assists in grouping rationales into a rationale taxonomy
 (e.g., computational cost, accuracy requirements, code availability,
 convention), but **final taxonomy labels are assigned and reviewed by a
-human**.
+human**. No team member currently claims qualitative-analysis expertise;
+external consultation may be needed before this stage runs on real data.
 
 - **Consumes:** validated extraction records
 - **Produces:** `rationale-taxonomy.json` — coded categories with supporting
@@ -148,6 +152,16 @@ papers, low-confidence extraction records) are explicitly flagged.
 - **Consumes:** `statistics.json`, `rationale-taxonomy.json`
 - **Produces:** `synthesis-draft.md` — structured narrative keyed to research
   questions, with evidence references
+
+## Human spot-checking
+
+Every LLM-driven stage (screen-abstracts, eligibility, data-extraction)
+produces output exportable as a flat table (e.g. CSV) for human
+spot-checking. The export contains one row per work with the stage's
+verdict or extracted values, the LLM's reasoning, and enough metadata
+(title, work ID) for a reviewer to locate the source. This is the
+general pattern for human oversight: export a sample, review, feed
+corrections back.
 
 ## Optional extensions
 
