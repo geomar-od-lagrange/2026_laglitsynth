@@ -7,7 +7,7 @@ each stage can be implemented independently.
 ## Design principle: flag, don't filter
 
 Gate stages (3, 4, 7) write verdict sidecars but never copy or split Work
-records. The deduplicated catalogue (`data/dedup/deduplicated.jsonl`) is
+records. The deduplicated catalogue (`data/catalogue-dedup/deduplicated.jsonl`) is
 the single source of Work records for the entire pipeline. Downstream
 stages determine their active work set at read time by joining the
 catalogue against upstream verdicts and thresholds.
@@ -36,214 +36,207 @@ once thresholds are tuned on real data.
 
 ## Artifact map
 
-### Stage 1 — search *(exists)*
+### Stage 1 — catalogue-fetch *(exists)*
 
 | Path | Model | Description |
 |---|---|---|
-| `data/openalex/<slug>_<ts>.jsonl` | [`Work`](../src/laglitsynth/openalex/models.py) | Retrieved catalogue records |
-| `data/openalex/<slug>_<ts>.meta.json` | [`FetchMeta`](../src/laglitsynth/openalex/models.py) | Per-run provenance |
+| `data/catalogue-fetch/<slug>_<ts>.jsonl` | [`Work`](../src/laglitsynth/catalogue_fetch/models.py) | Retrieved catalogue records |
+| `data/catalogue-fetch/<slug>_<ts>.meta.json` | [`FetchMeta`](../src/laglitsynth/catalogue_fetch/models.py) | Per-run provenance |
 
 Multiple search runs produce separate timestamped files. Only the JSONL
-records are concatenated for stage 2 (`cat data/openalex/*.jsonl`). The
-meta files stay as per-run provenance records — they are not merged.
+records are concatenated for stage 2 (`cat data/catalogue-fetch/*.jsonl`).
+The meta files stay as per-run provenance records — they are not merged.
 
-### Stage 2 — deduplication
-
-| Path | Model | Description |
-|---|---|---|
-| `data/dedup/deduplicated.jsonl` | [`Work`](../src/laglitsynth/openalex/models.py) | Deduplicated catalogue — single source of Work records for the pipeline |
-| `data/dedup/dropped.jsonl` | Work + merge reason (TBD) | Dropped duplicates with reason |
-| `data/dedup/dedup-meta.json` | `DeduplicationMeta` (new) | Counts by matching rule |
-
-### Stage 3 — screen-abstracts *(exists, needs update)*
+### Stage 2 — catalogue-dedup *(exists, pass-all MVP)*
 
 | Path | Model | Description |
 |---|---|---|
-| `data/screening/verdicts.jsonl` | [`FilterVerdict`](../src/laglitsynth/llmfilter/models.py) | Relevance score and reason for every work |
-| `data/screening/screening-meta.json` | [`FilterMeta`](../src/laglitsynth/llmfilter/models.py) | Prompt, model, counts |
+| `data/catalogue-dedup/deduplicated.jsonl` | [`Work`](../src/laglitsynth/catalogue_fetch/models.py) | Deduplicated catalogue — single source of Work records for the pipeline |
+| `data/catalogue-dedup/dropped.jsonl` | Work + merge reason (TBD) | Dropped duplicates with reason |
+| `data/catalogue-dedup/dedup-meta.json` | [`DeduplicationMeta`](../src/laglitsynth/catalogue_dedup/models.py) | Counts by matching rule |
+
+### Stage 3 — screening-abstracts *(exists)*
+
+| Path | Model | Description |
+|---|---|---|
+| `data/screening-abstracts/verdicts.jsonl` | [`FilterVerdict`](../src/laglitsynth/screening_abstracts/models.py) | Relevance score and reason for every work |
+| `data/screening-abstracts/screening-meta.json` | [`FilterMeta`](../src/laglitsynth/screening_abstracts/models.py) | Prompt, model, counts |
 
 Verdicts cover all works in the deduplicated catalogue, not just accepted
 ones. The accept/reject decision is derived from the relevance score and
 the threshold passed to the resolve module at read time. No `screened.jsonl` or
 `rejected.jsonl` — the verdict sidecar is the only output.
 
-The existing code writes to `data/filtered/` with timestamped filenames
-and splits accepted/rejected Work records into separate files. Both must
-change: rename the directory to `data/screening/`, write only verdicts,
+The existing code uses timestamped filenames and splits accepted/rejected
+Work records into separate files. Both must change: write only verdicts,
 drop the Work-record split.
 
-### Stage 4 — adjudication (screening)
+### Stage 4 — screening-adjudication *(exists, pass-through MVP)*
 
 | Path | Model | Description |
 |---|---|---|
-| `data/adjudication/verdicts.jsonl` | `AdjudicationVerdict` (new) | Human overrides (accept/reject/skip per work) |
-| `data/adjudication/adjudication-meta.json` | `AdjudicationMeta` (new) | Mode, counts |
+| `data/screening-adjudication/verdicts.jsonl` | `AdjudicationVerdict` (new) | Human overrides (accept/reject/skip per work) |
+| `data/screening-adjudication/adjudication-meta.json` | [`AdjudicationMeta`](../src/laglitsynth/screening_adjudication/models.py) | Mode, counts |
 
 The adjudication tool resolves the current accepted set (screening scores
 above threshold) and presents unreviewed works for human judgment. Human
 decisions are recorded as verdicts, not as copies of Work records.
 
-### Stage 5 — full-text-retrieval
+### Stage 5 — fulltext-retrieval *(exists)*
 
 | Path | Model | Description |
 |---|---|---|
-| `data/fulltext/retrieval.jsonl` | `RetrievalRecord` (new) | Per-work retrieval outcome and PDF location |
-| `data/fulltext/retrieval-meta.json` | `RetrievalMeta` (new) | Counts by source |
-| `data/fulltext/pdfs/<work_id>.pdf` | (binary) | Raw PDFs |
-| `data/fulltext/unretrieved.txt` | (plain text) | DOIs for manual download |
+| `data/fulltext-retrieval/retrieval.jsonl` | [`RetrievalRecord`](../src/laglitsynth/fulltext_retrieval/models.py) | Per-work retrieval outcome and PDF location |
+| `data/fulltext-retrieval/retrieval-meta.json` | [`RetrievalMeta`](../src/laglitsynth/fulltext_retrieval/models.py) | Counts by source |
+| `data/fulltext-retrieval/pdfs/<work_id>.pdf` | (binary) | Raw PDFs |
+| `data/fulltext-retrieval/unretrieved.txt` | (plain text) | DOIs for manual download |
 
 `RetrievalRecord` flags each work's retrieval status (success, failed,
 abstract-only) and the PDF path. Already follows the flag pattern.
 
-### Stage 6 — full-text-extraction
+### Stage 6 — fulltext-extraction
 
 | Path | Model | Description |
 |---|---|---|
-| `data/fulltext/extraction.jsonl` | `ExtractedDocument` (new) | Structured sections per work |
-| `data/fulltext/extraction-meta.json` | `ExtractionMeta` (new) | GROBID version, counts |
-| `data/fulltext/tei/<work_id>.tei.xml` | (XML) | Raw GROBID output |
+| `data/fulltext-extraction/extraction.jsonl` | [`ExtractedDocument`](../src/laglitsynth/fulltext_extraction/models.py) | Structured sections per work |
+| `data/fulltext-extraction/extraction-meta.json` | [`ExtractionMeta`](../src/laglitsynth/fulltext_extraction/models.py) | GROBID version, counts |
+| `data/fulltext-extraction/tei/<work_id>.tei.xml` | (XML) | Raw GROBID output |
 
-### Stage 7 — eligibility
+### Stage 7 — fulltext-eligibility
 
 | Path | Model | Description |
 |---|---|---|
-| `data/eligibility/verdicts.jsonl` | `EligibilityVerdict` (new) | Per-work eligibility decision |
-| `data/eligibility/eligibility-meta.json` | `EligibilityMeta` (new) | Counts by source basis |
+| `data/fulltext-eligibility/verdicts.jsonl` | `EligibilityVerdict` (new) | Per-work eligibility decision |
+| `data/fulltext-eligibility/eligibility-meta.json` | `EligibilityMeta` (new) | Counts by source basis |
 
 Verdicts cover all works that the resolve module passes to this stage.
 No `eligible.jsonl` — downstream stages resolve the eligible set from
 the verdict sidecar.
 
-### Stage 8 — data-extraction
+### Stage 8 — extraction-codebook
 
 | Path | Model | Description |
 |---|---|---|
-| `data/extraction/records.jsonl` | `ExtractionRecord` (new) | One codebook record per work |
-| `data/extraction/data-extraction-meta.json` | `DataExtractionMeta` (new) | Model, prompt version, counts |
+| `data/extraction-codebook/records.jsonl` | `ExtractionRecord` (new) | One codebook record per work |
+| `data/extraction-codebook/extraction-meta.json` | `DataExtractionMeta` (new) | Model, prompt version, counts |
 
-The meta file is named `data-extraction-meta.json` (not
-`extraction-meta.json`) to avoid ambiguity with stage 6's
-`data/fulltext/extraction-meta.json`. The Python class is
-`DataExtractionMeta` for the same reason.
-
-### Stage 9 — adjudication (extraction)
+### Stage 9 — extraction-adjudication
 
 | Path | Model | Description |
 |---|---|---|
-| `data/adjudication-extraction/corrections.jsonl` | `ExtractionCorrection` (new) | Per-field corrections with original and corrected values |
-| `data/adjudication-extraction/adjudication-meta.json` | `ExtractionAdjudicationMeta` (new) | Mode, counts, agreement metrics |
+| `data/extraction-adjudication/corrections.jsonl` | `ExtractionCorrection` (new) | Per-field corrections with original and corrected values |
+| `data/extraction-adjudication/adjudication-meta.json` | `ExtractionAdjudicationMeta` (new) | Mode, counts, agreement metrics |
 
 Corrections are stored alongside original extraction records, not as
 replacements. Downstream stages apply corrections at read time.
 
-### Stage 10 — quantitative-synthesis
+### Stage 10 — synthesis-quantitative
 
 | Path | Model | Description |
 |---|---|---|
-| `data/synthesis/statistics.json` | `SynthesisStatistics` (new) | Counts, proportions, breakdowns |
+| `data/synthesis-quantitative/statistics.json` | `SynthesisStatistics` (new) | Counts, proportions, breakdowns |
 
-### Stage 11 — thematic-synthesis
-
-| Path | Model | Description |
-|---|---|---|
-| `data/synthesis/rationale-taxonomy.json` | `RationaleTaxonomy` (new) | Themed categories with quotations |
-
-### Stage 12 — narrative-synthesis
+### Stage 11 — synthesis-thematic
 
 | Path | Model | Description |
 |---|---|---|
-| `data/synthesis/synthesis-draft.md` | (markdown) | Narrative keyed to research questions |
+| `data/synthesis-thematic/rationale-taxonomy.json` | `RationaleTaxonomy` (new) | Themed categories with quotations |
+
+### Stage 12 — synthesis-narrative
+
+| Path | Model | Description |
+|---|---|---|
+| `data/synthesis-narrative/synthesis-draft.md` | (markdown) | Narrative keyed to research questions |
 
 ## Inconsistencies to resolve
 
 ### Stage 3 implementation (code change needed)
 
-The existing code writes to `data/filtered/`, uses timestamped filenames,
-and splits Work records into accepted/rejected files. All three must
-change: rename directory to `data/screening/`, write only
-`verdicts.jsonl` (scores for all works), drop the Work-record split.
+The existing code uses timestamped filenames and splits accepted/rejected
+Work records into separate files. Both must change: write only verdicts,
+drop the Work-record split.
 
 ## CLI contract
 
 ### Existing subcommands
 
 ```sh
-# Stage 1 — search
-laglitsynth fetch-publications QUERY \
+# Stage 1 — catalogue-fetch
+laglitsynth catalogue-fetch QUERY \
     [-o OUTPUT] [--from-year YEAR] [--to-year YEAR] [--max-records N]
 
-# Stage 3 — screen-abstracts
-laglitsynth filter-abstracts INPUT PROMPT \
+# Stage 2 — catalogue-dedup
+laglitsynth catalogue-dedup \
+    --input data/catalogue-fetch/combined.jsonl \
+    --output-dir data/catalogue-dedup/
+
+# Stage 3 — screening-abstracts
+laglitsynth screening-abstracts INPUT PROMPT \
     [-o OUTPUT] [--model MODEL] [--threshold N] [--base-url URL] \
     [--reject-file PATH] [--max-records N] [--dry-run]
+
+# Stage 4 — screening-adjudication
+laglitsynth screening-adjudication \
+    --input data/screening-abstracts/accepted.jsonl \
+    --output-dir data/screening-adjudication/
+
+# Stage 5 — fulltext-retrieval
+laglitsynth fulltext-retrieval \
+    --input data/screening-adjudication/included.jsonl \
+    --output-dir data/fulltext-retrieval/ \
+    --email EMAIL \
+    [--manual-dir DIR] [--skip-existing] [--dry-run]
 ```
 
-These use positional arguments. All new subcommands use `--input` /
-`--output-dir` keyword flags instead. The existing commands should be
-harmonized to keyword flags when stage 3 is updated. No backwards
-compatibility constraints ([AGENTS.md](../AGENTS.md)).
+Stages 1 and 3 use positional arguments. All other subcommands use
+`--input` / `--output-dir` keyword flags. Stages 1 and 3 should be
+harmonized to keyword flags when updated. No backwards compatibility
+constraints ([AGENTS.md](../AGENTS.md)).
 
 ### Planned subcommands
 
 ```sh
-# Stage 2 — deduplication
-laglitsynth deduplicate \
-    --input data/openalex/combined.jsonl \
-    --output-dir data/dedup/
-
-# Stage 4 — adjudication (screening)
-laglitsynth adjudicate-screening \
-    --data-dir data/ \
-    --output-dir data/adjudication/
-
-# Stage 5 — full-text retrieval
-laglitsynth retrieve \
-    --data-dir data/ \
-    --output-dir data/fulltext/ \
-    --email EMAIL \
-    [--manual-dir DIR] [--skip-existing] [--dry-run]
-
-# Stage 6 — full-text extraction
-laglitsynth extract \
-    --pdf-dir data/fulltext/pdfs/ \
-    --output-dir data/fulltext/ \
+# Stage 6 — fulltext-extraction
+laglitsynth fulltext-extraction \
+    --pdf-dir data/fulltext-retrieval/pdfs/ \
+    --output-dir data/fulltext-extraction/ \
     --grobid-url URL \
     [--skip-existing]
 
-# Stage 7 — eligibility
-laglitsynth assess-eligibility \
+# Stage 7 — fulltext-eligibility
+laglitsynth fulltext-eligibility \
     --data-dir data/ \
-    --extractions data/fulltext/extraction.jsonl \
-    --output-dir data/eligibility/ \
+    --extractions data/fulltext-extraction/extraction.jsonl \
+    --output-dir data/fulltext-eligibility/ \
     [--skip-existing]
 
-# Stage 8 — data extraction
-laglitsynth extract-data \
+# Stage 8 — extraction-codebook
+laglitsynth extraction-codebook \
     --data-dir data/ \
-    --extractions data/fulltext/extraction.jsonl \
-    --output-dir data/extraction/ \
+    --extractions data/fulltext-extraction/extraction.jsonl \
+    --output-dir data/extraction-codebook/ \
     [--skip-existing]
 
-# Stage 9 — adjudication (extraction)
-laglitsynth adjudicate-extraction \
+# Stage 9 — extraction-adjudication
+laglitsynth extraction-adjudication \
     --data-dir data/ \
-    --output-dir data/adjudication-extraction/
+    --output-dir data/extraction-adjudication/
 
-# Stage 10 — quantitative synthesis
-laglitsynth synthesize-quantitative \
+# Stage 10 — synthesis-quantitative
+laglitsynth synthesis-quantitative \
     --data-dir data/ \
-    --output-dir data/synthesis/
+    --output-dir data/synthesis-quantitative/
 
-# Stage 11 — thematic synthesis
-laglitsynth synthesize-thematic \
+# Stage 11 — synthesis-thematic
+laglitsynth synthesis-thematic \
     --data-dir data/ \
-    --output-dir data/synthesis/
+    --output-dir data/synthesis-thematic/
 
-# Stage 12 — narrative synthesis
-laglitsynth synthesize-narrative \
-    --statistics data/synthesis/statistics.json \
-    --taxonomy data/synthesis/rationale-taxonomy.json \
-    --output-dir data/synthesis/
+# Stage 12 — synthesis-narrative
+laglitsynth synthesis-narrative \
+    --statistics data/synthesis-quantitative/statistics.json \
+    --taxonomy data/synthesis-thematic/rationale-taxonomy.json \
+    --output-dir data/synthesis-narrative/
 ```
 
 ### End-to-end sequence
@@ -251,81 +244,81 @@ laglitsynth synthesize-narrative \
 A complete pipeline run with manual steps noted.
 
 ```sh
-# 1. Search (repeat for different keyword sets)
-laglitsynth fetch-publications "lagrangian particle tracking" \
-    -o data/openalex/search_a.jsonl
-laglitsynth fetch-publications "ocean tracer simulation" \
-    -o data/openalex/search_b.jsonl
+# 1. Catalogue fetch (repeat for different keyword sets)
+laglitsynth catalogue-fetch "lagrangian particle tracking" \
+    -o data/catalogue-fetch/search_a.jsonl
+laglitsynth catalogue-fetch "ocean tracer simulation" \
+    -o data/catalogue-fetch/search_b.jsonl
 
 # Manual: concatenate search result records (not meta files)
-cat data/openalex/search_*.jsonl > data/openalex/combined.jsonl
+cat data/catalogue-fetch/search_*.jsonl > data/catalogue-fetch/combined.jsonl
 
-# 2. Deduplicate
-laglitsynth deduplicate \
-    --input data/openalex/combined.jsonl \
-    --output-dir data/dedup/
+# 2. Catalogue dedup
+laglitsynth catalogue-dedup \
+    --input data/catalogue-fetch/combined.jsonl \
+    --output-dir data/catalogue-dedup/
 
-# 3. Screen abstracts (scores all works, no split)
-laglitsynth filter-abstracts \
-    --input data/dedup/deduplicated.jsonl \
-    --prompt "Is this about computational Lagrangian methods in oceanography?" \
-    --output-dir data/screening/
+# 3. Screening abstracts
+laglitsynth screening-abstracts \
+    data/catalogue-dedup/deduplicated.jsonl \
+    "Is this about computational Lagrangian methods in oceanography?" \
+    -o data/screening-abstracts/accepted.jsonl
 
-# 4. Adjudicate screening (pass-through in prototype)
-laglitsynth adjudicate-screening \
-    --data-dir data/ \
-    --output-dir data/adjudication/
+# 4. Screening adjudication (pass-through in prototype)
+laglitsynth screening-adjudication \
+    --input data/screening-abstracts/accepted.jsonl \
+    --output-dir data/screening-adjudication/
 
-# 5. Retrieve full texts (resolve determines which works to retrieve)
-laglitsynth retrieve \
-    --data-dir data/ \
-    --output-dir data/fulltext/ \
+# 5. Fulltext retrieval
+laglitsynth fulltext-retrieval \
+    --input data/screening-adjudication/included.jsonl \
+    --output-dir data/fulltext-retrieval/ \
     --email user@example.com \
     --skip-existing
 
-# Manual: download unretrieved PDFs from data/fulltext/unretrieved.txt
-# Place them in data/fulltext/manual/ named by OpenAlex work ID
+# Manual: download unretrieved PDFs from data/fulltext-retrieval/unretrieved.txt
+# Place them in data/fulltext-retrieval/manual/ named by OpenAlex work ID
 # Then re-run retrieval to pick up manual PDFs
 
-# 6. Extract full text via GROBID
+# 6. Fulltext extraction
 # Manual: start GROBID container first
-laglitsynth extract \
-    --pdf-dir data/fulltext/pdfs/ \
-    --output-dir data/fulltext/ \
+laglitsynth fulltext-extraction \
+    --pdf-dir data/fulltext-retrieval/pdfs/ \
+    --output-dir data/fulltext-extraction/ \
     --grobid-url http://localhost:8070
 
-# 7. Assess eligibility
-laglitsynth assess-eligibility \
+# 7. Fulltext eligibility
+laglitsynth fulltext-eligibility \
     --data-dir data/ \
-    --extractions data/fulltext/extraction.jsonl \
-    --output-dir data/eligibility/
+    --extractions data/fulltext-extraction/extraction.jsonl \
+    --output-dir data/fulltext-eligibility/
 
-# 8. Extract data against codebook
-laglitsynth extract-data \
+# 8. Extraction codebook
+laglitsynth extraction-codebook \
     --data-dir data/ \
-    --extractions data/fulltext/extraction.jsonl \
-    --output-dir data/extraction/
+    --extractions data/fulltext-extraction/extraction.jsonl \
+    --output-dir data/extraction-codebook/
 
-# 9. Adjudicate extraction (pass-through in prototype)
-laglitsynth adjudicate-extraction \
+# 9. Extraction adjudication (pass-through in prototype)
+laglitsynth extraction-adjudication \
     --data-dir data/ \
-    --output-dir data/adjudication-extraction/
+    --output-dir data/extraction-adjudication/
 
-# 10. Quantitative synthesis
-laglitsynth synthesize-quantitative \
+# 10. Synthesis: quantitative
+laglitsynth synthesis-quantitative \
     --data-dir data/ \
-    --output-dir data/synthesis/
+    --output-dir data/synthesis-quantitative/
 
-# 11. Thematic synthesis
-laglitsynth synthesize-thematic \
+# 11. Synthesis: thematic
+laglitsynth synthesis-thematic \
     --data-dir data/ \
-    --output-dir data/synthesis/
+    --output-dir data/synthesis-thematic/
 
-# 12. Narrative synthesis
-laglitsynth synthesize-narrative \
-    --statistics data/synthesis/statistics.json \
-    --taxonomy data/synthesis/rationale-taxonomy.json \
-    --output-dir data/synthesis/
+# 12. Synthesis: narrative
+laglitsynth synthesis-narrative \
+    --statistics data/synthesis-quantitative/statistics.json \
+    --taxonomy data/synthesis-thematic/rationale-taxonomy.json \
+    --output-dir data/synthesis-narrative/
 ```
 
 ## Model dependency graph
@@ -335,49 +328,49 @@ laglitsynth synthesize-narrative \
 | Model | Module | Used by stages |
 |---|---|---|
 | [`_Base`](../src/laglitsynth/models.py) | `laglitsynth.models` | All (base class) |
-| [`Work`](../src/laglitsynth/openalex/models.py) | `laglitsynth.openalex.models` | 1, 2, 3 |
-| [`FetchMeta`](../src/laglitsynth/openalex/models.py) | `laglitsynth.openalex.models` | 1 |
-| [`FilterVerdict`](../src/laglitsynth/llmfilter/models.py) | `laglitsynth.llmfilter.models` | 3 |
-| [`FilterMeta`](../src/laglitsynth/llmfilter/models.py) | `laglitsynth.llmfilter.models` | 3 |
+| [`Work`](../src/laglitsynth/catalogue_fetch/models.py) | `laglitsynth.catalogue_fetch.models` | 1, 2, 3 |
+| [`FetchMeta`](../src/laglitsynth/catalogue_fetch/models.py) | `laglitsynth.catalogue_fetch.models` | 1 |
+| [`FilterVerdict`](../src/laglitsynth/screening_abstracts/models.py) | `laglitsynth.screening_abstracts.models` | 3 |
+| [`FilterMeta`](../src/laglitsynth/screening_abstracts/models.py) | `laglitsynth.screening_abstracts.models` | 3 |
+| [`DeduplicationMeta`](../src/laglitsynth/catalogue_dedup/models.py) | `laglitsynth.catalogue_dedup.models` | 2 |
+| [`AdjudicationMeta`](../src/laglitsynth/screening_adjudication/models.py) | `laglitsynth.screening_adjudication.models` | 4 |
+| [`RetrievalStatus`](../src/laglitsynth/fulltext_retrieval/models.py) | `laglitsynth.fulltext_retrieval.models` | 5 |
+| [`RetrievalRecord`](../src/laglitsynth/fulltext_retrieval/models.py) | `laglitsynth.fulltext_retrieval.models` | 5 |
+| [`RetrievalMeta`](../src/laglitsynth/fulltext_retrieval/models.py) | `laglitsynth.fulltext_retrieval.models` | 5 |
+| [`TextSection`](../src/laglitsynth/fulltext_extraction/models.py) | `laglitsynth.fulltext_extraction.models` | 6 |
+| [`ExtractedDocument`](../src/laglitsynth/fulltext_extraction/models.py) | `laglitsynth.fulltext_extraction.models` | 6, 7, 8 |
+| [`ExtractionMeta`](../src/laglitsynth/fulltext_extraction/models.py) | `laglitsynth.fulltext_extraction.models` | 6 |
 
-### New models needed
+### Models not yet defined
 
-| Model | Planned module | Stage | Defined in |
-|---|---|---|---|
-| `DeduplicationMeta` | `laglitsynth.dedup.models` | 2 | [deduplication.md](deduplication.md) |
-| `AdjudicationVerdict` | `laglitsynth.adjudication.models` | 4 | — |
-| `AdjudicationMeta` | `laglitsynth.adjudication.models` | 4 | [adjudication-screening.md](adjudication-screening.md) |
-| `RetrievalStatus` (enum) | `laglitsynth.fulltext.models` | 5 | [full-text-retrieval.md](full-text-retrieval.md) |
-| `RetrievalRecord` | `laglitsynth.fulltext.models` | 5 | [full-text-retrieval.md](full-text-retrieval.md) |
-| `RetrievalMeta` | `laglitsynth.fulltext.models` | 5 | [full-text-retrieval.md](full-text-retrieval.md) |
-| `TextSection` | `laglitsynth.fulltext.models` | 6 | [full-text-extraction.md](full-text-extraction.md) |
-| `ExtractedDocument` | `laglitsynth.fulltext.models` | 6, 7, 8 | [full-text-extraction.md](full-text-extraction.md) |
-| `ExtractionMeta` | `laglitsynth.fulltext.models` | 6 | [full-text-extraction.md](full-text-extraction.md) |
-| `EligibilityVerdict` | `laglitsynth.eligibility.models` | 7 | [eligibility.md](eligibility.md) |
-| `EligibilityMeta` | `laglitsynth.eligibility.models` | 7 | [eligibility.md](eligibility.md) |
-| `ExtractionRecord` | `laglitsynth.extraction.models` | 8, 9, 10, 11 | Not yet defined. Must encode the [codebook](codebook.md) fields. |
-| `DataExtractionMeta` | `laglitsynth.extraction.models` | 8 | Not yet defined |
-| `ExtractionCorrection` | `laglitsynth.adjudication.models` | 9 | — |
-| `ExtractionAdjudicationMeta` | `laglitsynth.adjudication.models` | 9 | [adjudication-extraction.md](adjudication-extraction.md) |
-| `SynthesisStatistics` | `laglitsynth.synthesis.models` | 10 | Not yet planned |
-| `RationaleTaxonomy` | `laglitsynth.synthesis.models` | 11 | Not yet planned |
+| Model | Planned module | Stage |
+|---|---|---|
+| `AdjudicationVerdict` | `laglitsynth.screening_adjudication.models` | 4 |
+| `EligibilityVerdict` | `laglitsynth.fulltext_eligibility.models` | 7 |
+| `EligibilityMeta` | `laglitsynth.fulltext_eligibility.models` | 7 |
+| `ExtractionRecord` | `laglitsynth.extraction_codebook.models` | 8, 9, 10, 11 |
+| `DataExtractionMeta` | `laglitsynth.extraction_codebook.models` | 8 |
+| `ExtractionCorrection` | `laglitsynth.extraction_adjudication.models` | 9 |
+| `ExtractionAdjudicationMeta` | `laglitsynth.extraction_adjudication.models` | 9 |
+| `SynthesisStatistics` | `laglitsynth.synthesis_quantitative.models` | 10 |
+| `RationaleTaxonomy` | `laglitsynth.synthesis_thematic.models` | 11 |
 
 ### Per-stage import summary
 
 | Stage | Reads | Writes |
 |---|---|---|
-| 1. search | — | Work, FetchMeta |
-| 2. deduplication | Work | Work, DeduplicationMeta |
-| 3. screen-abstracts | Work | FilterVerdict, FilterMeta |
-| 4. adjudication | FilterVerdict (via resolve) | AdjudicationVerdict, AdjudicationMeta |
-| 5. retrieval | Work (via resolve) | RetrievalRecord, RetrievalMeta |
-| 6. extraction | (PDFs) | ExtractedDocument, ExtractionMeta |
-| 7. eligibility | Work, ExtractedDocument (via resolve) | EligibilityVerdict, EligibilityMeta |
-| 8. data-extraction | Work, ExtractedDocument (via resolve) | ExtractionRecord, DataExtractionMeta |
-| 9. adjudication (extr.) | ExtractionRecord (via resolve) | ExtractionCorrection, ExtractionAdjudicationMeta |
-| 10. quant-synthesis | ExtractionRecord (via resolve) | SynthesisStatistics |
-| 11. thematic-synthesis | ExtractionRecord (via resolve) | RationaleTaxonomy |
-| 12. narrative-synthesis | SynthesisStatistics, RationaleTaxonomy | (markdown) |
+| 1. catalogue-fetch | — | Work, FetchMeta |
+| 2. catalogue-dedup | Work | Work, DeduplicationMeta |
+| 3. screening-abstracts | Work | FilterVerdict, FilterMeta |
+| 4. screening-adjudication | FilterVerdict (via resolve) | AdjudicationVerdict, AdjudicationMeta |
+| 5. fulltext-retrieval | Work (via resolve) | RetrievalRecord, RetrievalMeta |
+| 6. fulltext-extraction | (PDFs) | ExtractedDocument, ExtractionMeta |
+| 7. fulltext-eligibility | Work, ExtractedDocument (via resolve) | EligibilityVerdict, EligibilityMeta |
+| 8. extraction-codebook | Work, ExtractedDocument (via resolve) | ExtractionRecord, DataExtractionMeta |
+| 9. extraction-adjudication | ExtractionRecord (via resolve) | ExtractionCorrection, ExtractionAdjudicationMeta |
+| 10. synthesis-quantitative | ExtractionRecord (via resolve) | SynthesisStatistics |
+| 11. synthesis-thematic | ExtractionRecord (via resolve) | RationaleTaxonomy |
+| 12. synthesis-narrative | SynthesisStatistics, RationaleTaxonomy | (markdown) |
 
 ## Gaps
 

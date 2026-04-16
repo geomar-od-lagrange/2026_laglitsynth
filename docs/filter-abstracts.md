@@ -1,4 +1,4 @@
-# filter-abstracts
+# screening-abstracts
 
 Filter a JSONL file of `Work` records by sending each abstract to a local
 Ollama-hosted LLM with a relevance prompt. Outputs a new JSONL containing
@@ -23,20 +23,20 @@ If tunneling to a remote GPU machine, expose the port locally and pass
 
 ```bash
 # basic filtering
-laglitsynth filter-abstracts data/openalex/lagrangian_oceanography_2026-...jsonl \
+laglitsynth screening-abstracts data/catalogue-fetch/lagrangian_oceanography_2026-...jsonl \
   "Is this abstract about Lagrangian particle tracking in submesoscale dynamics?"
 
 # stricter threshold
-laglitsynth filter-abstracts input.jsonl "..." --threshold 70
+laglitsynth screening-abstracts input.jsonl "..." --threshold 70
 
 # custom output path
-laglitsynth filter-abstracts input.jsonl "..." -o data/filtered/my_output.jsonl
+laglitsynth screening-abstracts input.jsonl "..." -o data/screening-abstracts/my_output.jsonl
 
 # prompt tuning: process first 20 works, print verdicts, don't write output
-laglitsynth filter-abstracts input.jsonl "..." --dry-run --max-records 20
+laglitsynth screening-abstracts input.jsonl "..." --dry-run --max-records 20
 
 # save rejected works for auditing
-laglitsynth filter-abstracts input.jsonl "..." --reject-file data/filtered/rejected.jsonl
+laglitsynth screening-abstracts input.jsonl "..." --reject-file data/screening-abstracts/rejected.jsonl
 ```
 
 ## CLI arguments
@@ -45,7 +45,7 @@ laglitsynth filter-abstracts input.jsonl "..." --reject-file data/filtered/rejec
 |---|---|
 | `INPUT` (positional) | Input JSONL file path (required). |
 | `PROMPT` (positional) | Relevance filter prompt string (required). |
-| `-o` / `--output` | Output JSONL path. Default: `data/filtered/<input_stem>_filtered_<timestamp>.jsonl`. |
+| `-o` / `--output` | Output JSONL path. Default: `data/screening-abstracts/<input_stem>_filtered_<timestamp>.jsonl`. |
 | `--model` | Ollama model name (default: `gemma3:4b`). |
 | `--threshold` | Relevance score cutoff, 0--100 (default: 50). |
 | `--base-url` | Ollama API base URL (default: `http://localhost:11434`). |
@@ -55,7 +55,7 @@ laglitsynth filter-abstracts input.jsonl "..." --reject-file data/filtered/rejec
 
 ## Output format
 
-Each run produces up to three files in `data/filtered/` (or the directory of
+Each run produces up to three files in `data/screening-abstracts/` (or the directory of
 the `-o` path):
 
 - **`<stem>_filtered_<timestamp>.jsonl`** -- accepted `Work` records, same
@@ -73,7 +73,7 @@ files. This processes the first N works and prints each verdict to stderr so
 you can quickly check whether the LLM is scoring sensibly.
 
 ```bash
-laglitsynth filter-abstracts input.jsonl \
+laglitsynth screening-abstracts input.jsonl \
   "Does this abstract study Lagrangian particle dispersion?" \
   --dry-run --max-records 10
 ```

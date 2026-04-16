@@ -1,6 +1,6 @@
 # Data model
 
-Pydantic models in [`src/laglitsynth/openalex/models.py`](../src/laglitsynth/openalex/models.py).
+Pydantic models in [`src/laglitsynth/catalogue_fetch/models.py`](../src/laglitsynth/catalogue_fetch/models.py).
 These are the contract between the fetch layer and all downstream consumers
 (BibTeX export, citation graph, filtering). See the source for the full schema.
 

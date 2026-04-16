@@ -19,12 +19,12 @@ threshold adjustment. The stage exists so that:
 ## CLI interface
 
 ```
-laglitsynth adjudicate-screening \
-    --input data/screening/screened.jsonl \
-    --output-dir data/adjudication/
+laglitsynth screening-adjudication \
+    --input data/screening-abstracts/screened.jsonl \
+    --output-dir data/screening-adjudication/
 ```
 
-The command copies the input to `data/adjudication/included.jsonl` and
+The command copies the input to `data/screening-adjudication/included.jsonl` and
 writes an `AdjudicationMeta` sidecar recording that no human review was
 performed.
 
@@ -32,7 +32,7 @@ performed.
 
 ```python
 class AdjudicationMeta(_Base):
-    tool: str = "laglitsynth.adjudication.screening"
+    tool: str = "laglitsynth.screening_adjudication.screening"
     tool_version: str = "alpha"
     adjudicated_at: str
     mode: str = "pass_through"

@@ -81,8 +81,7 @@ body text only.
 
 ## Data model
 
-New models in [`src/laglitsynth/fulltext/models.py`](../src/laglitsynth/fulltext/models.py) (same module as
-retrieval models).
+New models in [`src/laglitsynth/fulltext_extraction/models.py`](../src/laglitsynth/fulltext_extraction/models.py).
 
 ### TextSection
 
@@ -113,7 +112,7 @@ need section structure). For works where GROBID fails, no
 
 ```python
 class ExtractionMeta(_Base):
-    tool: str = "laglitsynth.fulltext.extract"
+    tool: str = "laglitsynth.fulltext_extraction.extract"
     tool_version: str = "alpha"
     grobid_version: str
     extracted_at: str
@@ -125,7 +124,7 @@ class ExtractionMeta(_Base):
 ## Storage layout
 
 ```
-data/fulltext/
+data/fulltext-extraction/
   extraction.jsonl        # one ExtractedDocument per successfully parsed PDF
   extraction-meta.json    # ExtractionMeta
   tei/                    # raw GROBID TEI XML output (retained for debugging)
@@ -136,15 +135,14 @@ TEI XML files are retained so parsing can be re-run without re-calling
 GROBID. They are not committed to git.
 
 The `extraction.jsonl` file is the artifact consumed by downstream stages
-(eligibility, data extraction). It sits alongside `retrieval.jsonl` in the
-same `data/fulltext/` directory.
+(eligibility, data extraction).
 
 ## CLI interface
 
 ```
-laglitsynth extract \
-    --pdf-dir data/fulltext/pdfs/ \
-    --output-dir data/fulltext/ \
+laglitsynth fulltext-extraction \
+    --pdf-dir data/fulltext-retrieval/pdfs/ \
+    --output-dir data/fulltext-extraction/ \
     --grobid-url http://localhost:8070 \
     [--skip-existing]
 ```
@@ -182,7 +180,7 @@ command to start it.
 - GROBID client (POST PDF, receive TEI XML).
 - TEI XML parser with the fallback rules above.
 - `ExtractedDocument` / `ExtractionMeta` models and JSONL output.
-- The `extract` CLI subcommand with `--skip-existing`.
+- The `fulltext-extraction` CLI subcommand with `--skip-existing`.
 
 ## What to defer
 

@@ -14,20 +14,20 @@ pipeline with correct contracts, replace with real review later.
 ## CLI interface
 
 ```
-laglitsynth adjudicate-extraction \
-    --input data/extraction/records.jsonl \
-    --output-dir data/adjudication-extraction/
+laglitsynth extraction-adjudication \
+    --input data/extraction-codebook/records.jsonl \
+    --output-dir data/extraction-adjudication/
 ```
 
 The command copies the input to
-`data/adjudication-extraction/validated.jsonl` and writes an
+`data/extraction-adjudication/validated.jsonl` and writes an
 `ExtractionAdjudicationMeta` sidecar.
 
 ### ExtractionAdjudicationMeta
 
 ```python
 class ExtractionAdjudicationMeta(_Base):
-    tool: str = "laglitsynth.adjudication.extraction"
+    tool: str = "laglitsynth.extraction_adjudication.extraction"
     tool_version: str = "alpha"
     adjudicated_at: str
     mode: str = "pass_through"

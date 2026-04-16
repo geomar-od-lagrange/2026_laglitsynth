@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Literature review pipeline — from keyword search to structured synthesis"
 requires-python = ">= 3.12"
 dependencies = [
+    "httpx>=0.27",
+    "lxml>=5.0",
     "openai",
     "pyalex>=0.16",
     "pydantic>=2.0",
@@ -35,4 +37,8 @@ typecheck = { cmd = "mypy --strict src/", description = "Run type checker" }
 [tool.mypy]
 [[tool.mypy.overrides]]
 module = ["pyalex", "pyalex.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["lxml", "lxml.*"]
 ignore_missing_imports = true

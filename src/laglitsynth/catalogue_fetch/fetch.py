@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 from pydantic import ValidationError
 
 from laglitsynth.io import write_jsonl, write_meta
-from laglitsynth.openalex.models import FetchMeta, Work
+from laglitsynth.catalogue_fetch.models import FetchMeta, Work
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ def _default_output_path(query: str) -> Path:
     """Generate default output path with timestamped filename."""
     slug = _slugify(query)
     ts = datetime.now(UTC).isoformat(timespec="microseconds").replace(":", "-")
-    return Path("data/openalex") / f"{slug}_{ts}.jsonl"
+    return Path("data/catalogue-fetch") / f"{slug}_{ts}.jsonl"
 
 
 def search_openalex(
@@ -137,7 +137,7 @@ def build_subparser(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> argparse.ArgumentParser:
     parser = subparsers.add_parser(
-        "fetch-publications",
+        "catalogue-fetch",
         help="Fetch publications from OpenAlex and save as JSONL.",
     )
     parser.add_argument("query", help="Search query string")

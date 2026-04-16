@@ -14,8 +14,8 @@ from pathlib import Path
 from openai import OpenAI
 
 from laglitsynth.io import read_works_jsonl, write_meta
-from laglitsynth.llmfilter.models import FilterMeta, FilterVerdict
-from laglitsynth.openalex.models import Work
+from laglitsynth.screening_abstracts.models import FilterMeta, FilterVerdict
+from laglitsynth.catalogue_fetch.models import Work
 
 logger = logging.getLogger(__name__)
 
@@ -116,14 +116,14 @@ def _preflight(args: argparse.Namespace) -> None:
 
 def _default_output_path(input_path: Path) -> Path:
     ts = datetime.now(UTC).isoformat(timespec="microseconds").replace(":", "-")
-    return Path("data/filtered") / f"{input_path.stem}_filtered_{ts}.jsonl"
+    return Path("data/screening-abstracts") / f"{input_path.stem}_screened_{ts}.jsonl"
 
 
 def build_subparser(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> argparse.ArgumentParser:
     parser = subparsers.add_parser(
-        "filter-abstracts",
+        "screening-abstracts",
         help="Filter JSONL works by abstract relevance using a local LLM.",
     )
     parser.add_argument("input", type=Path, help="Input JSONL file path")

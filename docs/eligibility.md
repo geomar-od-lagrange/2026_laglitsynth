@@ -9,7 +9,7 @@ rather than primary research.
 ## Prototype scope
 
 A single LLM pass over the extracted text (or abstract for abstract-only
-works). Same pattern as the existing `filter-abstracts` stage: structured
+works). Same pattern as the existing `screening-abstracts` stage: structured
 JSON output, Pydantic validation, verdicts stored separately for
 re-thresholding.
 
@@ -56,7 +56,7 @@ class EligibilityVerdict(_Base):
 
 ```python
 class EligibilityMeta(_Base):
-    tool: str = "laglitsynth.eligibility.assess"
+    tool: str = "laglitsynth.fulltext_eligibility.assess"
     tool_version: str = "alpha"
     assessed_at: str
     total_works: int
@@ -68,7 +68,7 @@ class EligibilityMeta(_Base):
 ## Storage layout
 
 ```
-data/eligibility/
+data/fulltext-eligibility/
   eligible.jsonl            # Work records that passed eligibility
   verdicts.jsonl            # EligibilityVerdict for every work
   eligibility-meta.json     # EligibilityMeta
@@ -82,10 +82,10 @@ consumed by stage 8.
 ## CLI interface
 
 ```
-laglitsynth assess-eligibility \
-    --catalogue data/adjudication/included.jsonl \
-    --extractions data/fulltext/extraction.jsonl \
-    --output-dir data/eligibility/ \
+laglitsynth fulltext-eligibility \
+    --catalogue data/screening-adjudication/included.jsonl \
+    --extractions data/fulltext-extraction/extraction.jsonl \
+    --output-dir data/fulltext-eligibility/ \
     [--skip-existing]
 ```
 
@@ -117,7 +117,7 @@ Respond with JSON: {"eligible": true/false, "reason": "...",
 ```
 
 The prompt will be refined during tuning. The structured output and
-validation pattern is identical to `filter-abstracts`.
+validation pattern is identical to `screening-abstracts`.
 
 ## Export for human review
 

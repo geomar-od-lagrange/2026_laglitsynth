@@ -32,7 +32,7 @@ The same pattern applies to `EligibilityVerdict` and `ExtractionRecord`.
 ## Storage layout
 
 Multiple runs append to the same `verdicts.jsonl`. After three screening
-runs, `data/screening/verdicts.jsonl` contains three `FilterVerdict` lines
+runs, `data/screening-abstracts/verdicts.jsonl` contains three `FilterVerdict` lines
 per work, distinguished by `run_id`. The meta sidecar becomes a list of
 per-run metadata entries.
 
@@ -112,14 +112,14 @@ record per work.
 
 ```sh
 # Three screening runs
-laglitsynth filter-abstracts --input data/dedup/deduplicated.jsonl \
-    --prompt "..." --output-dir data/screening/ --run-id run_a
-laglitsynth filter-abstracts --input ... --run-id run_b
-laglitsynth filter-abstracts --input ... --run-id run_c
+laglitsynth screening-abstracts --input data/catalogue-dedup/deduplicated.jsonl \
+    --prompt "..." --output-dir data/screening-abstracts/ --run-id run_a
+laglitsynth screening-abstracts --input ... --run-id run_b
+laglitsynth screening-abstracts --input ... --run-id run_c
 
 # Compute consensus (stage-aware: majority-vote vs. field-agreement)
-laglitsynth consensus --input data/screening/verdicts.jsonl \
-    --output-dir data/screening/ --stage screen-abstracts
+laglitsynth consensus --input data/screening-abstracts/verdicts.jsonl \
+    --output-dir data/screening-abstracts/ --stage screen-abstracts
 ```
 
 `--run-id` is optional; if omitted, a UUID4 prefix is generated. The

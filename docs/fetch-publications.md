@@ -1,4 +1,4 @@
-# fetch-publications
+# catalogue-fetch
 
 Search OpenAlex by keyword and write the full result set as a JSONL file.
 Each line is a validated [`Work`](data-model.md) record.
@@ -6,9 +6,9 @@ Each line is a validated [`Work`](data-model.md) record.
 ## Usage
 
 ```bash
-laglitsynth fetch-publications "lagrangian oceanography"
-laglitsynth fetch-publications "lagrangian oceanography" --from-year 2020 --to-year 2025
-laglitsynth fetch-publications "submesoscale dynamics" -o data/openalex/custom.jsonl --max-records 500
+laglitsynth catalogue-fetch "lagrangian oceanography"
+laglitsynth catalogue-fetch "lagrangian oceanography" --from-year 2020 --to-year 2025
+laglitsynth catalogue-fetch "submesoscale dynamics" -o data/catalogue-fetch/custom.jsonl --max-records 500
 ```
 
 ## CLI arguments
@@ -16,14 +16,14 @@ laglitsynth fetch-publications "submesoscale dynamics" -o data/openalex/custom.j
 | Argument | Description |
 |---|---|
 | `QUERY` (positional) | Search query string (required). |
-| `-o` / `--output` | Output JSONL path. Default: `data/openalex/<slug>_<timestamp>.jsonl`. |
+| `-o` / `--output` | Output JSONL path. Default: `data/catalogue-fetch/<slug>_<timestamp>.jsonl`. |
 | `--from-year` | Filter publications from this year onward. |
 | `--to-year` | Filter publications up to this year. |
 | `--max-records` | Cap on number of results. Defaults to 199 as a safety cap -- pass explicitly to fetch more. |
 
 ## Output format
 
-Each run produces two files in `data/openalex/`:
+Each run produces two files in `data/catalogue-fetch/`:
 
 - **`<slug>_<timestamp>.jsonl`** -- one `Work` JSON object per line. Read
   back with `Work.model_validate_json(line)` or the shared

@@ -1,4 +1,4 @@
-from laglitsynth.openalex.fetch import _reconstruct_abstract
+from laglitsynth.catalogue_fetch.fetch import _reconstruct_abstract
 
 
 def test_simple_sentence():
