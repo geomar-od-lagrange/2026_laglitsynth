@@ -226,8 +226,10 @@ class TestExtractCodebook:
         for name in _ExtractionPayload.model_fields:
             assert getattr(record, name) is None
 
-    def test_partial_json_missing_keys_yields_llm_parse_failure(self) -> None:
-        # A payload missing most fields fails pydantic validation.
+    def test_partial_json_missing_keys_parses_with_none_defaults(self) -> None:
+        # Partial LLM response: only one field populated, rest default to None.
+        # This is the intended tolerant-parse behaviour — a single laggy field
+        # cannot discard the other 29.
         resp = _mock_openai_response('{"integration_scheme": "RK4"}')
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
@@ -239,8 +241,63 @@ class TestExtractCodebook:
             model="m",
             truncated=False,
         )
-        assert record.reason == "llm-parse-failure"
-        assert record.seed is None
+        assert record.reason is None
+        assert record.integration_scheme == "RK4"
+        assert record.time_step_strategy is None
+        assert record.sub_discipline is None
+
+    def test_bool_field_coerced_to_yes_no_string(self) -> None:
+        # LLMs often answer `config_available` with a JSON bool. We coerce
+        # to keep the str-only downstream contract.
+        resp = _mock_openai_response(
+            '{"config_available": true, "code_tracking_software": false}'
+        )
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = resp
+        record = extract_codebook(
+            "W1",
+            "full_text",
+            "body",
+            client=mock_client,
+            model="m",
+            truncated=False,
+        )
+        assert record.reason is None
+        assert record.config_available == "yes"
+        assert record.code_tracking_software == "no"
+
+    def test_list_field_coerced_to_joined_string(self) -> None:
+        # LLMs treat plural-named fields as lists; coerce to a " / "-joined string.
+        resp = _mock_openai_response(
+            '{"passage_locations": ["Section 2.1", "Table 3"]}'
+        )
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = resp
+        record = extract_codebook(
+            "W1",
+            "full_text",
+            "body",
+            client=mock_client,
+            model="m",
+            truncated=False,
+        )
+        assert record.reason is None
+        assert record.passage_locations == "Section 2.1 / Table 3"
+
+    def test_empty_list_coerced_to_none(self) -> None:
+        resp = _mock_openai_response('{"passage_locations": []}')
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = resp
+        record = extract_codebook(
+            "W1",
+            "full_text",
+            "body",
+            client=mock_client,
+            model="m",
+            truncated=False,
+        )
+        assert record.reason is None
+        assert record.passage_locations is None
 
 
 # --- extract_works cascade ---
