@@ -30,7 +30,14 @@ Update this file when a plan is written, implemented, or archived.
 
 ## In flight
 
-- (None.)
+- [Reproducibility meta refactor](reproducibility-meta-refactor.md)
+  — nested `_RunMeta` across every `*Meta`; `_Base` deletion with
+  `extra="ignore"` on OpenAlex models and `extra="forbid"` on
+  internal; stage 3 LLM determinism (explicit `temperature=0.8`,
+  per-call random seed on each `ScreeningVerdict`, `prompt_sha256`
+  on `ScreeningMeta.llm`). Skipped: commit SHA, input hashing,
+  dirty-tree, CLI temp/seed flags. Two open questions (both
+  low-stakes).
 
 ## Queued — ready to plan
 
@@ -43,16 +50,10 @@ Update this file when a plan is written, implemented, or archived.
   already keep on disk. Subsumes the flat-vs-recursive `parse_tei`
   question. Needs plan. Unblocks stages 7+ consumers that want more
   than plain section text.
-- Reproducibility meta refactor + `_Base` deletion. Introduce a
-  `_RunMeta` shape (`tool_commit_sha`, `input_paths`,
-  `input_content_sha`, `validation_skipped`) across every meta model;
-  record LLM sampling params (temperature, seed, prompt digest, model
-  digest); drop `_Base` and set `ConfigDict(extra="ignore")` on `Work`
-  + `ConfigDict(extra="forbid")` on internal models. Touches every
-  meta file just rewritten by the cutover — better done now than
-  later.
 - [Multi-run consensus](multi-run-consensus.md) — plan already exists.
-  Now unblocked by the verdict-sidecar contract from the cutover.
+  Now unblocked by the verdict-sidecar contract from the cutover; the
+  `seed` field landing in the reproducibility refactor makes
+  per-verdict deduplication clean.
 - Commit `pixi.lock`. Remove from `.gitignore`, add to repo.
 
 ## Queued — driven by future stages
