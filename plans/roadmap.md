@@ -40,17 +40,18 @@ Update this file when a plan is written, implemented, or archived.
 
 - (None.)
 
+## In flight
+
+- [Thin TEI wrapper for `ExtractedDocument`](tei-wrapper.md) —
+  `ExtractedDocument` trims to `{work_id, tei_path, content_sha256,
+  extracted_at}`; lazy `TeiDocument` wrapper exposes
+  `sections()`, `figures()`, `citations()`, `bibliography()` over
+  the TEI bytes we already keep on disk. Recursive `Section.children`
+  resolves the flat-vs-recursive question. All three plan open
+  questions resolved.
+
 ## Queued — ready to plan
 
-- Thin TEI wrapper for `ExtractedDocument`. Stop rewriting TEI into
-  lossy `(title, text)` pairs; carry `tei_path` (+ `content_sha256`
-  once reproducibility lands) as the canonical reference, and expose a
-  small accessor API (`doc.sections()`, `doc.figures()`,
-  `doc.citations()`, `doc.bibliography()`) built lazily via XPath. Not
-  a pydantic mirror of TEI — just typed views over the bytes we
-  already keep on disk. Subsumes the flat-vs-recursive `parse_tei`
-  question. Needs plan. Unblocks stages 7+ consumers that want more
-  than plain section text.
 - Commit `pixi.lock`. Remove from `.gitignore`, add to repo.
 
 ## Deferred until pipeline is feature-complete

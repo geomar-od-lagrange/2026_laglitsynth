@@ -466,18 +466,23 @@ for a typical journal article.
 
 ## Open questions
 
+All three resolved; defaults locked in above.
+
 1. Should `Section.paragraphs` be `list[str]` or `list[Paragraph]`
    with a richer model (inline-citation targets, offsets)?
-   Default: `list[str]`. Inline citations are already surfaced by
-   `citations()` at document scope; tying them to paragraphs
-   is useful but out of scope until a consumer asks.
-   FB: list of strings is fine.
+   **Resolved: `list[str]`.** Inline citations are already surfaced
+   by `citations()` at document scope; tying them to paragraphs is
+   useful but out of scope until a consumer asks.
 2. Should `BibReference.authors` be `list[str]` or `list[Author]`
-   (given name / surname split)? Default: `list[str]` of
-   `"Surname, F."` form. Matches the shape stages 9–12 bibliographic
-   comparison will want; split later if needed.
-   FB: Do we have an author model already? Then author. Otherwise: str.
+   (given name / surname split)? **Resolved: `list[str]` of
+   `"Surname, F."` form.** The existing
+   [`Author`](../src/laglitsynth/catalogue_fetch/models.py) in
+   `catalogue_fetch.models` is shaped for OpenAlex data (`id`,
+   `display_name`, `orcid`) and does not match GROBID's
+   surname + forenames structure, so it isn't a reuse fit. A
+   dedicated `BibAuthor` split lands when stages 9–12 bibliographic
+   comparison needs it.
 3. Should `TeiDocument` expose a `walk()` helper that yields
    `(section, depth)` pairs for consumers that do want a flat
-   view? Default: no — add only when a consumer names the need.
-  FB: no.
+   view? **Resolved: no.** Add only when a consumer names the
+   need.
