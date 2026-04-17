@@ -24,7 +24,22 @@ Update this file when a plan is written, implemented, or archived.
 - [Stage 5/6 bug cluster](stage-5-6-bugs.md) — `RetrievalStatus.failed`
   wiring, `unretrieved.txt` derived from records, `_validate_pdf`
   tightening, PDF-stem → `work_id` check, shared `laglitsynth.ids`
-  module, GROBID preflight timeout, TEI hardening. Plan in progress.
+  module, GROBID preflight timeout, `lxml` parser hardening. Open
+  questions all resolved. The TEI-enumeration question was pulled
+  out to a separate follow-up (see below).
+
+## Queued — ready to plan once the bug cluster lands
+
+- Thin TEI wrapper for `ExtractedDocument`. Stop rewriting TEI into
+  lossy `(title, text)` pairs; carry `tei_path` (+
+  `content_sha256` once reproducibility lands) as the canonical
+  reference, and expose a small accessor API
+  (`doc.sections()`, `doc.figures()`, `doc.citations()`,
+  `doc.bibliography()`) built lazily via XPath. Not a pydantic
+  mirror of TEI — just typed views over the bytes we already keep
+  on disk. Subsumes the flat-vs-recursive `parse_tei` question.
+  Needs plan. Unblocks stages 7+ consumers that want more than
+  plain section text.
 
 ## Queued — ready to plan once the cutover lands
 

@@ -118,9 +118,10 @@ junk".
 
 ### Threshold flag name
 
-`--threshold`. Stage 4 is the only consumer today. If later stages
-need their own thresholds they can use `--eligibility-threshold` etc.
-Plain name where ambiguity is low.
+`--screening-threshold`. Stage 4 is the only consumer today but later
+stages will get their own thresholds (`--eligibility-threshold` for
+stage 7, etc.); prefix every threshold flag with its stage from the
+start so no rename is needed when a second threshold lands.
 
 ### Stage 4 reruns overwrite
 
@@ -224,8 +225,9 @@ In [src/laglitsynth/screening_abstracts/screen.py](../src/laglitsynth/screening_
   `data/screening-abstracts/screening-meta.json`. No other files.
 - CLI: drop `-o`/`--output`, drop `--reject-file`. Add
   `--output-dir` (default `data/screening-abstracts/`). Keep
-  positional `input prompt`; keep `--threshold`, `--model`,
-  `--base-url`, `--max-records`, `--dry-run`.
+  positional `input prompt`; rename `--threshold` to
+  `--screening-threshold`; keep `--model`, `--base-url`,
+  `--max-records`, `--dry-run`.
 - Move the `OpenAI(...)` client instantiation out of
   `classify_abstract` into `screen_works` (per [code
   review](review-2026-04-16-code.md) finding on TCP-per-work
@@ -243,15 +245,15 @@ In [src/laglitsynth/screening_adjudication/models.py](../src/laglitsynth/screeni
 In [src/laglitsynth/screening_adjudication/adjudicate.py](../src/laglitsynth/screening_adjudication/adjudicate.py):
 
 - CLI: `--input` points at stage 3's verdicts file, `--catalogue` at
-  the dedup catalogue, `--threshold` (int), `--output-dir` (default
-  `data/screening-adjudication/`).
+  the dedup catalogue, `--screening-threshold` (int), `--output-dir`
+  (default `data/screening-adjudication/`).
 - `run()` iterates stage 3 verdicts, joins against the catalogue by
-  `work_id`, and for each work with `relevance_score >= threshold`
-  emits (a) an `AdjudicationVerdict(decision="accept",
-  reviewer="pass-through", reason=None)` and (b) the Work record
-  into `included.jsonl`.
-- Works with `relevance_score < threshold` or `None` are not
-  represented in either output file. Full adjudication later will
+  `work_id`, and for each work with
+  `relevance_score >= screening_threshold` emits (a) an
+  `AdjudicationVerdict(decision="accept", reviewer="pass-through",
+  reason=None)` and (b) the Work record into `included.jsonl`.
+- Works with `relevance_score < screening_threshold` or `None` are
+  not represented in either output file. Full adjudication later will
   emit `reject`/`skip` verdicts explicitly.
 
 ### 5. Test migration
@@ -308,7 +310,8 @@ In [tests/test_screening_adjudication.py](../tests/test_screening_adjudication.p
 [docs/adjudication-screening.md](../docs/adjudication-screening.md):
 
 - CLI example: `--input data/screening-abstracts/verdicts.jsonl
-  --catalogue data/catalogue-dedup/deduplicated.jsonl --threshold 50`.
+  --catalogue data/catalogue-dedup/deduplicated.jsonl
+  --screening-threshold 50`.
 - `tool` string: `laglitsynth.screening_adjudication.adjudicate`
   (matches module file).
 - Describe the new `AdjudicationVerdict` model.
@@ -380,7 +383,7 @@ laglitsynth catalogue-dedup \
 laglitsynth screening-abstracts \
     data/catalogue-dedup/deduplicated.jsonl \
     "Is this about computational Lagrangian methods in oceanography?" \
-    --threshold 50 \
+    --screening-threshold 50 \
     --output-dir data/screening-abstracts/
 # Expect: data/screening-abstracts/verdicts.jsonl,
 #         data/screening-abstracts/screening-meta.json.
@@ -388,7 +391,7 @@ laglitsynth screening-abstracts \
 laglitsynth screening-adjudication \
     --input data/screening-abstracts/verdicts.jsonl \
     --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    --threshold 50 \
+    --screening-threshold 50 \
     --output-dir data/screening-adjudication/
 # Expect: data/screening-adjudication/verdicts.jsonl,
 #         data/screening-adjudication/adjudication-meta.json,
@@ -404,13 +407,16 @@ laglitsynth fulltext-retrieval \
 
 ## Open questions
 
-All three are defaulted in the plan above; override by editing the
-design-decisions section before the implementation agent runs.
+All three resolved; decisions folded into the design-decisions
+section above.
 
 1. Lock the two sentinel `reason` strings `"no-abstract"` and
    `"llm-parse-failure"` as the only non-LLM verdict reasons for
-   now? Plan default: yes.
-2. Threshold flag named `--threshold` (plan default) or
-   `--screening-threshold`?
-3. Delete legacy data files during migration (plan default) or
-   leave them on disk for archival?
+   now? **Resolved: yes.**
+2. Threshold flag named `--threshold` or `--screening-threshold`?
+   **Resolved: `--screening-threshold`** — prefix every threshold
+   flag with its stage so no rename is needed when stage 7 adds
+   its own.
+3. Delete legacy data files during migration, or leave them on disk
+   for archival? **Resolved: delete.** Minutes to re-produce; no
+   archival value.

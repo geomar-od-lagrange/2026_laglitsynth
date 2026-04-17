@@ -50,6 +50,13 @@ plan. Each is tracked elsewhere or deferred.
 - Stage 3 / stage 4 mode-`"x"` fixes. Same class of bug, but belongs
   to the flag-don't-filter cutover which rewrites those `run()`
   bodies anyway.
+- Redesign of `parse_tei` output and the `ExtractedDocument` data
+  model (TEI as canonical representation with lazy typed accessors
+  for sections / figures / citations / bibliography). Pulled out to
+  a follow-up plan to be written after this bug cluster lands. The
+  TEI-enumeration question (flat / recursive / middle-ground /
+  direct-child-p) is deferred there; this plan does not touch
+  `parse_tei`'s walk strategy.
 
 ## Coordination with flag-don't-filter cutover
 
@@ -133,12 +140,10 @@ Collisions to call out for whoever merges second:
   (`/api/isalive`, `/api/version`) runs against an `httpx.Client`
   configured with a short preflight timeout (5 seconds); per-paper
   POSTs continue to use `args.timeout`.
-- Stage 6 `parse_tei` uses flat (direct-child) enumeration of
-  `<body>/<div>` and `<div>/<p>`, with a short comment stating this
-  matches the "flat list of sections" doc contract.
 - Stage 6 `parse_tei` constructs the `lxml` parser with
   `resolve_entities=False` and `no_network=True` before calling
-  `etree.fromstring`.
+  `etree.fromstring`. (Enumeration strategy itself is untouched
+  here — see the TEI-wrapper follow-up plan.)
 
 ## Design decisions
 
@@ -269,17 +274,6 @@ Close both clients on exit. Rationale: a slow GROBID startup
 shouldn't hang the preflight check for 120 seconds; 5 s is plenty
 for a local-network `isalive` call. Do not share the client because
 `httpx.Client.timeout` is per-client.
-
-### D-6.3 — flat vs recursive section enumeration
-
-Keep flat (direct-child) enumeration for both `<body>/<div>` and
-`<div>/<p>`. Add a one-line comment above each `findall` explaining
-the choice ("Flat: matches the 'flat list of sections' contract in
-[docs/full-text-extraction.md](../docs/full-text-extraction.md)").
-Rationale: the doc explicitly specifies flat output; recursion would
-duplicate paragraph text across nested divs. Losing sub-section
-titles is an accepted trade-off of the flat-list-of-sections
-contract.
 
 ### D-6.4 — lxml parser hardening
 
@@ -577,21 +571,7 @@ step unless noted.
    the behavioural change is small and inspection-visible.
 4. `pixi run typecheck` + `pixi run test`, commit.
 
-### Step 13 — stage 6 parse_tei flat-enumeration comments
-
-1. In
-   [extract.py](../src/laglitsynth/fulltext_extraction/extract.py)
-   `parse_tei`, above the `divs = body.findall(f"{TEI_NS}div")`
-   line, add a one-line comment: `# Flat: matches the "flat list of
-   sections" contract in docs/full-text-extraction.md. Sub-section
-   titles are intentionally dropped; paragraph text inside nested
-   divs is not reached.`
-2. Above `for p in div.findall(f"{TEI_NS}p"):` add
-   `# Flat: only direct-child <p> of each top-level <div>.`
-3. No code change; no test change.
-4. Commit with steps 12 and 14 (cosmetic).
-
-### Step 14 — stage 6 lxml hardening
+### Step 13 — stage 6 lxml hardening
 
 1. In
    [extract.py](../src/laglitsynth/fulltext_extraction/extract.py),
@@ -721,7 +701,7 @@ requirement in scope item 15.
 ## Verification
 
 - `pixi run test` passes; new tests added in steps 1, 3, 4, 5, 6,
-  7, 8, 11, 14 all green.
+  7, 8, 11, 13 all green.
 - `pixi run typecheck` passes with no new ignores.
 - Manual end-to-end dry-run:
   ```sh
@@ -746,34 +726,21 @@ requirement in scope item 15.
 
 ## Open questions
 
-- `RetrievalRecord.error` is currently `str | None`. Wiring
-  `failed` in means populating it from `str(exc)`. Acceptable to
-  store the Python exception string verbatim (e.g. `"403
-  Forbidden"`) or should it be structured (e.g. a small enum of
-  `http_4xx | http_5xx | connect_error | validation_error`)?
-  Recommending verbatim for this plan because the reproducibility
-  plan will rework `RetrievalRecord` anyway; flagging in case Willi
-  prefers to get structured errors in place now.
-- Stage 6 `ExtractionMeta.invalid_stem_count` is a new field. Adding
-  it is a model change, which the scope says to avoid. Alternative:
-  deduct invalid stems from `total_pdfs` and add nothing. Adding
-  the field is more faithful to the "carry missingness" principle;
-  deducting is more conservative. Recommending the additional field;
-  flagging because it straddles the scope line with the
-  reproducibility plan.
-- Under `--skip-existing`, the rewrite in step 6 will carry over
-  records for works that are no longer in the input catalogue (e.g.
-  the included set shrank between runs because a threshold moved).
-  Two options: (a) preserve those records verbatim in the rewritten
-  file — conservative, keeps the audit trail; (b) drop them — the
-  file then exactly mirrors the current input. Recommending (a);
-  flagging because it conflicts with the mental model "retrieval.jsonl
-  mirrors the current run's input".
-- Flat enumeration in `parse_tei` loses paragraph text inside
-  nested `<div>`s entirely (the outer div is kept if it has any
-  direct-child `<p>`, but inner-div paragraphs are invisible). The
-  doc says "flat list of sections" but does not say "drop nested
-  paragraph text". A middle ground would be: direct-child `<div>`s
-  enumerated flat, but `<p>` collection recursive within each
-  top-level div (`.//{TEI_NS}p`). The review locked flat; noting in
-  case Willi wants the middle ground instead.
+All resolved; decisions folded into the plan above.
+
+- **`RetrievalRecord.error` format.** Resolved: verbatim
+  `str(exc)`. Structured errors can come with the reproducibility
+  refactor if wanted; not worth pre-empting that rework now.
+- **Stage 6 `ExtractionMeta.invalid_stem_count`.** Resolved: add
+  as a new field on `ExtractionMeta`. `total_pdfs` stays as
+  `len(pdfs)`; the invalid count lives alongside it. Matches the
+  "carry missingness" principle.
+- **`--skip-existing` carryover when the input catalogue shrinks.**
+  Resolved: preserve carried-over records (option a). Cross-stage
+  resolve / retune will address the audit-vs-current-input tension
+  properly in a future plan; not something to over-think here.
+- **~~Flat vs. middle-ground vs. recursive TEI enumeration.~~**
+  Pulled out of scope entirely — see the follow-up plan for the
+  TEI-wrapper redesign (thin `lxml` accessor API on
+  `ExtractedDocument`). This plan no longer modifies `parse_tei`'s
+  walk strategy.
