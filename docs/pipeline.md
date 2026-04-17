@@ -12,20 +12,20 @@ stage 6 onward we work with the **corpus**.
 
 | # | Stage | Domain |
 |---|---|---|
-| 1 | [catalogue-fetch](#1-search-exists) | catalogue |
-| 2 | [catalogue-dedup](#2-deduplication) | catalogue |
-| 3 | [screening-abstracts](#3-screen-abstracts-exists) | catalogue |
-| 4 | [screening-adjudication](#4-adjudication) | catalogue |
-| 5 | [fulltext-retrieval](#5-full-text-retrieval) | catalogue → corpus |
-| 6 | [fulltext-extraction](#6-full-text-extraction) | corpus |
-| 7 | [fulltext-eligibility](#7-eligibility) | corpus |
-| 8 | [extraction-codebook](#8-data-extraction) | corpus |
-| 9 | [extraction-adjudication](#9-adjudication-extraction) | corpus |
-| 10 | [synthesis-quantitative](#10-quantitative-synthesis) | synthesis |
-| 11 | [synthesis-thematic](#11-thematic-synthesis) | synthesis |
-| 12 | [synthesis-narrative](#12-narrative-synthesis) | synthesis |
+| 1 | [catalogue-fetch](#1-catalogue-fetch) | catalogue |
+| 2 | [catalogue-dedup](#2-catalogue-dedup) | catalogue |
+| 3 | [screening-abstracts](#3-screening-abstracts) | catalogue |
+| 4 | [screening-adjudication](#4-screening-adjudication) | catalogue |
+| 5 | [fulltext-retrieval](#5-fulltext-retrieval) | catalogue → corpus |
+| 6 | [fulltext-extraction](#6-fulltext-extraction) | corpus |
+| 7 | [fulltext-eligibility](#7-fulltext-eligibility) | corpus |
+| 8 | [extraction-codebook](#8-extraction-codebook) | corpus |
+| 9 | [extraction-adjudication](#9-extraction-adjudication) | corpus |
+| 10 | [synthesis-quantitative](#10-synthesis-quantitative) | synthesis |
+| 11 | [synthesis-thematic](#11-synthesis-thematic) | synthesis |
+| 12 | [synthesis-narrative](#12-synthesis-narrative) | synthesis |
 
-### 1. search *(exists)*
+### 1. catalogue-fetch
 
 Queries OpenAlex using the search strategy and retrieves validated
 bibliographic records. The output is intentionally broad — it captures the
@@ -37,7 +37,7 @@ discovery reveals additional groupings).
 - **Consumes:** OpenAlex API, search strategy
 - **Produces:** retrieved catalogue — unscreened work records
 
-### 2. deduplication
+### 2. catalogue-dedup
 
 Removes duplicate records from the retrieved catalogue. Duplicates arise when
 multiple keyword searches return overlapping result sets, or when the same
@@ -47,7 +47,7 @@ work appears under different OpenAlex IDs. Deduplication operates on metadata
 - **Consumes:** retrieved catalogue
 - **Produces:** deduplicated catalogue
 
-### 3. screen-abstracts *(exists)*
+### 3. screening-abstracts
 
 Applies a local LLM to score each abstract for relevance, assigning a verdict
 and confidence score. The dual output — retained and rejected — allows
@@ -56,7 +56,7 @@ auditing of borderline cases.
 - **Consumes:** deduplicated catalogue
 - **Produces:** screened catalogue, rejected records
 
-### 4. adjudication
+### 4. screening-adjudication
 
 A human reviewer inspects a stratified sample of accepted and rejected records
 to validate screening quality and adjust thresholds. Borderline-scored records
@@ -69,7 +69,7 @@ receive priority attention. Produces a reconciled, human-approved catalogue.
 keywords) or stage 3 (screening calibration). See [Optional
 extensions](#optional-extensions).*
 
-### 5. full-text-retrieval
+### 5. fulltext-retrieval
 
 Retrieves PDFs via open-access sources, DOI resolution, preprint servers,
 or manual batch download. The output is PDFs on disk and a retrieval
@@ -82,7 +82,7 @@ rarely stated in abstracts.
 - **Produces:** PDFs on disk, retrieval status records (per-work retrieval
   outcome and source)
 
-### 6. full-text-extraction
+### 6. fulltext-extraction
 
 Parses retrieved PDFs into structured sections (title + body text per
 section). GROBID is the extraction tool. The extraction is decoupled from
@@ -93,7 +93,7 @@ structured sections — some may work with the PDF directly.
 - **Consumes:** PDFs from stage 5
 - **Produces:** full-text corpus — structured section text per work
 
-### 7. eligibility
+### 7. fulltext-eligibility
 
 Full-text assessment of whether each work meets the review's eligibility
 criteria. Distinct from screening (which uses only title and abstract).
@@ -106,7 +106,7 @@ a recorded reason.
   protocol)
 - **Produces:** eligible corpus — works confirmed for data extraction
 
-### 8. data-extraction
+### 8. extraction-codebook
 
 An LLM processes each paper against the codebook, extracting: sub-discipline
 tags (e.g. water parcels, tracers, objects — not a fixed set), numerical integration scheme,
@@ -117,7 +117,7 @@ Each extraction record flags its source basis (full text vs. abstract-only).
 - **Consumes:** eligible corpus, full texts, codebook
 - **Produces:** extraction records — one structured record per paper
 
-### 9. adjudication (extraction)
+### 9. extraction-adjudication
 
 A human reviewer spot-checks a random sample of extraction records, verifying
 extracted facts match the source text. Corrections are written back.
@@ -131,7 +131,7 @@ recorded to support methodological transparency in the eventual publication.
 *Optional: findings may feed back to the codebook and trigger re-extraction.
 See [Optional extensions](#optional-extensions).*
 
-### 10. quantitative-synthesis
+### 10. synthesis-quantitative
 
 Validated extraction records are aggregated to produce quantitative answers to
 RQ1.1 (Reproducibility) and RQ1.2 (Prevalence): fraction of papers providing
@@ -142,7 +142,7 @@ sub-discipline. Uncertainty is propagated from the source basis field
 - **Consumes:** validated extraction records
 - **Produces:** `statistics.json` — tabulated counts, proportions, breakdowns
 
-### 11. thematic-synthesis
+### 11. synthesis-thematic
 
 The stated rationales for numerical choices — a free-text field in the
 codebook — are gathered and thematically clustered to address RQ1.3
@@ -156,7 +156,7 @@ external consultation may be needed before this stage runs on real data.
 - **Produces:** `rationale-taxonomy.json` — coded categories with supporting
   quotations and paper references
 
-### 12. narrative-synthesis
+### 12. synthesis-narrative
 
 Statistics and rationale taxonomy are combined into a structured narrative
 addressing each research question. RQ1.1 and RQ1.2 get quantitative
@@ -169,7 +169,7 @@ papers, low-confidence extraction records) are explicitly flagged.
 
 ## Human spot-checking
 
-Every LLM-driven stage (screen-abstracts, eligibility, data-extraction)
+Every LLM-driven stage (screening-abstracts, fulltext-eligibility, extraction-codebook)
 produces output exportable as a flat table (e.g. CSV) for human
 spot-checking. The export contains one row per work with the stage's
 verdict or extracted values, the LLM's reasoning, and enough metadata
@@ -242,18 +242,18 @@ graph TD
     TAX[(rationale-taxonomy.json)]
     SYN[(synthesis-draft.md)]
 
-    FETCH[search]
-    DEDUP[deduplication]
-    SCREEN[screen-abstracts]
-    ADJUD[adjudication]
-    RETRIEVE[full-text-retrieval]
-    GROBID[full-text-extraction]
-    ELIG[eligibility]
-    EXTRACT[data-extraction]
-    ADJUD2[adjudication - extraction]
-    QSYNTH[quantitative-synthesis]
-    TSYNTH[thematic-synthesis]
-    NARR[narrative-synthesis]
+    FETCH[catalogue-fetch]
+    DEDUP[catalogue-dedup]
+    SCREEN[screening-abstracts]
+    ADJUD[screening-adjudication]
+    RETRIEVE[fulltext-retrieval]
+    GROBID[fulltext-extraction]
+    ELIG[fulltext-eligibility]
+    EXTRACT[extraction-codebook]
+    ADJUD2[extraction-adjudication]
+    QSYNTH[synthesis-quantitative]
+    TSYNTH[synthesis-thematic]
+    NARR[synthesis-narrative]
 
     KW --> FETCH
     OA --> FETCH

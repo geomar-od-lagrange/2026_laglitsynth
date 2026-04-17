@@ -4,7 +4,7 @@ Retrieve PDFs for works in the included catalogue. This is where the
 catalogue becomes a corpus. The output is PDFs on disk and a retrieval
 status record per work — nothing more. Text extraction (parsing PDFs into
 structured sections) is a separate concern handled by
-[full-text-extraction.md](full-text-extraction.md).
+[fulltext-extraction.md](fulltext-extraction.md).
 
 ## Source cascade
 

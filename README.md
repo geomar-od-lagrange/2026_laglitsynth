@@ -19,10 +19,29 @@ All tools are accessed via the `laglitsynth` CLI:
 laglitsynth --help
 ```
 
-- `laglitsynth fetch-publications` — search OpenAlex by keyword and store
-  results as JSONL. See [`docs/fetch-publications.md`](docs/fetch-publications.md).
-- `laglitsynth filter-abstracts` — filter abstracts by relevance using a
-  local Ollama-hosted LLM. See [`docs/screening-abstracts.md`](docs/screening-abstracts.md).
+Stages 1–6 are implemented. Each stage has its own doc under [`docs/`](docs/).
+
+- `laglitsynth catalogue-fetch` — search OpenAlex by keyword and store
+  validated bibliographic records as JSONL. See
+  [`docs/catalogue-fetch.md`](docs/catalogue-fetch.md).
+- `laglitsynth catalogue-dedup` — deduplicate a combined catalogue on
+  DOI and title. See [`docs/catalogue-dedup.md`](docs/catalogue-dedup.md).
+- `laglitsynth screening-abstracts` — score every abstract for relevance
+  with a local Ollama-hosted LLM, emitting a `ScreeningVerdict` sidecar.
+  See [`docs/screening-abstracts.md`](docs/screening-abstracts.md).
+- `laglitsynth screening-adjudication` — apply a threshold to the
+  screening verdicts, emit `AdjudicationVerdict` records and an
+  `included.jsonl` convenience file for stage 5. See
+  [`docs/screening-adjudication.md`](docs/screening-adjudication.md).
+- `laglitsynth fulltext-retrieval` — fetch PDFs via manual pickup, OA
+  URLs, and Unpaywall. See
+  [`docs/fulltext-retrieval.md`](docs/fulltext-retrieval.md).
+- `laglitsynth fulltext-extraction` — parse retrieved PDFs into
+  structured section text via GROBID. See
+  [`docs/fulltext-extraction.md`](docs/fulltext-extraction.md).
+
+Stage 7+ are specified in [`docs/pipeline.md`](docs/pipeline.md) but not
+yet implemented.
 
 ## OpenAlex API key
 
@@ -33,9 +52,9 @@ Since February 2026, OpenAlex requires a (free) API key. Register at
 OPENALEX_API_KEY=your-key-here
 ```
 
-## Ollama (for LLM filtering)
+## Ollama (for LLM screening)
 
-The filter tool requires a running Ollama instance:
+The screening stage requires a running Ollama instance:
 
 ```bash
 ollama serve
@@ -44,8 +63,19 @@ ollama pull gemma3:4b
 
 See [`docs/screening-abstracts.md`](docs/screening-abstracts.md) for details.
 
+## GROBID (for full-text extraction)
+
+The extraction stage requires a running GROBID server. One-shot via Docker:
+
+```bash
+docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0
+```
+
+See [`docs/fulltext-extraction.md`](docs/fulltext-extraction.md) for details.
+
 ## Documentation
 
 - [`docs/`](docs/) — component documentation
-- [`plans/`](plans/) — implementation plans
+- [`docs/pipeline.md`](docs/pipeline.md) — end-to-end pipeline overview
+- [`plans/`](plans/) — implementation plans (active and archived)
 - [`AGENTS.md`](AGENTS.md) — project principles and structure
