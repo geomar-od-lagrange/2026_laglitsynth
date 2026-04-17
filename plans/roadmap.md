@@ -50,11 +50,16 @@ Update this file when a plan is written, implemented, or archived.
   already keep on disk. Subsumes the flat-vs-recursive `parse_tei`
   question. Needs plan. Unblocks stages 7+ consumers that want more
   than plain section text.
-- [Multi-run consensus](multi-run-consensus.md) — plan already exists.
-  Now unblocked by the verdict-sidecar contract from the cutover; the
-  `seed` field landing in the reproducibility refactor makes
-  per-verdict deduplication clean.
 - Commit `pixi.lock`. Remove from `.gitignore`, add to repo.
+
+## Deferred until pipeline is feature-complete
+
+- [Multi-run consensus](multi-run-consensus.md) — plan exists but is
+  deferred until stages 7–12 have landed. Consensus only becomes
+  meaningful once there's an end-to-end answer to compare robustness
+  against; running it earlier tunes a knob whose downstream effect
+  isn't observable yet. Plan text also predates the cutover and
+  needs freshening when picked back up.
 
 ## Queued — driven by future stages
 
