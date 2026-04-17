@@ -20,7 +20,7 @@ All tools are accessed via the `laglitsynth` CLI:
 laglitsynth --help
 ```
 
-Stages 1–6 are implemented. Each stage has its own doc under [`docs/`](docs/).
+Stages 1–8 are implemented. Each stage has its own doc under [`docs/`](docs/).
 
 - `laglitsynth catalogue-fetch` — search OpenAlex by keyword and store
   validated bibliographic records as JSONL. See
@@ -40,8 +40,16 @@ Stages 1–6 are implemented. Each stage has its own doc under [`docs/`](docs/).
 - `laglitsynth fulltext-extraction` — parse retrieved PDFs into
   structured section text via GROBID. See
   [`docs/fulltext-extraction.md`](docs/fulltext-extraction.md).
+- `laglitsynth fulltext-eligibility` — assess full-text eligibility of
+  included works with a local LLM, emitting an `EligibilityVerdict`
+  sidecar plus an `eligible.jsonl` convenience file. See
+  [`docs/eligibility.md`](docs/eligibility.md).
+- `laglitsynth extraction-codebook` — extract structured codebook
+  records (numerical choices, reproducibility indicators,
+  sub-discipline tags) from each eligible work with a local LLM. See
+  [`docs/extraction-codebook.md`](docs/extraction-codebook.md).
 
-Stage 7+ are specified in [`docs/pipeline.md`](docs/pipeline.md) but not
+Stage 9+ are specified in [`docs/pipeline.md`](docs/pipeline.md) but not
 yet implemented.
 
 ## OpenAlex API key

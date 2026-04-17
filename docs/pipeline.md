@@ -117,6 +117,11 @@ tags (e.g. water parcels, tracers, objects — not a fixed set), numerical integ
 time-step strategy, interpolation method, reproducibility indicators (code
 and method availability), and context snippets for numerical choices.
 Each extraction record flags its source basis (full text vs. abstract-only).
+The stage prefers the extracted full text, falls back to the abstract, and
+records a sentinel `reason` when neither source exists, the TEI is malformed,
+or the LLM response fails to validate. See
+[extraction-codebook.md](extraction-codebook.md) for the record shape and
+sentinel reasons, and [codebook.md](codebook.md) for the seed field list.
 
 - **Consumes:** eligible corpus, full texts, codebook
 - **Produces:** extraction records — one structured record per paper

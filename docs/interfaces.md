@@ -114,12 +114,18 @@ abstract-only) and the PDF path. Already follows the flag pattern.
 run from the catalogue join against the verdict sidecar, mirroring
 stage 4's [`included.jsonl`](screening-adjudication.md).
 
-### Stage 8 — extraction-codebook
+### Stage 8 — extraction-codebook *(exists)*
 
 | Path | Model | Description |
 |---|---|---|
-| `data/extraction-codebook/records.jsonl` | `ExtractionRecord` (new) | One codebook record per work |
-| `data/extraction-codebook/extraction-meta.json` | `DataExtractionMeta` (new) | Model, prompt version, counts |
+| `data/extraction-codebook/records.jsonl` | [`ExtractionRecord`](../src/laglitsynth/extraction_codebook/models.py) | One codebook record per input work (successes and sentinels) |
+| `data/extraction-codebook/extraction-codebook-meta.json` | [`ExtractionCodebookMeta`](../src/laglitsynth/extraction_codebook/models.py) | Per-branch counts, nested `run` + `llm` |
+
+Every input work produces exactly one record; sentinel records carry
+`None` in all content fields and a `reason` from the vocabulary in
+[extraction-codebook.md](extraction-codebook.md). There is no derived
+convenience file — stage 9 and stages 10–12 read `records.jsonl`
+directly.
 
 ### Stage 9 — extraction-adjudication
 
@@ -197,6 +203,15 @@ laglitsynth fulltext-eligibility \
     [--output-dir data/fulltext-eligibility/] \
     [--skip-existing] [--max-records N] [--dry-run] \
     [--model MODEL] [--base-url URL]
+
+# Stage 8 — extraction-codebook
+laglitsynth extraction-codebook \
+    --eligible data/fulltext-eligibility/eligible.jsonl \
+    --extractions data/fulltext-extraction/extraction.jsonl \
+    [--extraction-output-dir data/fulltext-extraction/] \
+    [--output-dir data/extraction-codebook/] \
+    [--skip-existing] [--max-records N] [--dry-run] \
+    [--model MODEL] [--base-url URL]
 ```
 
 Stages 1 and 3 use positional arguments. All other subcommands use
@@ -207,13 +222,6 @@ constraints ([AGENTS.md](../AGENTS.md)).
 ### Planned subcommands
 
 ```sh
-# Stage 8 — extraction-codebook
-laglitsynth extraction-codebook \
-    --data-dir data/ \
-    --extractions data/fulltext-extraction/extraction.jsonl \
-    --output-dir data/extraction-codebook/ \
-    [--skip-existing]
-
 # Stage 9 — extraction-adjudication
 laglitsynth extraction-adjudication \
     --data-dir data/ \
@@ -296,8 +304,9 @@ laglitsynth fulltext-eligibility \
 
 # 8. Extraction codebook
 laglitsynth extraction-codebook \
-    --data-dir data/ \
+    --eligible data/fulltext-eligibility/eligible.jsonl \
     --extractions data/fulltext-extraction/extraction.jsonl \
+    --extraction-output-dir data/fulltext-extraction/ \
     --output-dir data/extraction-codebook/
 
 # 9. Extraction adjudication (pass-through in prototype)
@@ -356,7 +365,7 @@ class _LlmMeta(BaseModel):
 | Category | Policy | Models |
 |---|---|---|
 | OpenAlex-sourced | `extra="ignore"` — upstream may add fields | `Work`, `Author`, `Authorship`, `Institution`, `Source`, `Location`, `OpenAccess`, `Biblio`, `TopicHierarchy`, `Topic`, `Keyword` |
-| Internally owned | `extra="forbid"` — unexpected fields are bugs | All `*Meta`, `_RunMeta`, `_LlmMeta`, `ScreeningVerdict`, `AdjudicationVerdict`, `RetrievalRecord`, `RetrievalStatus`, `ExtractedDocument`, `Section`, `Figure`, `Citation`, `BibReference`, `EligibilityVerdict` |
+| Internally owned | `extra="forbid"` — unexpected fields are bugs | All `*Meta`, `_RunMeta`, `_LlmMeta`, `ScreeningVerdict`, `AdjudicationVerdict`, `RetrievalRecord`, `RetrievalStatus`, `ExtractedDocument`, `Section`, `Figure`, `Citation`, `BibReference`, `EligibilityVerdict`, `ExtractionRecord` |
 
 ## Model dependency graph
 
@@ -381,13 +390,13 @@ class _LlmMeta(BaseModel):
 | [`Section`](../src/laglitsynth/fulltext_extraction/tei.py), [`Figure`](../src/laglitsynth/fulltext_extraction/tei.py), [`Citation`](../src/laglitsynth/fulltext_extraction/tei.py), [`BibReference`](../src/laglitsynth/fulltext_extraction/tei.py) | `laglitsynth.fulltext_extraction.tei` | 7, 8 (lazy views over TEI) |
 | [`EligibilityVerdict`](../src/laglitsynth/fulltext_eligibility/models.py) | `laglitsynth.fulltext_eligibility.models` | 7 |
 | [`EligibilityMeta`](../src/laglitsynth/fulltext_eligibility/models.py) | `laglitsynth.fulltext_eligibility.models` | 7 |
+| [`ExtractionRecord`](../src/laglitsynth/extraction_codebook/models.py) | `laglitsynth.extraction_codebook.models` | 8, 9, 10, 11 |
+| [`ExtractionCodebookMeta`](../src/laglitsynth/extraction_codebook/models.py) | `laglitsynth.extraction_codebook.models` | 8 |
 
 ### Models not yet defined
 
 | Model | Planned module | Stage |
 |---|---|---|
-| `ExtractionRecord` | `laglitsynth.extraction_codebook.models` | 8, 9, 10, 11 |
-| `DataExtractionMeta` | `laglitsynth.extraction_codebook.models` | 8 |
 | `ExtractionCorrection` | `laglitsynth.extraction_adjudication.models` | 9 |
 | `ExtractionAdjudicationMeta` | `laglitsynth.extraction_adjudication.models` | 9 |
 | `SynthesisStatistics` | `laglitsynth.synthesis_quantitative.models` | 10 |
@@ -404,7 +413,7 @@ class _LlmMeta(BaseModel):
 | 5. fulltext-retrieval | Work (via resolve) | RetrievalRecord, RetrievalMeta |
 | 6. fulltext-extraction | (PDFs) | ExtractedDocument, ExtractionMeta |
 | 7. fulltext-eligibility | Work, ExtractedDocument (via resolve) | EligibilityVerdict, EligibilityMeta, Work (eligible.jsonl) |
-| 8. extraction-codebook | Work, ExtractedDocument (via resolve) | ExtractionRecord, DataExtractionMeta |
+| 8. extraction-codebook | Work, ExtractedDocument (via resolve) | ExtractionRecord, ExtractionCodebookMeta |
 | 9. extraction-adjudication | ExtractionRecord (via resolve) | ExtractionCorrection, ExtractionAdjudicationMeta |
 | 10. synthesis-quantitative | ExtractionRecord (via resolve) | SynthesisStatistics |
 | 11. synthesis-thematic | ExtractionRecord (via resolve) | RationaleTaxonomy |
@@ -414,9 +423,6 @@ class _LlmMeta(BaseModel):
 
 ### No plan exists
 
-- Stage 8 (data extraction) — the [codebook](codebook.md) defines the
-  fields but the stage plan (CLI, LLM prompt, two-pass strategy, model
-  definition) is not written.
 - Stage 10 (quantitative synthesis) — aggregation logic, output schema,
   uncertainty propagation from `source_basis`.
 - Stage 11 (thematic synthesis) — clustering approach, human review
@@ -426,11 +432,6 @@ class _LlmMeta(BaseModel):
 
 ### No model definition exists
 
-- `ExtractionRecord` — the most complex new model. Must encode all
-  [codebook](codebook.md) fields (identification, numerical choices,
-  reproducibility indicators, extraction metadata), each as a value +
-  context-snippet pair. The codebook explicitly defers the Pydantic model
-  to after phase 3 iteration.
 - `ExtractionCorrection` — per-field corrections with original and
   corrected values.
 - `SynthesisStatistics` — depends on which breakdowns are needed (by

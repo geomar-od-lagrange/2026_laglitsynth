@@ -48,6 +48,17 @@ Update this file when a plan is written, implemented, or archived.
   `tei-parse-failure`, `llm-parse-failure`). `ExtractedDocument.extraction_status`
   was not needed: missing and empty `sections()` already trigger the
   right fallback.
+- [Stage 8 `extraction-codebook`](stage-8-extraction-codebook.md) —
+  one LLM pass per eligible work filling a structured
+  [`ExtractionRecord`](../src/laglitsynth/extraction_codebook/models.py)
+  (every value paired with a verbatim `*_context`, every content field
+  `str | None` per [codebook.md](../docs/codebook.md)). Same cascade and
+  sentinel vocabulary as stage 7, plus a `truncated` flag and a
+  `CHAR_BUDGET` placeholder in
+  [`prompts.py`](../src/laglitsynth/extraction_codebook/prompts.py) to
+  tune on the first smoke run. `ExtractedDocument.extraction_status`
+  was not needed for stage 8 either — malformed TEI records a
+  `tei-parse-failure` sentinel as in stage 7.
 
 ## In flight
 
@@ -68,19 +79,22 @@ Update this file when a plan is written, implemented, or archived.
 
 ## Queued — driven by future stages
 
-- Stage 8 (`extraction-codebook`). Plan drafted in
-  [stage-8-extraction-codebook.md](stage-8-extraction-codebook.md);
-  implementation still pending. `ExtractionRecord` decided to be fully
-  typed, regenerated alongside codebook changes.
 - Stages 9–12 (`extraction-adjudication`, `synthesis-quantitative`,
   `synthesis-thematic`, `synthesis-narrative`). No plans yet.
+- [Two-pass extraction](../docs/two-pass-extraction.md) for stage 8 —
+  deferred until phase 3 codebook review flags attention-dilution on
+  specific fields. `passage_locations` is captured faithfully by the
+  stage 8 prototype as ground truth for pass-1 calibration.
 - `Work` model additions — `source_catalogues: list[str]`,
   `catalogue_ids: dict[str, str]`, derived `is_peer_reviewed: bool |
   None`. Defer until a stage 7+ consumer arrives — stage 7 itself does
   not branch on these.
 - `ExtractedDocument` quality gate — `extraction_status` enum + metrics.
-  Defer until a stage 8+ consumer arrives — stage 7 fell back to
-  source-basis selection instead.
+  Defer until a stage 9+ consumer arrives — stages 7 and 8 both fell
+  back to source-basis selection instead.
+- Shared CSV-export-for-human-review helper across stages 3, 4, 7, 8,
+  9. Each stage emits JSONL today; human spot-checking uses ad-hoc
+  conversions.
 
 ## Latest review
 

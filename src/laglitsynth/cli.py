@@ -7,6 +7,9 @@ import sys
 
 from laglitsynth.catalogue_dedup.dedup import build_subparser as build_dedup_subparser
 from laglitsynth.catalogue_fetch.fetch import build_subparser as build_fetch_subparser
+from laglitsynth.extraction_codebook.extract import (
+    build_subparser as build_extraction_codebook_subparser,
+)
 from laglitsynth.fulltext_eligibility.eligibility import (
     build_subparser as build_eligibility_subparser,
 )
@@ -31,7 +34,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    # Registered in pipeline stage order (1-7)
+    # Registered in pipeline stage order (1-8)
     build_fetch_subparser(subparsers)
     build_dedup_subparser(subparsers)
     build_screening_subparser(subparsers)
@@ -39,6 +42,7 @@ def main(argv: list[str] | None = None) -> None:
     build_retrieval_subparser(subparsers)
     build_extraction_subparser(subparsers)
     build_eligibility_subparser(subparsers)
+    build_extraction_codebook_subparser(subparsers)
 
     args = parser.parse_args(argv)
 
