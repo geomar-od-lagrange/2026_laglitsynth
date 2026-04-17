@@ -214,6 +214,25 @@ laglitsynth extraction-codebook \
   checked at startup with the same preflight pattern as
   [eligibility](eligibility.md).
 
+### Model sizing
+
+The CLI default is `gemma3:4b` for consistency with stages 3 and 7,
+but **gemma3:4b does not reliably handle stage 8's 30-field
+structured JSON on typical paper bodies** — in smoke runs it returned
+`{}` (empty object) on most full-text inputs. Pass a bigger model via
+`--model`. Confirmed-working in smoke tests:
+
+- `llama3.1:8b` — ~60s per paper, fills 7-10 of 16 value fields on
+  a typical full paper.
+- `qwen2.5:14b` — ~140s per paper, fills 10-12 of 16 value fields;
+  better on `sub_discipline`, `code_tracking_software`, and
+  `passage_locations` than `llama3.1:8b`.
+
+Pick the model once and carry `--model` through to all stage 8
+invocations; the `prompt_sha256` covers `num_ctx` + `CHAR_BUDGET` but
+not the model tag, so model identity is only recorded via
+`meta.llm.model`.
+
 ## LLM prompt
 
 Hardcoded in
