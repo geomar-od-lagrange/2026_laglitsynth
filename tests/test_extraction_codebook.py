@@ -269,7 +269,7 @@ class TestExtractCodebook:
     def test_list_field_coerced_to_joined_string(self) -> None:
         # LLMs treat plural-named fields as lists; coerce to a " / "-joined string.
         resp = _mock_openai_response(
-            '{"passage_locations": ["Section 2.1", "Table 3"]}'
+            '{"in_text_locations": ["Section 2.1", "Table 3"]}'
         )
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
@@ -282,10 +282,10 @@ class TestExtractCodebook:
             truncated=False,
         )
         assert record.reason is None
-        assert record.passage_locations == "Section 2.1 / Table 3"
+        assert record.in_text_locations == "Section 2.1 / Table 3"
 
     def test_empty_list_coerced_to_none(self) -> None:
-        resp = _mock_openai_response('{"passage_locations": []}')
+        resp = _mock_openai_response('{"in_text_locations": []}')
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         record = extract_codebook(
@@ -297,7 +297,7 @@ class TestExtractCodebook:
             truncated=False,
         )
         assert record.reason is None
-        assert record.passage_locations is None
+        assert record.in_text_locations is None
 
     def test_extra_fields_dropped_by_coercer(self) -> None:
         # LLMs at t>0 sprinkle extras like "confidence", "notes". The

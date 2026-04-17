@@ -226,7 +226,7 @@ structured JSON on typical paper bodies** — in smoke runs it returned
   a typical full paper.
 - `qwen2.5:14b` — ~140s per paper, fills 10-12 of 16 value fields;
   better on `sub_discipline`, `code_tracking_software`, and
-  `passage_locations` than `llama3.1:8b`.
+  `in_text_locations` than `llama3.1:8b`.
 
 Pick the model once and carry `--model` through to all stage 8
 invocations; the `prompt_sha256` covers `num_ctx` + `CHAR_BUDGET` but

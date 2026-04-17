@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from laglitsynth.models import _LlmMeta, _RunMeta
 
@@ -45,42 +45,183 @@ class _ExtractionPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # Tagging (free-text, consolidated later).
-    sub_discipline: str | None = None
-    sub_discipline_context: str | None = None
+    sub_discipline: str | None = Field(
+        default=None,
+        description=(
+            "Sub-discipline tag. Free text — use the paper's own phrasing "
+            "(e.g. 'water parcels', 'tracers', 'objects', 'passive debris "
+            "tracking', 'larval connectivity'). Not a fixed taxonomy."
+        ),
+    )
+    sub_discipline_context: str | None = Field(
+        default=None,
+        description="Short verbatim excerpt from the paper supporting the sub_discipline tag.",
+    )
 
     # RQ1.2 — numerical choices.
-    integration_scheme: str | None = None
-    integration_scheme_context: str | None = None
-    time_step_strategy: str | None = None
-    time_step_strategy_context: str | None = None
-    time_step_value: str | None = None
-    time_step_value_context: str | None = None
-    interpolation_spatial: str | None = None
-    interpolation_spatial_context: str | None = None
-    interpolation_temporal: str | None = None
-    interpolation_temporal_context: str | None = None
-    diffusion_scheme: str | None = None
-    diffusion_scheme_context: str | None = None
-    software: str | None = None
-    software_context: str | None = None
-    ocean_model: str | None = None
-    ocean_model_context: str | None = None
+    integration_scheme: str | None = Field(
+        default=None,
+        description=(
+            "Numerical integration scheme used to advance particles "
+            "(e.g. 'Euler forward', 'RK4', 'RK45 adaptive')."
+        ),
+    )
+    integration_scheme_context: str | None = Field(
+        default=None,
+        description="Short verbatim excerpt supporting integration_scheme.",
+    )
+    time_step_strategy: str | None = Field(
+        default=None,
+        description=(
+            "How the time step is chosen (e.g. 'fixed', 'adaptive CFL-based', "
+            "'sub-stepped within ocean model step'). Separate from time_step_value."
+        ),
+    )
+    time_step_strategy_context: str | None = Field(
+        default=None,
+        description="Short verbatim excerpt supporting time_step_strategy.",
+    )
+    time_step_value: str | None = Field(
+        default=None,
+        description=(
+            "Numeric time step with units if stated (e.g. '300s', '1h', "
+            "'variable'). Interpretable only alongside ocean_model resolution."
+        ),
+    )
+    time_step_value_context: str | None = Field(
+        default=None,
+        description="Short verbatim excerpt supporting time_step_value.",
+    )
+    interpolation_spatial: str | None = Field(
+        default=None,
+        description=(
+            "Spatial interpolation scheme for velocity at particle positions "
+            "(e.g. 'trilinear', 'bicubic + linear vertical')."
+        ),
+    )
+    interpolation_spatial_context: str | None = Field(
+        default=None,
+        description="Short verbatim excerpt supporting interpolation_spatial.",
+    )
+    interpolation_temporal: str | None = Field(
+        default=None,
+        description=(
+            "Temporal interpolation scheme between model snapshots "
+            "(e.g. 'linear between snapshots', 'none'). Often unstated."
+        ),
+    )
+    interpolation_temporal_context: str | None = Field(
+        default=None,
+        description="Short verbatim excerpt supporting interpolation_temporal.",
+    )
+    diffusion_scheme: str | None = Field(
+        default=None,
+        description=(
+            "Stochastic diffusion / random-walk scheme, if any "
+            "(e.g. 'random walk', 'Markov-1', 'none'). May not apply."
+        ),
+    )
+    diffusion_scheme_context: str | None = Field(
+        default=None,
+        description="Short verbatim excerpt supporting diffusion_scheme.",
+    )
+    software: str | None = Field(
+        default=None,
+        description=(
+            "Particle-tracking software used "
+            "(e.g. 'OceanParcels v2.4', 'OpenDrift', 'custom Fortran')."
+        ),
+    )
+    software_context: str | None = Field(
+        default=None,
+        description="Short verbatim excerpt supporting software.",
+    )
+    ocean_model: str | None = Field(
+        default=None,
+        description=(
+            "Ocean circulation model whose velocity field drives the tracking "
+            "(e.g. 'NEMO ORCA025', 'MITgcm', 'ROMS L3')."
+        ),
+    )
+    ocean_model_context: str | None = Field(
+        default=None,
+        description="Short verbatim excerpt supporting ocean_model.",
+    )
 
     # RQ1.1 — reproducibility.
-    methods_detail: str | None = None
-    methods_detail_context: str | None = None
-    code_tracking_software: str | None = None
-    code_tracking_software_context: str | None = None
-    code_experiment_setup: str | None = None
-    code_experiment_setup_context: str | None = None
-    code_analysis: str | None = None
-    code_analysis_context: str | None = None
-    config_available: str | None = None
-    config_available_context: str | None = None
+    methods_detail: str | None = Field(
+        default=None,
+        description=(
+            "Brief summary of how thoroughly the numerical methods are "
+            "described in the paper. Describe quality, not content."
+        ),
+    )
+    methods_detail_context: str | None = Field(
+        default=None,
+        description="Short verbatim excerpt supporting methods_detail.",
+    )
+    code_tracking_software: str | None = Field(
+        default=None,
+        description=(
+            "Availability statement for the particle-tracking software itself "
+            "(e.g. 'yes, GitHub link', 'named but not linked', 'not mentioned')."
+        ),
+    )
+    code_tracking_software_context: str | None = Field(
+        default=None,
+        description="Short verbatim excerpt supporting code_tracking_software.",
+    )
+    code_experiment_setup: str | None = Field(
+        default=None,
+        description=(
+            "Availability of experiment setup / preprocessing scripts "
+            "(configuration, domain setup, forcing)."
+        ),
+    )
+    code_experiment_setup_context: str | None = Field(
+        default=None,
+        description="Short verbatim excerpt supporting code_experiment_setup.",
+    )
+    code_analysis: str | None = Field(
+        default=None,
+        description=(
+            "Availability of analysis scripts (post-processing, plotting, statistics)."
+        ),
+    )
+    code_analysis_context: str | None = Field(
+        default=None,
+        description="Short verbatim excerpt supporting code_analysis.",
+    )
+    config_available: str | None = Field(
+        default=None,
+        description=(
+            "Whether runtime parameters (domain, resolution, forcing) are "
+            "given in the paper itself. Describe availability in words, "
+            "not as a yes/no boolean."
+        ),
+    )
+    config_available_context: str | None = Field(
+        default=None,
+        description="Short verbatim excerpt supporting config_available.",
+    )
 
     # Extraction metadata.
-    passage_locations: str | None = None
-    extraction_notes: str | None = None
+    in_text_locations: str | None = Field(
+        default=None,
+        description=(
+            "Where in THIS PAPER the extracted values were found — section "
+            "headings, figure/table numbers, or nearby phrases that help a "
+            "human reviewer locate them. Not the paper's subject matter; "
+            "not geographic place names in the paper's content."
+        ),
+    )
+    extraction_notes: str | None = Field(
+        default=None,
+        description=(
+            "What was ambiguous, surprising, or hard to classify about this "
+            "paper's methods. Free text."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -88,7 +229,7 @@ class _ExtractionPayload(BaseModel):
         """Coerce natural-JSON LLM responses into the ``str | None`` contract.
 
         LLMs frequently answer a field called ``config_available`` with a
-        JSON bool, or ``passage_locations`` with a list. Rather than fail
+        JSON bool, or ``in_text_locations`` with a list. Rather than fail
         the whole record on a type mismatch, flatten to string at ingest.
         ``None`` and empty lists pass through as ``None``.
 
@@ -166,7 +307,7 @@ class ExtractionRecord(BaseModel):
     config_available_context: str | None
 
     # Extraction metadata.
-    passage_locations: str | None
+    in_text_locations: str | None
     extraction_notes: str | None
 
 

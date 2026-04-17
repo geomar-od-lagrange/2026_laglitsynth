@@ -31,14 +31,17 @@ CHAR_BUDGET = 60_000
 def _field_line(name: str, info: dict[str, Any]) -> str:
     description = info.get("description")
     if description:
-        return f"- {name}: {description}"
-    return f"- {name}"
+        return f'- "{name}": {description}'
+    return f'- "{name}"'
 
 
 def _render_field_list() -> str:
     schema = _ExtractionPayload.model_json_schema()
     properties: dict[str, dict[str, Any]] = schema.get("properties", {})
-    # model_json_schema preserves field definition order.
+    # model_json_schema preserves field definition order and emits the
+    # per-field ``description`` set via ``Field(..., description=...)``
+    # on ``_ExtractionPayload`` — so the LLM sees the codebook
+    # definition of each field, not just its name.
     return "\n".join(_field_line(name, info) for name, info in properties.items())
 
 
