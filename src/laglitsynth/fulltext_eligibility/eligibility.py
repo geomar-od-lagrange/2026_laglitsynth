@@ -44,6 +44,7 @@ from laglitsynth.models import _LlmMeta, _RunMeta
 logger = logging.getLogger(__name__)
 
 _TEMPERATURE = 0.8
+_NUM_CTX = 32768
 
 
 class ClassifyError(Exception):
@@ -68,6 +69,7 @@ def classify_eligibility(
         ],
         temperature=_TEMPERATURE,
         seed=seed,
+        extra_body={"options": {"num_ctx": _NUM_CTX}},
     )
     content = response.choices[0].message.content or "{}"
     try:
