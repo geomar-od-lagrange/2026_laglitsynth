@@ -11,8 +11,9 @@ import pytest
 
 from laglitsynth.fulltext_retrieval.models import RetrievalRecord, RetrievalStatus
 from laglitsynth.fulltext_retrieval.retrieve import (
+    _DOI_PREFIX_RE,
+    _RateLimiter,
     _load_existing,
-    _rate_limit,
     _retrieve_one,
     _validate_pdf,
     run,
@@ -59,6 +60,11 @@ def _pdf_content() -> bytes:
     return b"%PDF-1.4 fake pdf content"
 
 
+def _make_rate_limiter() -> _RateLimiter:
+    rl = _RateLimiter()
+    return rl
+
+
 class TestWorkIdToFilename:
     def test_extracts_suffix(self) -> None:
         assert work_id_to_filename("https://openalex.org/W1234567890") == "W1234567890"
@@ -69,13 +75,18 @@ class TestWorkIdToFilename:
 
 class TestValidatePdf:
     def test_pdf_header(self) -> None:
-        assert _validate_pdf(b"%PDF-1.4 content", None) is True
+        assert _validate_pdf(b"%PDF-1.4 content") is True
 
-    def test_content_type(self) -> None:
-        assert _validate_pdf(b"not pdf header", "application/pdf") is True
+    def test_rejects_html_with_pdf_content_type(self) -> None:
+        # Content-type alone is not enough; magic bytes must be %PDF.
+        assert _validate_pdf(b"<html>") is False
+
+    def test_rejects_html_body(self) -> None:
+        # HTML body, would-be application/pdf content-type, must be rejected.
+        assert _validate_pdf(b"<html><body>error page</body></html>") is False
 
     def test_invalid(self) -> None:
-        assert _validate_pdf(b"<html>", "text/html") is False
+        assert _validate_pdf(b"not pdf at all") is False
 
 
 class TestOaRetrieval:
@@ -89,8 +100,9 @@ class TestOaRetrieval:
         )
         client = MagicMock(spec=httpx.Client)
         client.get.return_value = mock_response
+        rate_limiter = _RateLimiter()
 
-        with patch("laglitsynth.fulltext_retrieval.retrieve._rate_limit"):
+        with patch.object(rate_limiter, "wait"):
             record = _retrieve_one(
                 work,
                 tmp_path,
@@ -98,6 +110,7 @@ class TestOaRetrieval:
                 email="test@example.com",
                 manual_dir=None,
                 dry_run=False,
+                rate_limiter=rate_limiter,
             )
 
         assert record.retrieval_status == RetrievalStatus.retrieved_oa
@@ -130,8 +143,9 @@ class TestUnpaywallFallback:
 
         client = MagicMock(spec=httpx.Client)
         client.get.side_effect = [unpaywall_response, pdf_response]
+        rate_limiter = _RateLimiter()
 
-        with patch("laglitsynth.fulltext_retrieval.retrieve._rate_limit"):
+        with patch.object(rate_limiter, "wait"):
             record = _retrieve_one(
                 work,
                 tmp_path,
@@ -139,6 +153,7 @@ class TestUnpaywallFallback:
                 email="test@example.com",
                 manual_dir=None,
                 dry_run=False,
+                rate_limiter=rate_limiter,
             )
 
         assert record.retrieval_status == RetrievalStatus.retrieved_unpaywall
@@ -154,6 +169,7 @@ class TestManualPickup:
         (manual_dir / f"{fname}.pdf").write_bytes(_pdf_content())
 
         client = MagicMock(spec=httpx.Client)
+        rate_limiter = _RateLimiter()
 
         record = _retrieve_one(
             work,
@@ -162,6 +178,7 @@ class TestManualPickup:
             email="test@example.com",
             manual_dir=manual_dir,
             dry_run=False,
+            rate_limiter=rate_limiter,
         )
 
         assert record.retrieval_status == RetrievalStatus.retrieved_manual
@@ -173,6 +190,7 @@ class TestAbstractOnly:
     def test_no_sources(self, tmp_path: Path) -> None:
         work = _make_work(doi=None)
         client = MagicMock(spec=httpx.Client)
+        rate_limiter = _RateLimiter()
 
         record = _retrieve_one(
             work,
@@ -181,6 +199,7 @@ class TestAbstractOnly:
             email="test@example.com",
             manual_dir=None,
             dry_run=False,
+            rate_limiter=rate_limiter,
         )
 
         assert record.retrieval_status == RetrievalStatus.abstract_only
@@ -189,7 +208,8 @@ class TestAbstractOnly:
 
 class TestFailedOnHttpError:
     def test_http_403(self, tmp_path: Path) -> None:
-        work = _make_work(pdf_url="https://example.com/paper.pdf")
+        # OA URL attempted and received a 403 — must yield failed, not abstract_only.
+        work = _make_work(doi=None, pdf_url="https://example.com/paper.pdf")
 
         response = httpx.Response(
             403,
@@ -204,8 +224,9 @@ class TestFailedOnHttpError:
             )
         )
         client.get.return_value = response
+        rate_limiter = _RateLimiter()
 
-        with patch("laglitsynth.fulltext_retrieval.retrieve._rate_limit"):
+        with patch.object(rate_limiter, "wait"):
             record = _retrieve_one(
                 work,
                 tmp_path,
@@ -213,11 +234,58 @@ class TestFailedOnHttpError:
                 email="test@example.com",
                 manual_dir=None,
                 dry_run=False,
+                rate_limiter=rate_limiter,
             )
 
-        # OA 403 falls through the cascade to abstract_only (no Unpaywall
-        # without a DOI on this test work).
-        assert record.retrieval_status == RetrievalStatus.abstract_only
+        # OA URL was attempted and failed — should be failed, not abstract_only.
+        assert record.retrieval_status == RetrievalStatus.failed
+        assert record.error is not None
+        assert "403" in record.error
+
+    def test_unpaywall_download_fails_marks_failed(self, tmp_path: Path) -> None:
+        # Unpaywall API succeeds but the PDF download fails — must yield failed.
+        work = _make_work(doi="https://doi.org/10.1234/test")
+
+        unpaywall_response = httpx.Response(
+            200,
+            json={
+                "best_oa_location": {
+                    "url_for_pdf": "https://unpaywall.example.com/paper.pdf"
+                }
+            },
+            request=httpx.Request(
+                "GET", "https://api.unpaywall.org/v2/10.1234%2Ftest?email=test@example.com"
+            ),
+        )
+        failed_pdf_response = httpx.Response(
+            503,
+            request=httpx.Request("GET", "https://unpaywall.example.com/paper.pdf"),
+        )
+        failed_pdf_response.raise_for_status = MagicMock(  # type: ignore[method-assign]
+            side_effect=httpx.HTTPStatusError(
+                "503 Service Unavailable",
+                request=failed_pdf_response.request,
+                response=failed_pdf_response,
+            )
+        )
+
+        client = MagicMock(spec=httpx.Client)
+        client.get.side_effect = [unpaywall_response, failed_pdf_response]
+        rate_limiter = _RateLimiter()
+
+        with patch.object(rate_limiter, "wait"):
+            record = _retrieve_one(
+                work,
+                tmp_path,
+                client=client,
+                email="test@example.com",
+                manual_dir=None,
+                dry_run=False,
+                rate_limiter=rate_limiter,
+            )
+
+        assert record.retrieval_status == RetrievalStatus.failed
+        assert record.error is not None
 
 
 class TestSkipExisting:
@@ -249,7 +317,12 @@ class TestSkipExisting:
             for r in records:
                 f.write(r.model_dump_json() + "\n")
 
-        skip_ids = _load_existing(output_dir)
+        existing = _load_existing(output_dir)
+        skip_ids = {
+            wid
+            for wid, rec in existing.items()
+            if rec.retrieval_status.value.startswith("retrieved_")
+        }
         # retrieved_oa should be skipped; failed and abstract_only should not
         assert "https://openalex.org/W1" in skip_ids
         assert "https://openalex.org/W2" not in skip_ids
@@ -276,9 +349,11 @@ class TestUnretrievedTxt:
         # All downloads fail
         client_mock.get.side_effect = httpx.ConnectError("connection refused")
 
+        rl = _RateLimiter()
         with (
             patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client", return_value=client_mock),
-            patch("laglitsynth.fulltext_retrieval.retrieve._rate_limit"),
+            patch("laglitsynth.fulltext_retrieval.retrieve._RateLimiter", return_value=rl),
+            patch.object(rl, "wait"),
         ):
             run(args)
 
@@ -289,25 +364,231 @@ class TestUnretrievedTxt:
         assert "no-doi" in unretrieved[1]
         assert "W2.pdf" in unretrieved[1]
 
+    def test_unretrieved_output_dry_run(self, tmp_path: Path) -> None:
+        works = [
+            _make_work("https://openalex.org/W1", doi="https://doi.org/10.1/a"),
+            _make_work("https://openalex.org/W2", doi=None),
+        ]
+        _write_works_jsonl(tmp_path / "input.jsonl", works)
+
+        args = MagicMock()
+        args.input = tmp_path / "input.jsonl"
+        args.output_dir = tmp_path / "out"
+        args.email = "test@example.com"
+        args.manual_dir = None
+        args.skip_existing = False
+        args.dry_run = True
+
+        # No network calls expected under dry_run.
+        client_mock = MagicMock(spec=httpx.Client)
+
+        rl = _RateLimiter()
+        with (
+            patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client", return_value=client_mock),
+            patch("laglitsynth.fulltext_retrieval.retrieve._RateLimiter", return_value=rl),
+        ):
+            run(args)
+
+        unretrieved_path = tmp_path / "out" / "unretrieved.txt"
+        assert unretrieved_path.exists()
+        lines = unretrieved_path.read_text().strip().splitlines()
+        # Both W1 and W2 have no OA URLs and no manual files → abstract_only
+        assert len(lines) == 2
+
+    def test_unretrieved_output_skip_existing(self, tmp_path: Path) -> None:
+        # Pre-seed retrieval.jsonl with a failed record for W1 and retrieved_oa for W2.
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+        retrieval_path = output_dir / "retrieval.jsonl"
+
+        seeded = [
+            RetrievalRecord(
+                work_id="https://openalex.org/W1",
+                retrieval_status=RetrievalStatus.failed,
+                error="timeout",
+                retrieved_at="2026-01-01T00:00:00",
+            ),
+            RetrievalRecord(
+                work_id="https://openalex.org/W2",
+                retrieval_status=RetrievalStatus.retrieved_oa,
+                retrieved_at="2026-01-01T00:00:00",
+            ),
+        ]
+        with open(retrieval_path, "w") as f:
+            for r in seeded:
+                f.write(r.model_dump_json() + "\n")
+
+        works = [
+            _make_work("https://openalex.org/W1", doi="https://doi.org/10.1/a"),
+            _make_work("https://openalex.org/W2", doi=None),
+        ]
+        _write_works_jsonl(tmp_path / "input.jsonl", works)
+
+        args = MagicMock()
+        args.input = tmp_path / "input.jsonl"
+        args.output_dir = output_dir
+        args.email = "test@example.com"
+        args.manual_dir = None
+        args.skip_existing = True
+        args.dry_run = False
+
+        # W1 will be retried; all downloads fail.
+        client_mock = MagicMock(spec=httpx.Client)
+        client_mock.get.side_effect = httpx.ConnectError("connection refused")
+
+        rl = _RateLimiter()
+        with (
+            patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client", return_value=client_mock),
+            patch("laglitsynth.fulltext_retrieval.retrieve._RateLimiter", return_value=rl),
+            patch.object(rl, "wait"),
+        ):
+            run(args)
+
+        unretrieved_path = output_dir / "unretrieved.txt"
+        lines = unretrieved_path.read_text().strip().splitlines()
+        # W1 still failed → in unretrieved; W2 is retrieved_oa → not in unretrieved
+        assert any("W1.pdf" in line for line in lines)
+        assert not any("W2.pdf" in line for line in lines)
+
+
+class TestRetrievalJsonl:
+    def test_no_duplicates_on_rerun(self, tmp_path: Path) -> None:
+        works = [
+            _make_work("https://openalex.org/W1", doi=None),
+            _make_work("https://openalex.org/W2", doi=None),
+        ]
+        _write_works_jsonl(tmp_path / "input.jsonl", works)
+
+        args = MagicMock()
+        args.input = tmp_path / "input.jsonl"
+        args.output_dir = tmp_path / "out"
+        args.email = "test@example.com"
+        args.manual_dir = None
+        args.skip_existing = False
+        args.dry_run = False
+
+        client_mock = MagicMock(spec=httpx.Client)
+        client_mock.get.side_effect = httpx.ConnectError("connection refused")
+
+        rl = _RateLimiter()
+        with (
+            patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client", return_value=client_mock),
+            patch("laglitsynth.fulltext_retrieval.retrieve._RateLimiter", return_value=rl),
+        ):
+            run(args)
+            run(args)
+
+        retrieval_path = tmp_path / "out" / "retrieval.jsonl"
+        lines = [l for l in retrieval_path.read_text().splitlines() if l.strip()]
+        assert len(lines) == 2
+        work_ids = [json.loads(l)["work_id"] for l in lines]
+        assert len(set(work_ids)) == 2
+
+    def test_preserves_existing_rows_under_skip_existing(self, tmp_path: Path) -> None:
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+        retrieval_path = output_dir / "retrieval.jsonl"
+
+        existing_rec = RetrievalRecord(
+            work_id="https://openalex.org/W1",
+            retrieval_status=RetrievalStatus.retrieved_oa,
+            retrieved_at="2026-01-01T00:00:00",
+        )
+        with open(retrieval_path, "w") as f:
+            f.write(existing_rec.model_dump_json() + "\n")
+
+        # Input has the pre-seeded work plus a new work.
+        works = [
+            _make_work("https://openalex.org/W1", doi=None),
+            _make_work("https://openalex.org/W2", doi=None),
+        ]
+        _write_works_jsonl(tmp_path / "input.jsonl", works)
+
+        args = MagicMock()
+        args.input = tmp_path / "input.jsonl"
+        args.output_dir = output_dir
+        args.email = "test@example.com"
+        args.manual_dir = None
+        args.skip_existing = True
+        args.dry_run = False
+
+        client_mock = MagicMock(spec=httpx.Client)
+        client_mock.get.side_effect = httpx.ConnectError("connection refused")
+
+        rl = _RateLimiter()
+        with (
+            patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client", return_value=client_mock),
+            patch("laglitsynth.fulltext_retrieval.retrieve._RateLimiter", return_value=rl),
+        ):
+            run(args)
+
+        lines = [l for l in retrieval_path.read_text().splitlines() if l.strip()]
+        assert len(lines) == 2
+        work_ids = [json.loads(l)["work_id"] for l in lines]
+        assert "https://openalex.org/W1" in work_ids
+        assert "https://openalex.org/W2" in work_ids
+
 
 class TestRateLimiting:
     def test_rate_limit_sleeps(self) -> None:
-        import laglitsynth.fulltext_retrieval.retrieve as mod
-
-        # Clear state
-        mod._last_request.clear()
+        rl = _RateLimiter()
 
         with patch("laglitsynth.fulltext_retrieval.retrieve.time") as mock_time:
             mock_time.monotonic.side_effect = [
-                10.0,  # first call: now (no domain entry yet, skip sleep)
-                10.0,  # first call: update _last_request
-                10.3,  # second call: now (only 0.3s later)
-                11.0,  # second call: update _last_request after sleep
+                10.0,  # first wait(): now (no domain entry yet, skip sleep)
+                10.0,  # first wait(): record _last_request
+                10.3,  # second wait(): now (only 0.3s later)
+                11.0,  # second wait(): record _last_request after sleep
             ]
             mock_time.sleep = MagicMock()
 
-            _rate_limit("example.com", min_interval=1.0)
+            rl.wait("example.com", min_interval=1.0)
             assert mock_time.sleep.call_count == 0
 
-            _rate_limit("example.com", min_interval=1.0)
+            rl.wait("example.com", min_interval=1.0)
             mock_time.sleep.assert_called_once_with(pytest.approx(0.7, abs=0.01))
+
+
+class TestDoiNormalisation:
+    """Verify that DOI prefix stripping works for all realistic input forms."""
+
+    def test_https_prefix(self) -> None:
+        doi = "https://doi.org/10.1234/test"
+        assert _DOI_PREFIX_RE.sub("", doi) == "10.1234/test"
+
+    def test_http_prefix(self) -> None:
+        doi = "http://doi.org/10.1234/test"
+        assert _DOI_PREFIX_RE.sub("", doi) == "10.1234/test"
+
+    def test_dx_doi_org(self) -> None:
+        doi = "https://dx.doi.org/10.1234/test"
+        assert _DOI_PREFIX_RE.sub("", doi) == "10.1234/test"
+
+    def test_uppercase_https(self) -> None:
+        doi = "HTTPS://DOI.ORG/10.1234/test"
+        assert _DOI_PREFIX_RE.sub("", doi) == "10.1234/test"
+
+    def test_bare_doi(self) -> None:
+        doi = "10.1234/test"
+        assert _DOI_PREFIX_RE.sub("", doi) == "10.1234/test"
+
+
+class TestDryRunStatusHonesty:
+    def test_doi_only_work_yields_abstract_only(self, tmp_path: Path) -> None:
+        # A work with only a DOI (no OA URLs, no manual file) under --dry-run
+        # must produce abstract_only, not retrieved_unpaywall.
+        work = _make_work(doi="https://doi.org/10.1234/test")
+        client = MagicMock(spec=httpx.Client)
+        rate_limiter = _RateLimiter()
+
+        record = _retrieve_one(
+            work,
+            tmp_path,
+            client=client,
+            email="test@example.com",
+            manual_dir=None,
+            dry_run=True,
+            rate_limiter=rate_limiter,
+        )
+
+        assert record.retrieval_status == RetrievalStatus.abstract_only

@@ -21,3 +21,4 @@ class ExtractionMeta(_Base):
     total_pdfs: int
     extracted_count: int
     failed_count: int
+    invalid_stem_count: int = 0

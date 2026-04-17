@@ -17,11 +17,15 @@ from laglitsynth.fulltext_extraction.models import (
     ExtractionMeta,
     TextSection,
 )
+from laglitsynth.ids import filename_to_work_id
 from laglitsynth.io import append_jsonl, read_jsonl, write_meta
 
 logger = logging.getLogger(__name__)
 
 TEI_NS = "{http://www.tei-c.org/ns/1.0}"
+
+# Hardened parser: no external-entity resolution, no network access.
+_TEI_PARSER = etree.XMLParser(resolve_entities=False, no_network=True)
 
 
 def _element_text(el: etree._Element) -> str:
@@ -30,7 +34,7 @@ def _element_text(el: etree._Element) -> str:
 
 
 def parse_tei(xml_bytes: bytes) -> list[TextSection]:
-    root = etree.fromstring(xml_bytes)
+    root = etree.fromstring(xml_bytes, parser=_TEI_PARSER)
     body = root.find(f".//{TEI_NS}body")
     if body is None:
         return []
@@ -158,17 +162,19 @@ def run(args: argparse.Namespace) -> None:
     tei_dir = output_dir / "tei"
     tei_dir.mkdir(parents=True, exist_ok=True)
 
-    client = httpx.Client(timeout=args.timeout)
+    # Short-timeout client for preflight health/version checks.
+    preflight_client = httpx.Client(timeout=5.0)
 
-    if not _grobid_health(args.grobid_url, client):
-        client.close()
+    if not _grobid_health(args.grobid_url, preflight_client):
+        preflight_client.close()
         raise SystemExit(
             f"GROBID is not running at {args.grobid_url}.\n"
             "Start it with: docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0\n"
             "Wait 30-60 seconds for startup, then retry."
         )
 
-    version = _grobid_version(args.grobid_url, client)
+    version = _grobid_version(args.grobid_url, preflight_client)
+    preflight_client.close()
 
     skip_ids: set[str] = set()
     if args.skip_existing:
@@ -187,10 +193,25 @@ def run(args: argparse.Namespace) -> None:
     t0 = time.monotonic()
     extracted_count = 0
     failed_count = 0
+    invalid_stem_count = 0
 
+    # Per-paper client uses the full (potentially long) timeout.
+    client = httpx.Client(timeout=args.timeout)
     try:
         for i, pdf in enumerate(pdfs, 1):
-            work_id = f"https://openalex.org/{pdf.stem}"
+            work_id = filename_to_work_id(pdf.stem)
+            if work_id is None:
+                invalid_stem_count += 1
+                logger.warning(
+                    "Skipping %s: stem %r does not match ^W\\d+$ pattern",
+                    pdf,
+                    pdf.stem,
+                )
+                print(
+                    f"  WARNING: skipping {pdf.name} — stem {pdf.stem!r} is not a valid OpenAlex W-ID",
+                    file=sys.stderr,
+                )
+                continue
 
             if work_id in skip_ids:
                 continue
@@ -241,11 +262,12 @@ def run(args: argparse.Namespace) -> None:
             total_pdfs=total,
             extracted_count=extracted_count,
             failed_count=failed_count,
+            invalid_stem_count=invalid_stem_count,
         ),
     )
 
     print(
-        f"\nExtraction done: {extracted_count} extracted, {failed_count} failed."
-        f" ({elapsed:.1f}s)",
+        f"\nExtraction done: {extracted_count} extracted, {failed_count} failed"
+        f", {invalid_stem_count} skipped (invalid stem). ({elapsed:.1f}s)",
         file=sys.stderr,
     )

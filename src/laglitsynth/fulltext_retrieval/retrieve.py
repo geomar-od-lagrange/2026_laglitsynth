@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import shutil
 import sys
 import tempfile
@@ -17,32 +18,44 @@ import httpx
 
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.fulltext_retrieval.models import RetrievalMeta, RetrievalRecord, RetrievalStatus
+from laglitsynth.ids import work_id_to_filename
 from laglitsynth.io import append_jsonl, read_jsonl, read_works_jsonl, write_meta
 
 logger = logging.getLogger(__name__)
 
-_last_request: dict[str, float] = {}
+# Re-export for backwards compatibility with existing test imports.
+__all__ = ["work_id_to_filename"]
+
+_DOI_PREFIX_RE = re.compile(r"^https?://(dx\.)?doi\.org/", re.IGNORECASE)
+
+# Display labels for summary output — aligned with docs/fulltext-retrieval.md.
+_STATUS_LABELS: dict[RetrievalStatus, str] = {
+    RetrievalStatus.retrieved_oa: "Retrieved (OA)",
+    RetrievalStatus.retrieved_unpaywall: "Retrieved (Unpaywall)",
+    RetrievalStatus.retrieved_preprint: "Retrieved (preprint)",
+    RetrievalStatus.retrieved_manual: "Retrieved (manual)",
+    RetrievalStatus.abstract_only: "Abstract-only",
+    RetrievalStatus.failed: "Failed",
+}
 
 
-def _rate_limit(domain: str, min_interval: float = 1.0) -> None:
-    now = time.monotonic()
-    if domain in _last_request:
-        last = _last_request[domain]
-        if now - last < min_interval:
-            time.sleep(min_interval - (now - last))
-    _last_request[domain] = time.monotonic()
+class _RateLimiter:
+    """Per-domain rate limiter; encapsulates last-request timestamps."""
+
+    def __init__(self) -> None:
+        self._last_request: dict[str, float] = {}
+
+    def wait(self, domain: str, min_interval: float = 1.0) -> None:
+        now = time.monotonic()
+        if domain in self._last_request:
+            last = self._last_request[domain]
+            if now - last < min_interval:
+                time.sleep(min_interval - (now - last))
+        self._last_request[domain] = time.monotonic()
 
 
-def work_id_to_filename(work_id: str) -> str:
-    return work_id.rsplit("/", 1)[-1]
-
-
-def _validate_pdf(data: bytes, content_type: str | None) -> bool:
-    if data[:4] == b"%PDF":
-        return True
-    if content_type is not None and "application/pdf" in content_type:
-        return True
-    return False
+def _validate_pdf(data: bytes) -> bool:
+    return data[:4] == b"%PDF"
 
 
 def _download_pdf(
@@ -50,13 +63,13 @@ def _download_pdf(
     dest: Path,
     *,
     client: httpx.Client,
+    rate_limiter: _RateLimiter,
 ) -> None:
     domain = urlparse(url).hostname or "unknown"
-    _rate_limit(domain)
+    rate_limiter.wait(domain)
     response = client.get(url, follow_redirects=True)
     response.raise_for_status()
-    content_type = response.headers.get("content-type")
-    if not _validate_pdf(response.content, content_type):
+    if not _validate_pdf(response.content):
         raise ValueError(f"Response from {url} is not a valid PDF")
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp_fd = tempfile.NamedTemporaryFile(
@@ -78,6 +91,7 @@ def _try_oa_urls(
     pdf_dest: Path,
     *,
     client: httpx.Client,
+    rate_limiter: _RateLimiter,
 ) -> tuple[RetrievalStatus, str] | None:
     urls: list[str] = []
     if work.primary_location is not None and work.primary_location.pdf_url is not None:
@@ -86,14 +100,27 @@ def _try_oa_urls(
         oa_url = work.open_access.oa_url
         if oa_url not in urls:
             urls.append(oa_url)
+    if not urls:
+        return None
+    last_exc: Exception | None = None
     for url in urls:
         try:
-            _download_pdf(url, pdf_dest, client=client)
+            _download_pdf(url, pdf_dest, client=client, rate_limiter=rate_limiter)
             return RetrievalStatus.retrieved_oa, url
         except Exception as exc:
             logger.debug("OA download failed for %s: %s", url, exc)
+            last_exc = exc
             continue
-    return None
+    # All URLs were attempted and all failed — signal failure upward.
+    raise _AllAttemptsFailedError(last_exc)
+
+
+class _AllAttemptsFailedError(Exception):
+    """Raised when every download attempt for a set of URLs failed."""
+
+    def __init__(self, last_exc: Exception | None) -> None:
+        super().__init__(str(last_exc) if last_exc else "all attempts failed")
+        self.last_exc = last_exc
 
 
 def _try_unpaywall(
@@ -102,16 +129,17 @@ def _try_unpaywall(
     *,
     client: httpx.Client,
     email: str,
+    rate_limiter: _RateLimiter,
 ) -> tuple[RetrievalStatus, str] | None:
     if work.doi is None:
         return None
-    doi = work.doi.replace("https://doi.org/", "")
+    doi = _DOI_PREFIX_RE.sub("", work.doi)
     api_url = (
         f"https://api.unpaywall.org/v2/{quote(doi, safe='')}"
         f"?email={quote(email, safe='@.')}"
     )
     domain = "api.unpaywall.org"
-    _rate_limit(domain)
+    rate_limiter.wait(domain)
     response = client.get(api_url, follow_redirects=True)
     response.raise_for_status()
     data = response.json()
@@ -121,7 +149,7 @@ def _try_unpaywall(
     pdf_url = best_loc.get("url_for_pdf")
     if pdf_url is None:
         return None
-    _download_pdf(pdf_url, pdf_dest, client=client)
+    _download_pdf(pdf_url, pdf_dest, client=client, rate_limiter=rate_limiter)
     return RetrievalStatus.retrieved_unpaywall, pdf_url
 
 
@@ -150,6 +178,7 @@ def _retrieve_one(
     email: str,
     manual_dir: Path | None,
     dry_run: bool,
+    rate_limiter: _RateLimiter,
 ) -> RetrievalRecord:
     fname = work_id_to_filename(work.id)
     pdf_dest = output_dir / "pdfs" / f"{fname}.pdf"
@@ -167,7 +196,6 @@ def _retrieve_one(
                 and work.open_access.oa_url is not None
             )
         )
-        has_doi = work.doi is not None
         has_manual = (
             manual_dir is not None
             and (manual_dir / f"{fname}.pdf").is_file()
@@ -176,8 +204,6 @@ def _retrieve_one(
             status = RetrievalStatus.retrieved_manual
         elif has_oa:
             status = RetrievalStatus.retrieved_oa
-        elif has_doi:
-            status = RetrievalStatus.retrieved_unpaywall
         else:
             status = RetrievalStatus.abstract_only
         return RetrievalRecord(
@@ -186,7 +212,10 @@ def _retrieve_one(
             retrieved_at=now,
         )
 
-    # 1. Manual
+    attempted = False
+    last_exc: Exception | None = None
+
+    # 1. Manual (no network, never marks attempted; manual absence is not a failure)
     result = _try_manual(work, pdf_dest, manual_dir=manual_dir)
     if result is not None:
         return RetrievalRecord(
@@ -197,32 +226,54 @@ def _retrieve_one(
             retrieved_at=now,
         )
 
-    # 2. OA URLs (exceptions handled per-URL inside _try_oa_urls)
-    result = _try_oa_urls(work, pdf_dest, client=client)
-    if result is not None:
+    # 2. OA URLs
+    has_oa_urls = (
+        (work.primary_location is not None and work.primary_location.pdf_url is not None)
+        or (work.open_access is not None and work.open_access.oa_url is not None)
+    )
+    if has_oa_urls:
+        attempted = True
+        try:
+            result = _try_oa_urls(work, pdf_dest, client=client, rate_limiter=rate_limiter)
+            if result is not None:
+                return RetrievalRecord(
+                    work_id=work.id,
+                    retrieval_status=result[0],
+                    source_url=result[1],
+                    pdf_path=pdf_rel,
+                    retrieved_at=now,
+                )
+        except _AllAttemptsFailedError as exc:
+            logger.debug("All OA URLs failed for %s: %s", work.id, exc)
+            last_exc = exc.last_exc if exc.last_exc is not None else exc
+
+    # 3. Unpaywall
+    if work.doi is not None:
+        attempted = True
+        try:
+            result = _try_unpaywall(
+                work, pdf_dest, client=client, email=email, rate_limiter=rate_limiter
+            )
+            if result is not None:
+                return RetrievalRecord(
+                    work_id=work.id,
+                    retrieval_status=result[0],
+                    source_url=result[1],
+                    pdf_path=pdf_rel,
+                    retrieved_at=now,
+                )
+        except Exception as exc:
+            logger.debug("Unpaywall failed for %s: %s", work.id, exc)
+            last_exc = exc
+
+    # 4. No source — or all attempts failed
+    if attempted and last_exc is not None:
         return RetrievalRecord(
             work_id=work.id,
-            retrieval_status=result[0],
-            source_url=result[1],
-            pdf_path=pdf_rel,
+            retrieval_status=RetrievalStatus.failed,
+            error=str(last_exc),
             retrieved_at=now,
         )
-
-    # 3. Unpaywall (failure here falls through to abstract_only)
-    try:
-        result = _try_unpaywall(work, pdf_dest, client=client, email=email)
-        if result is not None:
-            return RetrievalRecord(
-                work_id=work.id,
-                retrieval_status=result[0],
-                source_url=result[1],
-                pdf_path=pdf_rel,
-                retrieved_at=now,
-            )
-    except Exception as exc:
-        logger.debug("Unpaywall failed for %s: %s", work.id, exc)
-
-    # 4. No source
     return RetrievalRecord(
         work_id=work.id,
         retrieval_status=RetrievalStatus.abstract_only,
@@ -230,15 +281,23 @@ def _retrieve_one(
     )
 
 
-def _load_existing(output_dir: Path) -> set[str]:
+def _load_existing(output_dir: Path) -> dict[str, RetrievalRecord]:
+    """Load existing records from retrieval.jsonl keyed by work_id."""
     retrieval_path = output_dir / "retrieval.jsonl"
     if not retrieval_path.exists():
-        return set()
-    skip_ids: set[str] = set()
+        return {}
+    records: dict[str, RetrievalRecord] = {}
     for rec in read_jsonl(retrieval_path, RetrievalRecord):
-        if rec.retrieval_status.value.startswith("retrieved_"):
-            skip_ids.add(rec.work_id)
-    return skip_ids
+        records[rec.work_id] = rec
+    return records
+
+
+def _write_retrieval_jsonl(records: list[RetrievalRecord], path: Path) -> None:
+    """Overwrite retrieval.jsonl with the given records."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        for rec in records:
+            f.write(rec.model_dump_json() + "\n")
 
 
 def build_subparser(
@@ -275,9 +334,19 @@ def run(args: argparse.Namespace) -> None:
     if manual_dir is None:
         manual_dir = output_dir / "manual"
 
+    # Load all previously recorded records (regardless of --skip-existing, so
+    # we can preserve rows for works not in this run's input).
+    existing: dict[str, RetrievalRecord] = _load_existing(output_dir)
+
+    # Works that already have a successful retrieval status are skipped under
+    # --skip-existing.
     skip_ids: set[str] = set()
     if args.skip_existing:
-        skip_ids = _load_existing(output_dir)
+        skip_ids = {
+            wid
+            for wid, rec in existing.items()
+            if rec.retrieval_status.value.startswith("retrieved_")
+        }
         if skip_ids:
             print(
                 f"Skipping {len(skip_ids)} already-retrieved works.",
@@ -287,19 +356,35 @@ def run(args: argparse.Namespace) -> None:
     retrieval_path = output_dir / "retrieval.jsonl"
     works = list(read_works_jsonl(args.input))
     total = len(works)
+    works_by_id: dict[str, Work] = {w.id: w for w in works}
+    input_ids = {w.id for w in works}
+
+    # Seed retrieval.jsonl with records we won't re-produce this run:
+    # existing records for input works being skipped (under --skip-existing)
+    # plus existing records for works not in this run's input. New records
+    # are appended per-work below, so a mid-run crash leaves retrieval.jsonl
+    # consistent with progress made so far.
+    preserved: list[RetrievalRecord] = []
+    for work in works:
+        if work.id in skip_ids and work.id in existing:
+            preserved.append(existing[work.id])
+    for wid, rec in existing.items():
+        if wid not in input_ids:
+            preserved.append(rec)
+    if not args.dry_run:
+        _write_retrieval_jsonl(preserved, retrieval_path)
 
     print(f"Retrieving PDFs for {total} works.", file=sys.stderr)
 
-    by_source: Counter[str] = Counter()
-    retrieved_count = 0
-    abstract_only_count = 0
-    failed_count = 0
-
+    rate_limiter = _RateLimiter()
     user_agent = f"laglitsynth/0.1 (mailto:{args.email})"
     client = httpx.Client(
         timeout=30.0,
         headers={"User-Agent": user_agent},
     )
+
+    # new_records maps work_id → freshly processed RetrievalRecord this run.
+    new_records: dict[str, RetrievalRecord] = {}
 
     try:
         for i, work in enumerate(works, 1):
@@ -313,39 +398,56 @@ def run(args: argparse.Namespace) -> None:
                 email=args.email,
                 manual_dir=manual_dir,
                 dry_run=args.dry_run,
+                rate_limiter=rate_limiter,
             )
-
+            new_records[work.id] = record
             if not args.dry_run:
                 append_jsonl(record, retrieval_path)
-
-            status = record.retrieval_status
-            by_source[status.value] += 1
-            if status.value.startswith("retrieved_"):
-                retrieved_count += 1
-            elif status == RetrievalStatus.abstract_only:
-                abstract_only_count += 1
-            elif status == RetrievalStatus.failed:
-                failed_count += 1
 
             if i % 10 == 0 or i == total:
                 print(f"  [{i}/{total}] processed", file=sys.stderr)
     finally:
         client.close()
 
-    # Write unretrieved.txt
+    # Build an in-memory list matching the final on-disk content, for the
+    # summary counters and unretrieved.txt derivation below.
+    final_records: list[RetrievalRecord] = []
+    for work in works:
+        if work.id in new_records:
+            final_records.append(new_records[work.id])
+        elif work.id in existing:
+            final_records.append(existing[work.id])
+    for wid, rec in existing.items():
+        if wid not in input_ids:
+            final_records.append(rec)
+
+    # Derive unretrieved.txt from the final record list.
     unretrieved_path = output_dir / "unretrieved.txt"
     with open(unretrieved_path, "w") as f:
-        for work in works:
-            if work.id in skip_ids:
-                continue
-            fname = work_id_to_filename(work.id)
-            # Check if this work was abstract_only or failed
-            # We need to check the by_source counter, but we need per-work info
-            # Re-scan: just check if the PDF exists
-            pdf_path = output_dir / "pdfs" / f"{fname}.pdf"
-            if not pdf_path.exists() and not args.dry_run:
-                doi = work.doi or "no-doi"
+        for rec in final_records:
+            if rec.retrieval_status in {
+                RetrievalStatus.abstract_only,
+                RetrievalStatus.failed,
+            }:
+                unretrieved_work = works_by_id.get(rec.work_id)
+                doi = (unretrieved_work.doi if unretrieved_work is not None else None) or "no-doi"
+                fname = work_id_to_filename(rec.work_id)
                 f.write(f"{doi}\t{fname}.pdf\n")
+
+    # Derive summary counters from the final record list.
+    by_source: Counter[str] = Counter()
+    retrieved_count = 0
+    abstract_only_count = 0
+    failed_count = 0
+    for rec in final_records:
+        status = rec.retrieval_status
+        by_source[status.value] += 1
+        if status.value.startswith("retrieved_"):
+            retrieved_count += 1
+        elif status == RetrievalStatus.abstract_only:
+            abstract_only_count += 1
+        elif status == RetrievalStatus.failed:
+            failed_count += 1
 
     write_meta(
         output_dir / "retrieval-meta.json",
@@ -362,7 +464,10 @@ def run(args: argparse.Namespace) -> None:
     # Summary
     print("\nRetrieval summary:", file=sys.stderr)
     print(f"  Total works:            {total}", file=sys.stderr)
-    for source, count in sorted(by_source.items()):
+    for status in RetrievalStatus:
+        count = by_source.get(status.value, 0)
+        if count == 0:
+            continue
+        label = _STATUS_LABELS.get(status, status.value)
         pct = 100.0 * count / total if total > 0 else 0.0
-        label = source.replace("_", " ").title()
-        print(f"  {label + ':':<24}{count:>4}  ({pct:.1f}%)", file=sys.stderr)
+        print(f"  {label + ':':<26}{count:>4}  ({pct:.1f}%)", file=sys.stderr)
