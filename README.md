@@ -9,6 +9,7 @@ Requires [pixi](https://pixi.sh) for environment management.
 
 ```bash
 pixi install
+cp .env.example .env  # then fill in OPENALEX_API_KEY and UNPAYWALL_EMAIL
 ```
 
 ## Tools
@@ -50,6 +51,15 @@ Since February 2026, OpenAlex requires a (free) API key. Register at
 
 ```
 OPENALEX_API_KEY=your-key-here
+```
+
+## Unpaywall email
+
+Full-text retrieval queries the Unpaywall API, which requires a contact
+email. Set it in `.env`:
+
+```
+UNPAYWALL_EMAIL=you@example.com
 ```
 
 ## Ollama (for LLM screening)

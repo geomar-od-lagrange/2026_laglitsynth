@@ -160,7 +160,6 @@ def test_screen_works_basic(tmp_path: Path) -> None:
                     "about oceans",
                     model="m",
                     base_url="http://x",
-                    threshold=50,
                     max_records=None,
                 )
             )
@@ -205,7 +204,6 @@ def test_screen_works_max_records_counts_all(tmp_path: Path) -> None:
                     "prompt",
                     model="m",
                     base_url="http://x",
-                    threshold=50,
                     max_records=3,
                 )
             )
@@ -239,7 +237,6 @@ def test_screen_works_llm_failure(tmp_path: Path) -> None:
                     "prompt",
                     model="m",
                     base_url="http://x",
-                    threshold=50,
                     max_records=None,
                 )
             )
@@ -268,7 +265,6 @@ def test_verdict_reason_no_abstract(tmp_path: Path) -> None:
                     "prompt",
                     model="m",
                     base_url="http://x",
-                    threshold=50,
                     max_records=None,
                 )
             )
@@ -298,7 +294,6 @@ def test_verdict_reason_llm_parse_failure(tmp_path: Path) -> None:
                     "prompt",
                     model="m",
                     base_url="http://x",
-                    threshold=50,
                     max_records=None,
                 )
             )
@@ -532,7 +527,6 @@ def test_seed_none_on_sentinel_reasons(tmp_path: Path) -> None:
                 "prompt",
                 model="m",
                 base_url="http://x",
-                threshold=50,
                 max_records=None,
             )
         )

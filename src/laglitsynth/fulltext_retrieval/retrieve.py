@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import re
 import shutil
 import sys
@@ -15,6 +16,7 @@ from pathlib import Path
 from urllib.parse import quote, urlparse
 
 import httpx
+from dotenv import load_dotenv
 
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.fulltext_retrieval.models import TOOL_NAME, RetrievalMeta, RetrievalRecord, RetrievalStatus
@@ -23,9 +25,6 @@ from laglitsynth.io import JsonlReadStats, append_jsonl, read_jsonl, read_works_
 from laglitsynth.models import _RunMeta
 
 logger = logging.getLogger(__name__)
-
-# Re-export for backwards compatibility with existing test imports.
-__all__ = ["work_id_to_filename"]
 
 _DOI_PREFIX_RE = re.compile(r"^https?://(dx\.)?doi\.org/", re.IGNORECASE)
 
@@ -312,7 +311,6 @@ def build_subparser(
     parser.add_argument(
         "--output-dir", type=Path, required=True, help="Output directory"
     )
-    parser.add_argument("--email", type=str, required=True, help="Email for Unpaywall")
     parser.add_argument("--manual-dir", type=Path, default=None, help="Manual PDF dir")
     parser.add_argument(
         "--skip-existing",
@@ -329,6 +327,13 @@ def build_subparser(
 
 
 def run(args: argparse.Namespace) -> None:
+    load_dotenv()
+    email = os.environ.get("UNPAYWALL_EMAIL")
+    if not email:
+        raise SystemExit(
+            "UNPAYWALL_EMAIL is not set. Add it to your environment or .env."
+        )
+
     output_dir: Path = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     manual_dir: Path | None = args.manual_dir
@@ -380,7 +385,7 @@ def run(args: argparse.Namespace) -> None:
     print(f"Retrieving PDFs for {total} works.", file=sys.stderr)
 
     rate_limiter = _RateLimiter()
-    user_agent = f"laglitsynth/0.1 (mailto:{args.email})"
+    user_agent = f"laglitsynth/0.1 (mailto:{email})"
     client = httpx.Client(
         timeout=30.0,
         headers={"User-Agent": user_agent},
@@ -398,7 +403,7 @@ def run(args: argparse.Namespace) -> None:
                 work,
                 output_dir,
                 client=client,
-                email=args.email,
+                email=email,
                 manual_dir=manual_dir,
                 dry_run=args.dry_run,
                 rate_limiter=rate_limiter,

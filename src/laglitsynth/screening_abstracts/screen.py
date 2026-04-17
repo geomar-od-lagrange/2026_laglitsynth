@@ -83,7 +83,6 @@ def screen_works(
     *,
     model: str,
     base_url: str,
-    threshold: int,
     max_records: int | None,
 ) -> Iterator[ScreeningVerdict]:
     client = OpenAI(base_url=f"{base_url}/v1", api_key="ollama")
@@ -196,7 +195,6 @@ def run(args: argparse.Namespace) -> None:
         args.prompt,
         model=args.model,
         base_url=args.base_url,
-        threshold=threshold,
         max_records=args.max_records,
     ):
         index += 1

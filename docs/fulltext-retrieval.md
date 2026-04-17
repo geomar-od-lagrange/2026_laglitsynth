@@ -142,17 +142,18 @@ PDFs are not committed to git. Add `data/fulltext-retrieval/pdfs/` to `.gitignor
 laglitsynth fulltext-retrieval \
     --input data/screening-adjudication/included.jsonl \
     --output-dir data/fulltext-retrieval/ \
-    --email user@example.com \
     [--manual-dir data/fulltext-retrieval/manual/] \
     [--skip-existing] \
     [--dry-run]
 ```
 
+The Unpaywall API requires a contact email. Set `UNPAYWALL_EMAIL` in your
+environment or `.env`.
+
 ### Arguments
 
 - `--input`: path to the included catalogue JSONL (Work records).
 - `--output-dir`: where to write retrieval records, metadata, and PDFs.
-- `--email`: required by Unpaywall API.
 - `--manual-dir`: directory to scan for manually placed PDFs. Defaults to
   `<output-dir>/manual/`.
 - `--skip-existing`: do not re-retrieve works that already have a

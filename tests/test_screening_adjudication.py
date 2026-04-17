@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from laglitsynth.screening_adjudication.models import AdjudicationMeta, AdjudicationVerdict
 from laglitsynth.screening_adjudication.adjudicate import run
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
@@ -143,6 +145,7 @@ def test_meta_correctness(tmp_path: Path) -> None:
     assert meta.input_count == 2
     assert meta.accepted_count == 1
     assert meta.rejected_count == 0
+    assert meta.missing_in_catalogue == 0
     assert meta.threshold == 50
     assert meta.run.tool == "laglitsynth.screening_adjudication.adjudicate"
     assert meta.run.validation_skipped == 0
@@ -181,6 +184,35 @@ def test_skips_none_score_verdicts(tmp_path: Path) -> None:
     included_lines = (tmp_path / "out" / "included.jsonl").read_text().strip().splitlines()
     assert len(included_lines) == 1
     assert "W2" in included_lines[0]
+
+
+def test_missing_in_catalogue_counted(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Verdicts above threshold without a matching catalogue entry are counted and warned."""
+    works = [_make_work("https://openalex.org/W1")]
+    verdicts = [
+        ScreeningVerdict(work_id="https://openalex.org/W1", relevance_score=80, reason="yes"),
+        ScreeningVerdict(work_id="https://openalex.org/W_MISSING", relevance_score=90, reason="yes"),
+    ]
+    catalogue_path = tmp_path / "catalogue.jsonl"
+    verdicts_path = tmp_path / "verdicts.jsonl"
+    _write_works_jsonl(catalogue_path, works)
+    _write_verdicts_jsonl(verdicts_path, verdicts)
+
+    args = _make_args(tmp_path, verdicts_path, catalogue_path, threshold=50)
+    with caplog.at_level("WARNING", logger="laglitsynth.screening_adjudication.adjudicate"):
+        run(args)
+
+    meta_data = json.loads((tmp_path / "out" / "adjudication-meta.json").read_text())
+    meta = AdjudicationMeta.model_validate(meta_data)
+    assert meta.input_count == 2
+    assert meta.accepted_count == 1
+    assert meta.missing_in_catalogue == 1
+
+    included_lines = (tmp_path / "out" / "included.jsonl").read_text().strip().splitlines()
+    assert len(included_lines) == 1
+    assert "W1" in included_lines[0]
+
+    assert any("W_MISSING" in rec.message for rec in caplog.records)
 
 
 def test_rerun_overwrites(tmp_path: Path) -> None:

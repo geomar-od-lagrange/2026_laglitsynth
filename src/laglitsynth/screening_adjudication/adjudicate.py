@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 import time
 from datetime import UTC, datetime
@@ -12,6 +13,8 @@ from laglitsynth.screening_adjudication.models import TOOL_NAME, AdjudicationMet
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
 from laglitsynth.io import JsonlReadStats, read_jsonl, read_works_jsonl, write_jsonl, write_meta
 from laglitsynth.models import _RunMeta
+
+logger = logging.getLogger(__name__)
 
 
 def build_subparser(
@@ -68,12 +71,18 @@ def run(args: argparse.Namespace) -> None:
 
     adj_verdicts: list[AdjudicationVerdict] = []
     accepted_works = []
+    missing_in_catalogue = 0
 
     for verdict in verdicts:
         if verdict.relevance_score is None or verdict.relevance_score < threshold:
             continue
         work = works_by_id.get(verdict.work_id)
         if work is None:
+            missing_in_catalogue += 1
+            logger.warning(
+                "Verdict above threshold has no matching work in catalogue: %s",
+                verdict.work_id,
+            )
             continue
         adj_verdicts.append(
             AdjudicationVerdict(
@@ -106,12 +115,14 @@ def run(args: argparse.Namespace) -> None:
             # Pass-through MVP emits no reject/skip verdicts; real human
             # adjudication will populate this.
             rejected_count=0,
+            missing_in_catalogue=missing_in_catalogue,
         ),
     )
 
     elapsed = time.monotonic() - t0
     print(
-        f"Adjudication done: {input_count} verdicts in, {accepted_count} accepted "
+        f"Adjudication done: {input_count} verdicts in, {accepted_count} accepted, "
+        f"{missing_in_catalogue} missing in catalogue "
         f"(threshold={threshold}), mode=pass-through. ({elapsed:.1f}s)",
         file=sys.stderr,
     )

@@ -23,3 +23,4 @@ class AdjudicationMeta(BaseModel):
     input_count: int
     accepted_count: int
     rejected_count: int
+    missing_in_catalogue: int

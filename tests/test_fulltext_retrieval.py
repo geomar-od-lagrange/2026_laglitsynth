@@ -17,9 +17,15 @@ from laglitsynth.fulltext_retrieval.retrieve import (
     _retrieve_one,
     _validate_pdf,
     run,
-    work_id_to_filename,
 )
+from laglitsynth.ids import work_id_to_filename
 from laglitsynth.catalogue_fetch.models import Work
+
+
+@pytest.fixture(autouse=True)
+def _unpaywall_email(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default UNPAYWALL_EMAIL for tests that exercise run()."""
+    monkeypatch.setenv("UNPAYWALL_EMAIL", "test@example.com")
 
 
 def _make_work(
@@ -340,7 +346,6 @@ class TestUnretrievedTxt:
         args = MagicMock()
         args.input = tmp_path / "input.jsonl"
         args.output_dir = tmp_path / "out"
-        args.email = "test@example.com"
         args.manual_dir = None
         args.skip_existing = False
         args.dry_run = False
@@ -374,7 +379,6 @@ class TestUnretrievedTxt:
         args = MagicMock()
         args.input = tmp_path / "input.jsonl"
         args.output_dir = tmp_path / "out"
-        args.email = "test@example.com"
         args.manual_dir = None
         args.skip_existing = False
         args.dry_run = True
@@ -427,7 +431,6 @@ class TestUnretrievedTxt:
         args = MagicMock()
         args.input = tmp_path / "input.jsonl"
         args.output_dir = output_dir
-        args.email = "test@example.com"
         args.manual_dir = None
         args.skip_existing = True
         args.dry_run = False
@@ -462,7 +465,6 @@ class TestRetrievalJsonl:
         args = MagicMock()
         args.input = tmp_path / "input.jsonl"
         args.output_dir = tmp_path / "out"
-        args.email = "test@example.com"
         args.manual_dir = None
         args.skip_existing = False
         args.dry_run = False
@@ -507,7 +509,6 @@ class TestRetrievalJsonl:
         args = MagicMock()
         args.input = tmp_path / "input.jsonl"
         args.output_dir = output_dir
-        args.email = "test@example.com"
         args.manual_dir = None
         args.skip_existing = True
         args.dry_run = False
@@ -592,3 +593,39 @@ class TestDryRunStatusHonesty:
         )
 
         assert record.retrieval_status == RetrievalStatus.abstract_only
+
+
+class TestUnpaywallEmail:
+    """Email is read from UNPAYWALL_EMAIL; missing var is a hard error."""
+
+    def _base_args(self, tmp_path: Path) -> MagicMock:
+        _write_works_jsonl(tmp_path / "input.jsonl", [])
+        args = MagicMock()
+        args.input = tmp_path / "input.jsonl"
+        args.output_dir = tmp_path / "out"
+        args.manual_dir = None
+        args.skip_existing = False
+        args.dry_run = True
+        return args
+
+    def test_env_var_used_in_user_agent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("UNPAYWALL_EMAIL", "env@example.com")
+        args = self._base_args(tmp_path)
+
+        with patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client") as client_cls:
+            run(args)
+
+        ua = client_cls.call_args.kwargs["headers"]["User-Agent"]
+        assert "env@example.com" in ua
+
+    def test_missing_env_var_errors(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("UNPAYWALL_EMAIL", raising=False)
+        args = self._base_args(tmp_path)
+
+        with patch("laglitsynth.fulltext_retrieval.retrieve.load_dotenv"):
+            with pytest.raises(SystemExit, match="UNPAYWALL_EMAIL"):
+                run(args)
