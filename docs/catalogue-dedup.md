@@ -53,10 +53,9 @@ schema as the input, just fewer of them.
 ### DeduplicationMeta
 
 ```python
-class DeduplicationMeta(_Base):
-    tool: str = "laglitsynth.catalogue_dedup.dedup"
-    tool_version: str = "alpha"
-    deduplicated_at: str
+class DeduplicationMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run: _RunMeta      # tool, tool_version, run_at, validation_skipped
     input_count: int
     output_count: int
     duplicates_removed: int

@@ -4,13 +4,27 @@ Retrieve PDFs for works in the included catalogue. This is where the
 catalogue becomes a corpus. The output is PDFs on disk and a retrieval
 status record per work — nothing more. Text extraction (parsing PDFs into
 structured sections) is a separate concern handled by
-[full-text-extraction.md](full-text-extraction.md).
+[fulltext-extraction.md](fulltext-extraction.md).
 
 ## Source cascade
 
 Try sources in this order for each work. Stop at the first success.
 
-### 1. OpenAlex open-access URLs
+### 1. Manual batch
+
+Manual files live on local disk and are deliberately placed by a human;
+checking them first means re-runs pick them up cheaply and manual placement
+always wins. Export a list of unretrieved DOIs and filenames. The human
+downloads PDFs through institutional access (library proxy, interlibrary
+loan, Zotero, whatever works) and drops them into a designated directory.
+The pipeline picks them up on the next run, matched by filename
+(`W<OpenAlex-ID>.pdf`).
+
+This is deliberately not automated. Shibboleth/SAML is institutionally
+specific and fragile. A list of DOIs and an afternoon at the library is the
+pragmatic choice for a corpus of a few hundred papers.
+
+### 2. OpenAlex open-access URLs
 
 The `Work` model already carries `open_access.oa_url` and
 `primary_location.pdf_url`. These come from Unpaywall data aggregated by
@@ -18,14 +32,14 @@ OpenAlex. OA coverage for oceanography is unknown and should be measured
 on a sample before committing to a retrieval strategy. This is the
 cheapest source: no additional API calls, URLs already in the data.
 
-### 2. Unpaywall API
+### 3. Unpaywall API
 
 For works with a DOI but no usable OpenAlex OA link, query the Unpaywall
 API (`api.unpaywall.org/v2/{doi}?email=...`). Unpaywall sometimes has
 locations that OpenAlex has not yet indexed. Free, requires only an email
 address, rate limit 100k requests/day.
 
-### 3. Preprint servers
+### 4. Preprint servers
 
 Check for arXiv or ESSOAr versions via DOI resolution or OpenAlex's
 `locations` list. For arXiv, construct the PDF URL directly from the arXiv
@@ -37,17 +51,6 @@ quantitative RQ analyses, preprints must be excludable — the data model
 carries peer-review status so that downstream stages can filter by
 publication type. Preprint retrieval does not imply preprint inclusion in
 quantitative results.
-
-### 4. Manual batch
-
-Everything else. Export a list of unretrieved DOIs and titles. The human
-downloads PDFs through institutional access (library proxy, interlibrary
-loan, Zotero, whatever works) and drops them into a designated directory.
-The pipeline picks them up on the next run, matched by filename.
-
-This is deliberately not automated. Shibboleth/SAML is institutionally
-specific and fragile. A list of DOIs and an afternoon at the library is the
-pragmatic choice for a corpus of a few hundred papers.
 
 ### What we skip
 
@@ -91,24 +94,24 @@ no source had a PDF. `failed` means a source was found but download failed
 One per work in the included catalogue, regardless of outcome.
 
 ```python
-class RetrievalRecord(_Base):
+class RetrievalRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     work_id: str                          # OpenAlex ID
     retrieval_status: RetrievalStatus
     source_url: str | None = None         # URL the PDF was fetched from
     pdf_path: str | None = None           # relative path to stored PDF
     error: str | None = None              # error message if failed
-    retrieved_at: str                      # ISO timestamp
+    retrieved_at: str                     # per-record wall-clock timestamp
 ```
 
 ### RetrievalMeta
 
-Run-level metadata, following the `FetchMeta` / `FilterMeta` pattern.
+Run-level metadata.
 
 ```python
-class RetrievalMeta(_Base):
-    tool: str = "laglitsynth.fulltext_retrieval.retrieve"
-    tool_version: str = "alpha"
-    retrieved_at: str
+class RetrievalMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run: _RunMeta      # tool, tool_version, run_at, validation_skipped
     total_works: int
     retrieved_count: int
     abstract_only_count: int
@@ -139,17 +142,18 @@ PDFs are not committed to git. Add `data/fulltext-retrieval/pdfs/` to `.gitignor
 laglitsynth fulltext-retrieval \
     --input data/screening-adjudication/included.jsonl \
     --output-dir data/fulltext-retrieval/ \
-    --email user@example.com \
     [--manual-dir data/fulltext-retrieval/manual/] \
     [--skip-existing] \
     [--dry-run]
 ```
 
+The Unpaywall API requires a contact email. Set `UNPAYWALL_EMAIL` in your
+environment or `.env`.
+
 ### Arguments
 
 - `--input`: path to the included catalogue JSONL (Work records).
 - `--output-dir`: where to write retrieval records, metadata, and PDFs.
-- `--email`: required by Unpaywall API.
 - `--manual-dir`: directory to scan for manually placed PDFs. Defaults to
   `<output-dir>/manual/`.
 - `--skip-existing`: do not re-retrieve works that already have a

@@ -1,23 +1,30 @@
-from laglitsynth.models import _Base
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict
+
+from laglitsynth.fulltext_extraction.tei import TeiDocument
+from laglitsynth.models import _RunMeta
+
+TOOL_NAME = "laglitsynth.fulltext_extraction.extract"
 
 
-class TextSection(_Base):
-    title: str
-    text: str
-
-
-class ExtractedDocument(_Base):
+class ExtractedDocument(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     work_id: str
-    sections: list[TextSection]
-    raw_text: str
-    extracted_at: str
+    tei_path: str  # relative to output_dir, e.g. "tei/W123.tei.xml"
+    content_sha256: str  # sha256 hex digest of the TEI bytes on disk
+    extracted_at: str  # per-record wall-clock timestamp
+
+    def open_tei(self, output_dir: Path) -> TeiDocument:
+        """Load the TEI referenced by ``self.tei_path``, relative to ``output_dir``."""
+        return TeiDocument(output_dir / self.tei_path)
 
 
-class ExtractionMeta(_Base):
-    tool: str = "laglitsynth.fulltext_extraction.extract"
-    tool_version: str = "alpha"
+class ExtractionMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run: _RunMeta
     grobid_version: str
-    extracted_at: str
     total_pdfs: int
     extracted_count: int
     failed_count: int
+    invalid_stem_count: int = 0

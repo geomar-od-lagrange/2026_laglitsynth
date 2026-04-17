@@ -1,5 +1,21 @@
 # Plan: Multi-run consensus for LLM-driven stages
 
+## Status
+
+**Deferred until the pipeline is feature-complete through synthesis
+(stages 7–12 landed).** Consensus is only useful once we have an
+end-to-end answer to compare robustness against. Running it before
+stages 7+ exist means tuning a knob whose downstream effect we can't
+measure yet.
+
+When picked back up: the plan below was written against pre-cutover
+names (`FilterVerdict`, `screen-abstracts`, `data-extraction`) and
+needs a freshening pass against the current two-component names and
+verdict-sidecar contract. The per-verdict `seed` field from the
+[reproducibility meta refactor](reproducibility-meta-refactor.md)
+makes `run_id`-based deduplication cleaner (`(work_id, seed)` is
+already a unique key).
+
 ## Problem
 
 Stages 3 (screen-abstracts), 7 (eligibility), and 8 (data-extraction) use

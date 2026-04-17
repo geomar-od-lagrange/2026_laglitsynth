@@ -1,9 +1,12 @@
 from datetime import date
 
-from laglitsynth.models import _Base
+from pydantic import BaseModel, ConfigDict
+
+from laglitsynth.models import _RunMeta
 
 
-class Institution(_Base):
+class Institution(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     id: str | None = None
     display_name: str | None = None
     ror: str | None = None
@@ -11,13 +14,15 @@ class Institution(_Base):
     type: str | None = None
 
 
-class Author(_Base):
+class Author(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     id: str | None = None
     display_name: str
     orcid: str | None = None
 
 
-class Authorship(_Base):
+class Authorship(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     author_position: str
     author: Author
     institutions: list[Institution]
@@ -26,7 +31,8 @@ class Authorship(_Base):
     raw_affiliation_strings: list[str]
 
 
-class Source(_Base):
+class Source(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     id: str
     display_name: str
     issn_l: str | None = None
@@ -35,7 +41,8 @@ class Source(_Base):
     host_organization_name: str | None = None
 
 
-class Location(_Base):
+class Location(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     is_oa: bool | None = None
     landing_page_url: str | None = None
     pdf_url: str | None = None
@@ -44,25 +51,29 @@ class Location(_Base):
     license: str | None = None
 
 
-class OpenAccess(_Base):
+class OpenAccess(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     is_oa: bool | None = None
     oa_status: str | None = None
     oa_url: str | None = None
 
 
-class Biblio(_Base):
+class Biblio(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     volume: str | None = None
     issue: str | None = None
     first_page: str | None = None
     last_page: str | None = None
 
 
-class TopicHierarchy(_Base):
+class TopicHierarchy(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     id: str
     display_name: str
 
 
-class Topic(_Base):
+class Topic(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     id: str
     display_name: str
     score: float
@@ -71,13 +82,15 @@ class Topic(_Base):
     domain: TopicHierarchy
 
 
-class Keyword(_Base):
+class Keyword(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     id: str
     display_name: str
     score: float
 
 
-class Work(_Base):
+class Work(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     id: str
     doi: str | None = None
     title: str | None = None
@@ -99,10 +112,12 @@ class Work(_Base):
     is_retracted: bool | None = None
 
 
-class FetchMeta(_Base):
-    tool: str = "laglitsynth.catalogue_fetch.fetch"
-    tool_version: str = "alpha"
+TOOL_NAME = "laglitsynth.catalogue_fetch.fetch"
+
+
+class FetchMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run: _RunMeta
     query: str
-    fetched_at: str
     total_count: int
     records_written: int

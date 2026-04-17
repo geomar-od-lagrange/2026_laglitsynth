@@ -1,10 +1,12 @@
-"""LLM-based abstract filtering via Ollama."""
+"""LLM-based abstract screening via Ollama."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
+import random
 import sys
 import time
 from collections.abc import Iterator
@@ -13,9 +15,9 @@ from pathlib import Path
 
 from openai import OpenAI
 
-from laglitsynth.io import read_works_jsonl, write_meta
-from laglitsynth.screening_abstracts.models import FilterMeta, FilterVerdict
-from laglitsynth.catalogue_fetch.models import Work
+from laglitsynth.io import JsonlReadStats, read_works_jsonl, write_jsonl, write_meta
+from laglitsynth.models import _LlmMeta, _RunMeta
+from laglitsynth.screening_abstracts.models import TOOL_NAME, ScreeningMeta, ScreeningVerdict
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +30,11 @@ You must return a JSON object with exactly two fields:
 
 Return ONLY the JSON object, nothing else."""
 
+_TEMPERATURE = 0.8
+
 
 class ClassifyError(Exception):
-    """Raised when the LLM response cannot be parsed into a FilterVerdict."""
+    """Raised when the LLM response cannot be parsed into a ScreeningVerdict."""
 
 
 def classify_abstract(
@@ -40,8 +44,9 @@ def classify_abstract(
     *,
     model: str,
     base_url: str,
-) -> FilterVerdict:
-    client = OpenAI(base_url=f"{base_url}/v1", api_key="ollama")
+    client: OpenAI,
+) -> ScreeningVerdict:
+    seed = random.randint(0, 2**31 - 1)
     response = client.chat.completions.create(
         model=model,
         response_format={"type": "json_object"},
@@ -52,17 +57,19 @@ def classify_abstract(
                 "content": f"Criterion: {prompt}\n\nAbstract: {abstract}",
             },
         ],
+        temperature=_TEMPERATURE,
+        seed=seed,
     )
     content = response.choices[0].message.content or "{}"
     try:
         parsed = json.loads(content)
         score = parsed["relevance_score"]
         reason = parsed["reason"]
-        return FilterVerdict(
+        return ScreeningVerdict(
             work_id=work_id,
             relevance_score=int(score),
-            accepted=False,  # caller sets this based on threshold
             reason=str(reason),
+            seed=seed,
         )
     except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
         raise ClassifyError(
@@ -70,15 +77,15 @@ def classify_abstract(
         ) from exc
 
 
-def filter_works(
+def screen_works(
     input_path: Path,
     prompt: str,
     *,
     model: str,
     base_url: str,
-    threshold: int,
     max_records: int | None,
-) -> Iterator[tuple[Work, FilterVerdict]]:
+) -> Iterator[ScreeningVerdict]:
+    client = OpenAI(base_url=f"{base_url}/v1", api_key="ollama")
     processed = 0
     for work in read_works_jsonl(input_path):
         if max_records is not None and processed >= max_records:
@@ -86,22 +93,17 @@ def filter_works(
         processed += 1
         if work.abstract is None:
             logger.warning("Skipping work %s: no abstract", work.id)
-            yield work, FilterVerdict(work_id=work.id)
+            yield ScreeningVerdict(work_id=work.id, relevance_score=None, reason="no-abstract", seed=None)
             continue
         try:
             verdict = classify_abstract(
-                work.id, work.abstract, prompt, model=model, base_url=base_url
-            )
-            verdict = verdict.model_copy(
-                update={
-                    "accepted": verdict.relevance_score is not None
-                    and verdict.relevance_score >= threshold
-                }
+                work.id, work.abstract, prompt, model=model, base_url=base_url, client=client
             )
         except ClassifyError:
             logger.warning("LLM parse failure for %s, recording as invalid", work.id)
-            verdict = FilterVerdict(work_id=work.id)
-        yield work, verdict
+            yield ScreeningVerdict(work_id=work.id, relevance_score=None, reason="llm-parse-failure", seed=None)
+            continue
+        yield verdict
 
 
 def _preflight(args: argparse.Namespace) -> None:
@@ -114,26 +116,26 @@ def _preflight(args: argparse.Namespace) -> None:
         )
 
 
-def _default_output_path(input_path: Path) -> Path:
-    ts = datetime.now(UTC).isoformat(timespec="microseconds").replace(":", "-")
-    return Path("data/screening-abstracts") / f"{input_path.stem}_screened_{ts}.jsonl"
-
-
 def build_subparser(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> argparse.ArgumentParser:
     parser = subparsers.add_parser(
         "screening-abstracts",
-        help="Filter JSONL works by abstract relevance using a local LLM.",
+        help="Screen JSONL works by abstract relevance using a local LLM.",
     )
     parser.add_argument("input", type=Path, help="Input JSONL file path")
-    parser.add_argument("prompt", help="Relevance filter prompt string")
-    parser.add_argument("-o", "--output", type=Path, help="Output JSONL path")
+    parser.add_argument("prompt", help="Relevance screening prompt string")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("data/screening-abstracts"),
+        help="Output directory (default: data/screening-abstracts/)",
+    )
     parser.add_argument(
         "--model", default="gemma3:4b", help="Ollama model name (default: gemma3:4b)"
     )
     parser.add_argument(
-        "--threshold",
+        "--screening-threshold",
         type=int,
         default=50,
         help="Relevance score cutoff, 0-100 (default: 50)",
@@ -142,11 +144,6 @@ def build_subparser(
         "--base-url",
         default="http://localhost:11434",
         help="Ollama API base URL (default: http://localhost:11434)",
-    )
-    parser.add_argument(
-        "--reject-file",
-        type=Path,
-        help="Optional path to write rejected works",
     )
     parser.add_argument(
         "--max-records",
@@ -166,106 +163,97 @@ def build_subparser(
 def run(args: argparse.Namespace) -> None:
     _preflight(args)
 
-    output: Path = args.output or _default_output_path(args.input)
-    verdicts_path = output.with_suffix(".verdicts.jsonl")
-    meta_path = output.with_suffix(".meta.json")
+    output_dir: Path = args.output_dir
+    verdicts_path = output_dir / "verdicts.jsonl"
+    meta_path = output_dir / "screening-meta.json"
+    threshold: int = args.screening_threshold
 
-    total = sum(1 for _ in read_works_jsonl(args.input))
+    # Compute prompt digest once for the meta record.
+    user_prompt: str = args.prompt
+    prompt_sha256 = hashlib.sha256(
+        (SYSTEM_PROMPT + "\n" + user_prompt).encode("utf-8")
+    ).hexdigest()
 
-    print(f"Filtering {total} works with model {args.model}", file=sys.stderr)
-    print(f"Threshold: {args.threshold}, Prompt: {args.prompt!r}", file=sys.stderr)
+    stats = JsonlReadStats()
+    total = sum(1 for _ in read_works_jsonl(args.input, stats))
+
+    print(f"Screening {total} works with model {args.model}", file=sys.stderr)
+    print(f"Threshold: {threshold}, Prompt: {args.prompt!r}", file=sys.stderr)
     if not args.dry_run:
-        print(f"Output: {output}", file=sys.stderr)
+        print(f"Output dir: {output_dir}", file=sys.stderr)
 
     t0 = time.monotonic()
-    accepted_count = 0
-    rejected_count = 0
+    above_threshold_count = 0
+    below_threshold_count = 0
     skipped_count = 0
     index = 0
 
-    output_file = None
-    verdicts_file = None
-    reject_file = None
+    verdicts: list[ScreeningVerdict] = []
 
-    if not args.dry_run:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output_file = open(output, "x")
-        verdicts_file = open(verdicts_path, "x")
-        if args.reject_file:
-            args.reject_file.parent.mkdir(parents=True, exist_ok=True)
-            reject_file = open(args.reject_file, "x")
+    for verdict in screen_works(
+        args.input,
+        args.prompt,
+        model=args.model,
+        base_url=args.base_url,
+        max_records=args.max_records,
+    ):
+        index += 1
+        verdicts.append(verdict)
 
-    try:
-        for work, verdict in filter_works(
-            args.input,
-            args.prompt,
-            model=args.model,
-            base_url=args.base_url,
-            threshold=args.threshold,
-            max_records=args.max_records,
-        ):
-            index += 1
-            title_trunc = (work.title or "")[:40]
-            work_id_trunc = work.id[-12:]
-
-            if verdict.accepted is None:
-                # No abstract or LLM parse failure
-                skipped_count += 1
-                print(
-                    f"  [{index}/{total}] skipped"
-                    f" — {work_id_trunc} \"{title_trunc}\"",
-                    file=sys.stderr,
-                )
-            elif verdict.accepted:
-                accepted_count += 1
-                print(
-                    f"  [{index}/{total}] accepted"
-                    f" (score: {verdict.relevance_score})"
-                    f" — {work_id_trunc} \"{title_trunc}\"",
-                    file=sys.stderr,
-                )
-                if output_file is not None:
-                    output_file.write(work.model_dump_json() + "\n")
-            else:
-                rejected_count += 1
-                print(
-                    f"  [{index}/{total}] rejected"
-                    f" (score: {verdict.relevance_score})"
-                    f" — {work_id_trunc} \"{title_trunc}\"",
-                    file=sys.stderr,
-                )
-                if reject_file is not None:
-                    reject_file.write(work.model_dump_json() + "\n")
-
-            if verdicts_file is not None:
-                verdicts_file.write(verdict.model_dump_json() + "\n")
-
-    finally:
-        if output_file is not None:
-            output_file.close()
-        if verdicts_file is not None:
-            verdicts_file.close()
-        if reject_file is not None:
-            reject_file.close()
+        if verdict.reason in ("no-abstract", "llm-parse-failure"):
+            skipped_count += 1
+            print(
+                f"  [{index}/{total}] skipped ({verdict.reason})"
+                f" — {verdict.work_id[-12:]}",
+                file=sys.stderr,
+            )
+        elif verdict.relevance_score is not None and verdict.relevance_score >= threshold:
+            above_threshold_count += 1
+            print(
+                f"  [{index}/{total}] above threshold"
+                f" (score: {verdict.relevance_score})"
+                f" — {verdict.work_id[-12:]}",
+                file=sys.stderr,
+            )
+        else:
+            below_threshold_count += 1
+            print(
+                f"  [{index}/{total}] below threshold"
+                f" (score: {verdict.relevance_score})"
+                f" — {verdict.work_id[-12:]}",
+                file=sys.stderr,
+            )
 
     elapsed = time.monotonic() - t0
 
     print(
-        f"\nDone in {elapsed:.1f}s: {accepted_count} accepted, "
-        f"{rejected_count} rejected, {skipped_count} skipped.",
+        f"\nDone in {elapsed:.1f}s: {above_threshold_count} above threshold, "
+        f"{below_threshold_count} below threshold, {skipped_count} skipped.",
         file=sys.stderr,
     )
 
     if not args.dry_run:
+        write_jsonl(verdicts, verdicts_path)
+        run_meta = _RunMeta(
+            tool=TOOL_NAME,
+            run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+            validation_skipped=stats.skipped,
+        )
+        llm_meta = _LlmMeta(
+            model=args.model,
+            temperature=_TEMPERATURE,
+            prompt_sha256=prompt_sha256,
+        )
         write_meta(
             meta_path,
-            FilterMeta(
-                prompt=args.prompt,
-                model=args.model,
-                threshold=args.threshold,
-                filtered_at=datetime.now(UTC).isoformat(timespec="microseconds"),
-                accepted_count=accepted_count,
-                rejected_count=rejected_count,
+            ScreeningMeta(
+                run=run_meta,
+                llm=llm_meta,
+                threshold=threshold,
+                input_path=str(args.input),
+                input_count=total,
+                above_threshold_count=above_threshold_count,
+                below_threshold_count=below_threshold_count,
                 skipped_count=skipped_count,
             ),
         )

@@ -343,6 +343,6 @@ cat /tmp/adj-test/adjudication-meta.json
 laglitsynth fulltext-retrieval \
     --input /tmp/adj-test/included.jsonl \
     --output-dir /tmp/retrieval-test/ \
-    --email rath.willi@googlemail.com \
+    --email mail@example.com \
     --dry-run
 ```

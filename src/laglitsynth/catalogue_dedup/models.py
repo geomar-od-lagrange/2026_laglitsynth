@@ -1,10 +1,13 @@
-from laglitsynth.models import _Base
+from pydantic import BaseModel, ConfigDict
+
+from laglitsynth.models import _RunMeta
+
+TOOL_NAME = "laglitsynth.catalogue_dedup.dedup"
 
 
-class DeduplicationMeta(_Base):
-    tool: str = "laglitsynth.catalogue_dedup.dedup"
-    tool_version: str = "alpha"
-    deduplicated_at: str
+class DeduplicationMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run: _RunMeta
     input_count: int
     output_count: int
     duplicates_removed: int

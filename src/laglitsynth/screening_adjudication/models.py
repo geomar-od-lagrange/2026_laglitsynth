@@ -1,11 +1,26 @@
-from laglitsynth.models import _Base
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict
+
+from laglitsynth.models import _RunMeta
+
+TOOL_NAME = "laglitsynth.screening_adjudication.adjudicate"
 
 
-class AdjudicationMeta(_Base):
-    tool: str = "laglitsynth.screening_adjudication.adjudicate"
-    tool_version: str = "alpha"
+class AdjudicationVerdict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    work_id: str
+    decision: Literal["accept", "reject", "skip"]
+    reviewer: str
     adjudicated_at: str
-    mode: str = "pass_through"
+    reason: str | None = None
+
+
+class AdjudicationMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run: _RunMeta
+    threshold: int
     input_count: int
-    output_count: int
-    human_reviewed: int = 0
+    accepted_count: int
+    rejected_count: int
+    missing_in_catalogue: int

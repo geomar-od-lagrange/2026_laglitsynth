@@ -74,7 +74,26 @@ def test_meta_correctness(tmp_path: Path) -> None:
     assert meta.output_count == 2
     assert meta.duplicates_removed == 0
     assert meta.by_rule == {}
-    assert meta.tool == "laglitsynth.catalogue_dedup.dedup"
+    assert meta.run.tool == "laglitsynth.catalogue_dedup.dedup"
+    assert meta.run.validation_skipped == 0
+
+
+def test_validation_skipped_counted(tmp_path: Path) -> None:
+    """One valid Work + one invalid JSONL line: meta.run.validation_skipped == 1."""
+    work = _make_work("https://openalex.org/W1")
+    with open(tmp_path / "input.jsonl", "w") as f:
+        f.write(work.model_dump_json() + "\n")
+        f.write('{"id": "not-a-work", "broken": true}\n')  # missing required fields
+
+    args = MagicMock()
+    args.input = tmp_path / "input.jsonl"
+    args.output_dir = tmp_path / "out"
+    run(args)
+
+    meta_data = json.loads((tmp_path / "out" / "dedup-meta.json").read_text())
+    meta = DeduplicationMeta.model_validate(meta_data)
+    assert meta.run.validation_skipped == 1
+    assert meta.input_count == 1  # only valid work counted
 
 
 def test_empty_input(tmp_path: Path) -> None:

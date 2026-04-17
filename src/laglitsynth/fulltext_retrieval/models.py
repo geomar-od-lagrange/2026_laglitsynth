@@ -1,6 +1,10 @@
 from enum import Enum
 
-from laglitsynth.models import _Base
+from pydantic import BaseModel, ConfigDict
+
+from laglitsynth.models import _RunMeta
+
+TOOL_NAME = "laglitsynth.fulltext_retrieval.retrieve"
 
 
 class RetrievalStatus(str, Enum):
@@ -12,19 +16,19 @@ class RetrievalStatus(str, Enum):
     failed = "failed"
 
 
-class RetrievalRecord(_Base):
+class RetrievalRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     work_id: str
     retrieval_status: RetrievalStatus
     source_url: str | None = None
     pdf_path: str | None = None
     error: str | None = None
-    retrieved_at: str
+    retrieved_at: str  # per-record wall-clock timestamp
 
 
-class RetrievalMeta(_Base):
-    tool: str = "laglitsynth.fulltext_retrieval.retrieve"
-    tool_version: str = "alpha"
-    retrieved_at: str
+class RetrievalMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run: _RunMeta
     total_works: int
     retrieved_count: int
     abstract_only_count: int

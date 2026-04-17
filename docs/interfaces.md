@@ -17,7 +17,7 @@ to 40) does not require re-running the LLM or re-splitting files. The
 scores already exist in the verdict sidecar. Downstream stages re-run
 with `--skip-existing` and only process newly-included works.
 
-See [retuning-propagation.md](../plans/retuning-propagation.md) for the
+See [retuning-propagation.md](../plans/done/retuning-propagation.md) for the
 full design rationale. Multi-run consensus (running LLM stages multiple
 times and combining results) is a planned optional extension; see
 [multi-run-consensus.md](../plans/multi-run-consensus.md).
@@ -59,28 +59,28 @@ The meta files stay as per-run provenance records — they are not merged.
 
 | Path | Model | Description |
 |---|---|---|
-| `data/screening-abstracts/verdicts.jsonl` | [`FilterVerdict`](../src/laglitsynth/screening_abstracts/models.py) | Relevance score and reason for every work |
-| `data/screening-abstracts/screening-meta.json` | [`FilterMeta`](../src/laglitsynth/screening_abstracts/models.py) | Prompt, model, counts |
+| `data/screening-abstracts/verdicts.jsonl` | [`ScreeningVerdict`](../src/laglitsynth/screening_abstracts/models.py) | Relevance score and reason for every work |
+| `data/screening-abstracts/screening-meta.json` | [`ScreeningMeta`](../src/laglitsynth/screening_abstracts/models.py) | Prompt, model, threshold, counts |
 
 Verdicts cover all works in the deduplicated catalogue, not just accepted
 ones. The accept/reject decision is derived from the relevance score and
-the threshold passed to the resolve module at read time. No `screened.jsonl` or
-`rejected.jsonl` — the verdict sidecar is the only output.
-
-The existing code uses timestamped filenames and splits accepted/rejected
-Work records into separate files. Both must change: write only verdicts,
-drop the Work-record split.
+the threshold passed to stage 4's `--screening-threshold` flag. No
+`screened.jsonl` or `rejected.jsonl` — the verdict sidecar is the only
+output.
 
 ### Stage 4 — screening-adjudication *(exists, pass-through MVP)*
 
 | Path | Model | Description |
 |---|---|---|
-| `data/screening-adjudication/verdicts.jsonl` | `AdjudicationVerdict` (new) | Human overrides (accept/reject/skip per work) |
-| `data/screening-adjudication/adjudication-meta.json` | [`AdjudicationMeta`](../src/laglitsynth/screening_adjudication/models.py) | Mode, counts |
+| `data/screening-adjudication/verdicts.jsonl` | [`AdjudicationVerdict`](../src/laglitsynth/screening_adjudication/models.py) | Per-work adjudication decision (accept/reject/skip) |
+| `data/screening-adjudication/adjudication-meta.json` | [`AdjudicationMeta`](../src/laglitsynth/screening_adjudication/models.py) | Threshold applied, counts |
+| `data/screening-adjudication/included.jsonl` | [`Work`](../src/laglitsynth/catalogue_fetch/models.py) | Work records above threshold (convenience for stage 5) |
 
-The adjudication tool resolves the current accepted set (screening scores
-above threshold) and presents unreviewed works for human judgment. Human
-decisions are recorded as verdicts, not as copies of Work records.
+Stage 4 reads stage 3's `verdicts.jsonl` and the deduplicated catalogue,
+applies `--screening-threshold`, and emits `AdjudicationVerdict` records
+plus a convenience `included.jsonl` of the accepted Work records for stage
+5. The pass-through MVP sets `decision="accept"` and `reviewer="pass-through"`
+for every above-threshold work.
 
 ### Stage 5 — fulltext-retrieval *(exists)*
 
@@ -98,9 +98,9 @@ abstract-only) and the PDF path. Already follows the flag pattern.
 
 | Path | Model | Description |
 |---|---|---|
-| `data/fulltext-extraction/extraction.jsonl` | [`ExtractedDocument`](../src/laglitsynth/fulltext_extraction/models.py) | Structured sections per work |
+| `data/fulltext-extraction/extraction.jsonl` | [`ExtractedDocument`](../src/laglitsynth/fulltext_extraction/models.py) | Per-work index: `tei_path` + `content_sha256` + `extracted_at` |
 | `data/fulltext-extraction/extraction-meta.json` | [`ExtractionMeta`](../src/laglitsynth/fulltext_extraction/models.py) | GROBID version, counts |
-| `data/fulltext-extraction/tei/<work_id>.tei.xml` | (XML) | Raw GROBID output |
+| `data/fulltext-extraction/tei/<work_id>.tei.xml` | (XML) | Canonical GROBID TEI output — read lazily via [`TeiDocument`](../src/laglitsynth/fulltext_extraction/tei.py) |
 
 ### Stage 7 — fulltext-eligibility
 
@@ -148,14 +148,6 @@ replacements. Downstream stages apply corrections at read time.
 |---|---|---|
 | `data/synthesis-narrative/synthesis-draft.md` | (markdown) | Narrative keyed to research questions |
 
-## Inconsistencies to resolve
-
-### Stage 3 implementation (code change needed)
-
-The existing code uses timestamped filenames and splits accepted/rejected
-Work records into separate files. Both must change: write only verdicts,
-drop the Work-record split.
-
 ## CLI contract
 
 ### Existing subcommands
@@ -172,12 +164,14 @@ laglitsynth catalogue-dedup \
 
 # Stage 3 — screening-abstracts
 laglitsynth screening-abstracts INPUT PROMPT \
-    [-o OUTPUT] [--model MODEL] [--threshold N] [--base-url URL] \
-    [--reject-file PATH] [--max-records N] [--dry-run]
+    [--output-dir DIR] [--model MODEL] [--screening-threshold N] \
+    [--base-url URL] [--max-records N] [--dry-run]
 
 # Stage 4 — screening-adjudication
 laglitsynth screening-adjudication \
-    --input data/screening-abstracts/accepted.jsonl \
+    --input data/screening-abstracts/verdicts.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    --screening-threshold 50 \
     --output-dir data/screening-adjudication/
 
 # Stage 5 — fulltext-retrieval
@@ -262,11 +256,14 @@ laglitsynth catalogue-dedup \
 laglitsynth screening-abstracts \
     data/catalogue-dedup/deduplicated.jsonl \
     "Is this about computational Lagrangian methods in oceanography?" \
-    -o data/screening-abstracts/accepted.jsonl
+    --screening-threshold 50 \
+    --output-dir data/screening-abstracts/
 
 # 4. Screening adjudication (pass-through in prototype)
 laglitsynth screening-adjudication \
-    --input data/screening-abstracts/accepted.jsonl \
+    --input data/screening-abstracts/verdicts.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    --screening-threshold 50 \
     --output-dir data/screening-adjudication/
 
 # 5. Fulltext retrieval
@@ -321,31 +318,68 @@ laglitsynth synthesis-narrative \
     --output-dir data/synthesis-narrative/
 ```
 
+## Shared meta shapes
+
+Two shared Pydantic models live in [`src/laglitsynth/models.py`](../src/laglitsynth/models.py) and are nested inside every `*Meta` class.
+
+### `_RunMeta`
+
+Run-level provenance carried by every stage meta record.
+
+```python
+class _RunMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tool: str          # module-level TOOL_NAME constant from each stage
+    tool_version: str  # "alpha" placeholder until releases
+    run_at: str        # ISO-8601 UTC timestamp of run completion
+    validation_skipped: int  # records dropped by read_jsonl on ValidationError
+```
+
+### `_LlmMeta`
+
+LLM configuration carried by `ScreeningMeta`. Enables reproducibility checks across runs.
+
+```python
+class _LlmMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model: str           # Ollama model tag
+    temperature: float   # explicit value passed to the API (currently 0.8)
+    prompt_sha256: str   # sha256(SYSTEM_PROMPT + "\n" + user prompt), 64 hex chars
+```
+
+## Extra policy
+
+| Category | Policy | Models |
+|---|---|---|
+| OpenAlex-sourced | `extra="ignore"` — upstream may add fields | `Work`, `Author`, `Authorship`, `Institution`, `Source`, `Location`, `OpenAccess`, `Biblio`, `TopicHierarchy`, `Topic`, `Keyword` |
+| Internally owned | `extra="forbid"` — unexpected fields are bugs | All `*Meta`, `_RunMeta`, `_LlmMeta`, `ScreeningVerdict`, `AdjudicationVerdict`, `RetrievalRecord`, `RetrievalStatus`, `ExtractedDocument`, `Section`, `Figure`, `Citation`, `BibReference` |
+
 ## Model dependency graph
 
 ### Existing models
 
 | Model | Module | Used by stages |
 |---|---|---|
-| [`_Base`](../src/laglitsynth/models.py) | `laglitsynth.models` | All (base class) |
+| [`_RunMeta`](../src/laglitsynth/models.py) | `laglitsynth.models` | All `*Meta` |
+| [`_LlmMeta`](../src/laglitsynth/models.py) | `laglitsynth.models` | `ScreeningMeta` |
 | [`Work`](../src/laglitsynth/catalogue_fetch/models.py) | `laglitsynth.catalogue_fetch.models` | 1, 2, 3 |
 | [`FetchMeta`](../src/laglitsynth/catalogue_fetch/models.py) | `laglitsynth.catalogue_fetch.models` | 1 |
-| [`FilterVerdict`](../src/laglitsynth/screening_abstracts/models.py) | `laglitsynth.screening_abstracts.models` | 3 |
-| [`FilterMeta`](../src/laglitsynth/screening_abstracts/models.py) | `laglitsynth.screening_abstracts.models` | 3 |
+| [`ScreeningVerdict`](../src/laglitsynth/screening_abstracts/models.py) | `laglitsynth.screening_abstracts.models` | 3 |
+| [`ScreeningMeta`](../src/laglitsynth/screening_abstracts/models.py) | `laglitsynth.screening_abstracts.models` | 3 |
 | [`DeduplicationMeta`](../src/laglitsynth/catalogue_dedup/models.py) | `laglitsynth.catalogue_dedup.models` | 2 |
+| [`AdjudicationVerdict`](../src/laglitsynth/screening_adjudication/models.py) | `laglitsynth.screening_adjudication.models` | 4 |
 | [`AdjudicationMeta`](../src/laglitsynth/screening_adjudication/models.py) | `laglitsynth.screening_adjudication.models` | 4 |
 | [`RetrievalStatus`](../src/laglitsynth/fulltext_retrieval/models.py) | `laglitsynth.fulltext_retrieval.models` | 5 |
 | [`RetrievalRecord`](../src/laglitsynth/fulltext_retrieval/models.py) | `laglitsynth.fulltext_retrieval.models` | 5 |
 | [`RetrievalMeta`](../src/laglitsynth/fulltext_retrieval/models.py) | `laglitsynth.fulltext_retrieval.models` | 5 |
-| [`TextSection`](../src/laglitsynth/fulltext_extraction/models.py) | `laglitsynth.fulltext_extraction.models` | 6 |
 | [`ExtractedDocument`](../src/laglitsynth/fulltext_extraction/models.py) | `laglitsynth.fulltext_extraction.models` | 6, 7, 8 |
 | [`ExtractionMeta`](../src/laglitsynth/fulltext_extraction/models.py) | `laglitsynth.fulltext_extraction.models` | 6 |
+| [`Section`](../src/laglitsynth/fulltext_extraction/tei.py), [`Figure`](../src/laglitsynth/fulltext_extraction/tei.py), [`Citation`](../src/laglitsynth/fulltext_extraction/tei.py), [`BibReference`](../src/laglitsynth/fulltext_extraction/tei.py) | `laglitsynth.fulltext_extraction.tei` | 7, 8 (lazy views over TEI) |
 
 ### Models not yet defined
 
 | Model | Planned module | Stage |
 |---|---|---|
-| `AdjudicationVerdict` | `laglitsynth.screening_adjudication.models` | 4 |
 | `EligibilityVerdict` | `laglitsynth.fulltext_eligibility.models` | 7 |
 | `EligibilityMeta` | `laglitsynth.fulltext_eligibility.models` | 7 |
 | `ExtractionRecord` | `laglitsynth.extraction_codebook.models` | 8, 9, 10, 11 |
@@ -361,8 +395,8 @@ laglitsynth synthesis-narrative \
 |---|---|---|
 | 1. catalogue-fetch | — | Work, FetchMeta |
 | 2. catalogue-dedup | Work | Work, DeduplicationMeta |
-| 3. screening-abstracts | Work | FilterVerdict, FilterMeta |
-| 4. screening-adjudication | FilterVerdict (via resolve) | AdjudicationVerdict, AdjudicationMeta |
+| 3. screening-abstracts | Work | ScreeningVerdict, ScreeningMeta |
+| 4. screening-adjudication | ScreeningVerdict, Work | AdjudicationVerdict, AdjudicationMeta, Work (included.jsonl) |
 | 5. fulltext-retrieval | Work (via resolve) | RetrievalRecord, RetrievalMeta |
 | 6. fulltext-extraction | (PDFs) | ExtractedDocument, ExtractionMeta |
 | 7. fulltext-eligibility | Work, ExtractedDocument (via resolve) | EligibilityVerdict, EligibilityMeta |
@@ -393,7 +427,6 @@ laglitsynth synthesis-narrative \
   reproducibility indicators, extraction metadata), each as a value +
   context-snippet pair. The codebook explicitly defers the Pydantic model
   to after phase 3 iteration.
-- `AdjudicationVerdict` — human accept/reject/skip per work with reason.
 - `ExtractionCorrection` — per-field corrections with original and
   corrected values.
 - `SynthesisStatistics` — depends on which breakdowns are needed (by
