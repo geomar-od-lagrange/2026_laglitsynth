@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -11,9 +12,9 @@ import pytest
 from laglitsynth.screening_abstracts.screen import (
     ClassifyError,
     classify_abstract,
-    filter_works,
+    screen_works,
 )
-from laglitsynth.screening_abstracts.models import FilterMeta, FilterVerdict
+from laglitsynth.screening_abstracts.models import ScreeningMeta, ScreeningVerdict
 from laglitsynth.catalogue_fetch.models import Work
 
 
@@ -52,48 +53,47 @@ def _mock_openai_response(content: str) -> MagicMock:
 
 def test_classify_abstract_valid_response() -> None:
     resp = _mock_openai_response('{"relevance_score": 85, "reason": "relevant"}')
-    with patch("laglitsynth.screening_abstracts.screen.OpenAI") as mock_cls:
-        mock_cls.return_value.chat.completions.create.return_value = resp
-        verdict = classify_abstract(
-            "W1", "some abstract", "about oceans", model="m", base_url="http://x"
-        )
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = resp
+    verdict = classify_abstract(
+        "W1", "some abstract", "about oceans", model="m", base_url="http://x", client=mock_client
+    )
     assert verdict.work_id == "W1"
     assert verdict.relevance_score == 85
     assert verdict.reason == "relevant"
-    assert verdict.accepted is False  # caller sets this
 
 
 def test_classify_abstract_malformed_json() -> None:
     resp = _mock_openai_response("this is not json at all")
-    with patch("laglitsynth.screening_abstracts.screen.OpenAI") as mock_cls:
-        mock_cls.return_value.chat.completions.create.return_value = resp
-        with pytest.raises(ClassifyError):
-            classify_abstract(
-                "W1", "abstract", "prompt", model="m", base_url="http://x"
-            )
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = resp
+    with pytest.raises(ClassifyError):
+        classify_abstract(
+            "W1", "abstract", "prompt", model="m", base_url="http://x", client=mock_client
+        )
 
 
 def test_classify_abstract_missing_fields() -> None:
     resp = _mock_openai_response('{"relevance_score": 50}')
-    with patch("laglitsynth.screening_abstracts.screen.OpenAI") as mock_cls:
-        mock_cls.return_value.chat.completions.create.return_value = resp
-        with pytest.raises(ClassifyError):
-            classify_abstract(
-                "W1", "abstract", "prompt", model="m", base_url="http://x"
-            )
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = resp
+    with pytest.raises(ClassifyError):
+        classify_abstract(
+            "W1", "abstract", "prompt", model="m", base_url="http://x", client=mock_client
+        )
 
 
 def test_classify_abstract_wrong_types() -> None:
     resp = _mock_openai_response('{"relevance_score": "high", "reason": "good"}')
-    with patch("laglitsynth.screening_abstracts.screen.OpenAI") as mock_cls:
-        mock_cls.return_value.chat.completions.create.return_value = resp
-        with pytest.raises(ClassifyError):
-            classify_abstract(
-                "W1", "abstract", "prompt", model="m", base_url="http://x"
-            )
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = resp
+    with pytest.raises(ClassifyError):
+        classify_abstract(
+            "W1", "abstract", "prompt", model="m", base_url="http://x", client=mock_client
+        )
 
 
-# --- filter_works ---
+# --- screen_works ---
 
 
 def _write_works_jsonl(path: Path, works: list[Work]) -> None:
@@ -118,21 +118,21 @@ def _mock_classify(
         *,
         model: str,
         base_url: str,
-    ) -> FilterVerdict:
+        client: Any,
+    ) -> ScreeningVerdict:
         entry = results[work_id]
         if entry == "error":
             raise ClassifyError(f"mock failure for {work_id}")
-        return FilterVerdict(
+        return ScreeningVerdict(
             work_id=work_id,
             relevance_score=entry["relevance_score"],
-            accepted=False,
             reason=entry["reason"],
         )
 
     return side_effect
 
 
-def test_filter_works_basic(tmp_path: Path) -> None:
+def test_screen_works_basic(tmp_path: Path) -> None:
     works = [
         _make_work("W1", abstract="Ocean currents are fast."),
         _make_work("W2", abstract=None),
@@ -149,30 +149,31 @@ def test_filter_works_basic(tmp_path: Path) -> None:
         "laglitsynth.screening_abstracts.screen.classify_abstract",
         side_effect=_mock_classify(classify_results),
     ):
-        results = list(
-            filter_works(
-                tmp_path / "input.jsonl",
-                "about oceans",
-                model="m",
-                base_url="http://x",
-                threshold=50,
-                max_records=None,
+        with patch("laglitsynth.screening_abstracts.screen.OpenAI"):
+            results = list(
+                screen_works(
+                    tmp_path / "input.jsonl",
+                    "about oceans",
+                    model="m",
+                    base_url="http://x",
+                    threshold=50,
+                    max_records=None,
+                )
             )
-        )
 
     assert len(results) == 3
-    # W1: accepted
-    assert results[0][1].accepted is True
-    assert results[0][1].relevance_score == 80
+    # W1: above threshold
+    assert results[0].relevance_score == 80
+    assert results[0].reason == "relevant"
     # W2: skipped (no abstract)
-    assert results[1][1].accepted is None
-    assert results[1][1].relevance_score is None
-    # W3: rejected
-    assert results[2][1].accepted is False
-    assert results[2][1].relevance_score == 30
+    assert results[1].relevance_score is None
+    assert results[1].reason == "no-abstract"
+    # W3: below threshold but still emitted
+    assert results[2].relevance_score == 30
+    assert results[2].reason == "not relevant"
 
 
-def test_filter_works_max_records_counts_all(tmp_path: Path) -> None:
+def test_screen_works_max_records_counts_all(tmp_path: Path) -> None:
     """max_records counts every work including those without abstracts."""
     works = [
         _make_work("W1", abstract=None),
@@ -193,24 +194,25 @@ def test_filter_works_max_records_counts_all(tmp_path: Path) -> None:
         "laglitsynth.screening_abstracts.screen.classify_abstract",
         side_effect=_mock_classify(classify_results),
     ):
-        results = list(
-            filter_works(
-                tmp_path / "input.jsonl",
-                "prompt",
-                model="m",
-                base_url="http://x",
-                threshold=50,
-                max_records=3,
+        with patch("laglitsynth.screening_abstracts.screen.OpenAI"):
+            results = list(
+                screen_works(
+                    tmp_path / "input.jsonl",
+                    "prompt",
+                    model="m",
+                    base_url="http://x",
+                    threshold=50,
+                    max_records=3,
+                )
             )
-        )
 
     # Should get W1 (skipped), W2 (classified), W3 (skipped) = 3 total
     assert len(results) == 3
-    assert [r[0].id for r in results] == ["W1", "W2", "W3"]
+    assert [r.work_id for r in results] == ["W1", "W2", "W3"]
 
 
-def test_filter_works_llm_failure(tmp_path: Path) -> None:
-    """LLM parse failure yields verdict with None fields."""
+def test_screen_works_llm_failure(tmp_path: Path) -> None:
+    """LLM parse failure yields verdict with reason='llm-parse-failure'."""
     works = [
         _make_work("W1", abstract="Good abstract."),
         _make_work("W2", abstract="Another abstract."),
@@ -226,63 +228,119 @@ def test_filter_works_llm_failure(tmp_path: Path) -> None:
         "laglitsynth.screening_abstracts.screen.classify_abstract",
         side_effect=_mock_classify(classify_results),
     ):
-        results = list(
-            filter_works(
-                tmp_path / "input.jsonl",
-                "prompt",
-                model="m",
-                base_url="http://x",
-                threshold=50,
-                max_records=None,
+        with patch("laglitsynth.screening_abstracts.screen.OpenAI"):
+            results = list(
+                screen_works(
+                    tmp_path / "input.jsonl",
+                    "prompt",
+                    model="m",
+                    base_url="http://x",
+                    threshold=50,
+                    max_records=None,
+                )
             )
-        )
 
     assert len(results) == 2
     # W1: LLM failure
-    assert results[0][1].accepted is None
-    assert results[0][1].relevance_score is None
+    assert results[0].relevance_score is None
+    assert results[0].reason == "llm-parse-failure"
     # W2: classified normally
-    assert results[1][1].accepted is True
-    assert results[1][1].relevance_score == 75
+    assert results[1].relevance_score == 75
 
 
-# --- FilterVerdict model ---
+# --- New sentinel reason tests ---
 
 
-def test_filter_verdict_defaults() -> None:
-    v = FilterVerdict(work_id="W1")
+def test_verdict_reason_no_abstract(tmp_path: Path) -> None:
+    """A Work with abstract=None produces a verdict with reason='no-abstract' and no LLM call."""
+    works = [_make_work("W1", abstract=None)]
+    _write_works_jsonl(tmp_path / "input.jsonl", works)
+
+    with patch("laglitsynth.screening_abstracts.screen.classify_abstract") as mock_classify:
+        with patch("laglitsynth.screening_abstracts.screen.OpenAI"):
+            results = list(
+                screen_works(
+                    tmp_path / "input.jsonl",
+                    "prompt",
+                    model="m",
+                    base_url="http://x",
+                    threshold=50,
+                    max_records=None,
+                )
+            )
+
+    assert len(results) == 1
+    assert results[0].relevance_score is None
+    assert results[0].reason == "no-abstract"
+    mock_classify.assert_not_called()
+
+
+def test_verdict_reason_llm_parse_failure(tmp_path: Path) -> None:
+    """LLM returns malformed JSON; verdict has reason='llm-parse-failure'."""
+    works = [_make_work("W1", abstract="An abstract.")]
+    _write_works_jsonl(tmp_path / "input.jsonl", works)
+
+    def raise_classify_error(*args: Any, **kwargs: Any) -> ScreeningVerdict:
+        raise ClassifyError("mock failure")
+
+    with patch(
+        "laglitsynth.screening_abstracts.screen.classify_abstract",
+        side_effect=raise_classify_error,
+    ):
+        with patch("laglitsynth.screening_abstracts.screen.OpenAI"):
+            results = list(
+                screen_works(
+                    tmp_path / "input.jsonl",
+                    "prompt",
+                    model="m",
+                    base_url="http://x",
+                    threshold=50,
+                    max_records=None,
+                )
+            )
+
+    assert len(results) == 1
+    assert results[0].relevance_score is None
+    assert results[0].reason == "llm-parse-failure"
+
+
+# --- ScreeningVerdict model ---
+
+
+def test_screening_verdict_defaults() -> None:
+    v = ScreeningVerdict(work_id="W1")
     assert v.relevance_score is None
-    assert v.accepted is None
     assert v.reason is None
 
 
-def test_filter_verdict_extra_fields_ignored() -> None:
-    v = FilterVerdict(
+def test_screening_verdict_extra_fields_ignored() -> None:
+    v = ScreeningVerdict(
         work_id="W1",
         relevance_score=50,
-        accepted=True,
         reason="ok",
         bonus_field="should be ignored",  # type: ignore[call-arg]
     )
     assert not hasattr(v, "bonus_field")
 
 
-# --- FilterMeta model ---
+# --- ScreeningMeta model ---
 
 
-def test_filter_meta_serialization() -> None:
-    meta = FilterMeta(
+def test_screening_meta_serialization() -> None:
+    meta = ScreeningMeta(
         prompt="test",
         model="gemma3:4b",
         threshold=50,
-        filtered_at="2026-01-01T00:00:00",
-        accepted_count=10,
-        rejected_count=5,
+        screened_at="2026-01-01T00:00:00",
+        input_path="data/catalogue-dedup/deduplicated.jsonl",
+        input_count=17,
+        above_threshold_count=10,
+        below_threshold_count=5,
         skipped_count=2,
     )
     data = meta.model_dump()
     assert data["tool"] == "laglitsynth.screening_abstracts.screen"
-    assert data["accepted_count"] == 10
+    assert data["above_threshold_count"] == 10
 
 
 # --- _preflight ---
@@ -319,13 +377,12 @@ def test_run_dry_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None
     args = MagicMock()
     args.input = tmp_path / "input.jsonl"
     args.prompt = "about oceans"
-    args.output = None
+    args.output_dir = tmp_path / "out"
     args.model = "m"
     args.base_url = "http://x"
-    args.threshold = 50
+    args.screening_threshold = 50
     args.max_records = None
     args.dry_run = True
-    args.reject_file = None
 
     with (
         patch("laglitsynth.screening_abstracts.screen._preflight"),
@@ -333,13 +390,15 @@ def test_run_dry_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None
             "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=_mock_classify(classify_results),
         ),
+        patch("laglitsynth.screening_abstracts.screen.OpenAI"),
     ):
         from laglitsynth.screening_abstracts.screen import run
 
         run(args)
 
     # No output files should be created
-    assert not (tmp_path / "output.jsonl").exists()
+    assert not (tmp_path / "out" / "verdicts.jsonl").exists()
+    assert not (tmp_path / "out" / "screening-meta.json").exists()
 
 
 def test_run_writes_output_files(tmp_path: Path) -> None:
@@ -355,19 +414,17 @@ def test_run_writes_output_files(tmp_path: Path) -> None:
         "W3": {"relevance_score": 20, "reason": "no"},
     }
 
-    output = tmp_path / "output.jsonl"
-    reject = tmp_path / "rejected.jsonl"
+    out_dir = tmp_path / "out"
 
     args = MagicMock()
     args.input = tmp_path / "input.jsonl"
     args.prompt = "about oceans"
-    args.output = output
+    args.output_dir = out_dir
     args.model = "m"
     args.base_url = "http://x"
-    args.threshold = 50
+    args.screening_threshold = 50
     args.max_records = None
     args.dry_run = False
-    args.reject_file = reject
 
     with (
         patch("laglitsynth.screening_abstracts.screen._preflight"),
@@ -375,32 +432,29 @@ def test_run_writes_output_files(tmp_path: Path) -> None:
             "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=_mock_classify(classify_results),
         ),
+        patch("laglitsynth.screening_abstracts.screen.OpenAI"),
     ):
         from laglitsynth.screening_abstracts.screen import run
 
         run(args)
 
-    # Output should have accepted works only
-    accepted_lines = output.read_text().strip().splitlines()
-    assert len(accepted_lines) == 1
-    assert "W1" in accepted_lines[0]
+    # Only verdicts.jsonl and screening-meta.json should exist; no accepted/rejected split
+    assert (out_dir / "verdicts.jsonl").exists()
+    assert (out_dir / "screening-meta.json").exists()
+    assert not (out_dir / "accepted.jsonl").exists()
+    assert not (out_dir / "rejected.jsonl").exists()
 
-    # Reject file should have rejected works
-    rejected_lines = reject.read_text().strip().splitlines()
-    assert len(rejected_lines) == 1
-    assert "W3" in rejected_lines[0]
-
-    # Verdicts should have all processed works
-    verdicts_path = output.with_suffix(".verdicts.jsonl")
-    verdict_lines = verdicts_path.read_text().strip().splitlines()
+    # Every input work has a verdict
+    verdict_lines = (out_dir / "verdicts.jsonl").read_text().strip().splitlines()
     assert len(verdict_lines) == 3
 
-    # Meta should exist with correct counts
-    meta_path = output.with_suffix(".meta.json")
-    assert meta_path.exists()
-    import json
+    work_ids_in_verdicts = {json.loads(line)["work_id"] for line in verdict_lines}
+    assert "W1" in work_ids_in_verdicts
+    assert "W2" in work_ids_in_verdicts
+    assert "W3" in work_ids_in_verdicts
 
-    meta = json.loads(meta_path.read_text())
-    assert meta["accepted_count"] == 1
-    assert meta["rejected_count"] == 1
+    # Meta should exist with correct counts
+    meta = json.loads((out_dir / "screening-meta.json").read_text())
+    assert meta["above_threshold_count"] == 1
+    assert meta["below_threshold_count"] == 1
     assert meta["skipped_count"] == 1

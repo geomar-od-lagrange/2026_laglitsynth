@@ -30,9 +30,10 @@ def read_works_jsonl(path: Path) -> Iterator[Work]:
 
 
 def write_jsonl(records: Iterable[BaseModel], path: Path) -> int:
+    """Write records to a JSONL file, overwriting any existing file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
-    with open(path, "x") as f:
+    with open(path, "w") as f:
         for record in records:
             f.write(record.model_dump_json() + "\n")
             count += 1

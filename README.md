@@ -22,7 +22,7 @@ laglitsynth --help
 - `laglitsynth fetch-publications` — search OpenAlex by keyword and store
   results as JSONL. See [`docs/fetch-publications.md`](docs/fetch-publications.md).
 - `laglitsynth filter-abstracts` — filter abstracts by relevance using a
-  local Ollama-hosted LLM. See [`docs/filter-abstracts.md`](docs/filter-abstracts.md).
+  local Ollama-hosted LLM. See [`docs/screening-abstracts.md`](docs/screening-abstracts.md).
 
 ## OpenAlex API key
 
@@ -42,7 +42,7 @@ ollama serve
 ollama pull gemma3:4b
 ```
 
-See [`docs/filter-abstracts.md`](docs/filter-abstracts.md) for details.
+See [`docs/screening-abstracts.md`](docs/screening-abstracts.md) for details.
 
 ## Documentation
 
