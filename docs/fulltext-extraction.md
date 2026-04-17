@@ -86,7 +86,8 @@ New models in [`src/laglitsynth/fulltext_extraction/models.py`](../src/laglitsyn
 ### TextSection
 
 ```python
-class TextSection(_Base):
+class TextSection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     title: str
     text: str
 ```
@@ -96,11 +97,12 @@ class TextSection(_Base):
 One per successfully extracted PDF.
 
 ```python
-class ExtractedDocument(_Base):
+class ExtractedDocument(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     work_id: str                           # OpenAlex ID
     sections: list[TextSection]
     raw_text: str                          # concatenated sections
-    extracted_at: str                      # ISO timestamp
+    extracted_at: str                      # per-record wall-clock timestamp
 ```
 
 `sections` is the structured representation. `raw_text` is the
@@ -111,14 +113,14 @@ need section structure). For works where GROBID fails, no
 ### ExtractionMeta
 
 ```python
-class ExtractionMeta(_Base):
-    tool: str = "laglitsynth.fulltext_extraction.extract"
-    tool_version: str = "alpha"
+class ExtractionMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run: _RunMeta      # tool, tool_version, run_at, validation_skipped
     grobid_version: str
-    extracted_at: str
     total_pdfs: int
     extracted_count: int
     failed_count: int
+    invalid_stem_count: int
 ```
 
 ## Storage layout

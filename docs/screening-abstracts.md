@@ -54,23 +54,41 @@ laglitsynth screening-abstracts input.jsonl "..." --dry-run --max-records 20
 
 Each run produces two files in `--output-dir`:
 
-- **`verdicts.jsonl`** — one `ScreeningVerdict` per input work, with
-  `work_id`, `relevance_score` (int or `null`), and `reason` (string or
-  `null`).
-- **`screening-meta.json`** — sidecar with run metadata: prompt, model,
-  threshold, input path, input count, above/below threshold counts, skipped
-  count, and timestamp.
+- **`verdicts.jsonl`** — one `ScreeningVerdict` per input work.
+- **`screening-meta.json`** — `ScreeningMeta` sidecar with nested `run`
+  and `llm` blocks, threshold, input path, input count, and
+  above/below/skipped counts.
+
+### ScreeningVerdict fields
+
+| Field | Type | Description |
+|---|---|---|
+| `work_id` | `str` | OpenAlex work ID |
+| `relevance_score` | `int \| null` | 0–100 from LLM; `null` for sentinel reasons |
+| `reason` | `str \| null` | LLM justification string, or a sentinel reason code |
+| `seed` | `int \| null` | Ollama random seed passed for this call; `null` for sentinel reasons |
 
 ### Sentinel reason values
 
 Two fixed strings mark non-LLM outcomes:
 
 - `reason="no-abstract"` — the work had no abstract; the LLM was not
-  called. `relevance_score=null`.
+  called. `relevance_score=null`, `seed=null`.
 - `reason="llm-parse-failure"` — the LLM returned a response that could
-  not be parsed. `relevance_score=null`.
+  not be parsed. `relevance_score=null`, `seed=null`.
 
 All other `reason` values are the LLM's free-text justification.
+
+### ScreeningMeta fields
+
+The meta sidecar nests two shared blocks:
+
+- **`run`** (`_RunMeta`): `tool`, `tool_version`, `run_at`, `validation_skipped`.
+- **`llm`** (`_LlmMeta`): `model`, `temperature` (explicit; currently `0.8`),
+  `prompt_sha256` (sha256 of `SYSTEM_PROMPT + "\n" + user prompt`, 64 hex chars).
+
+The `prompt_sha256` is stable across runs with the same prompt wording.
+Comparing it across meta files confirms that two runs used identical prompts.
 
 ## Tips for prompt tuning
 

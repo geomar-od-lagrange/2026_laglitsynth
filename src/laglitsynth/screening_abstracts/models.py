@@ -1,19 +1,23 @@
-from laglitsynth.models import _Base
+from pydantic import BaseModel, ConfigDict
+
+from laglitsynth.models import _LlmMeta, _RunMeta
+
+TOOL_NAME = "laglitsynth.screening_abstracts.screen"
 
 
-class ScreeningVerdict(_Base):
+class ScreeningVerdict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     work_id: str
     relevance_score: int | None = None
     reason: str | None = None
+    seed: int | None = None  # Ollama seed used for this call; None for sentinel reasons
 
 
-class ScreeningMeta(_Base):
-    tool: str = "laglitsynth.screening_abstracts.screen"
-    tool_version: str = "alpha"
-    prompt: str
-    model: str
+class ScreeningMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run: _RunMeta
+    llm: _LlmMeta
     threshold: int
-    screened_at: str
     input_path: str
     input_count: int
     above_threshold_count: int

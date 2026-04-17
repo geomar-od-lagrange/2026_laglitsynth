@@ -41,11 +41,12 @@ applies the threshold, and writes three output files.
 ### AdjudicationVerdict
 
 ```python
-class AdjudicationVerdict(_Base):
+class AdjudicationVerdict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     work_id: str
     decision: Literal["accept", "reject", "skip"]
     reviewer: str
-    adjudicated_at: str
+    adjudicated_at: str  # per-verdict wall-clock timestamp
     reason: str | None = None
 ```
 
@@ -57,10 +58,9 @@ with a justification when overriding the LLM verdict.
 ### AdjudicationMeta
 
 ```python
-class AdjudicationMeta(_Base):
-    tool: str = "laglitsynth.screening_adjudication.adjudicate"
-    tool_version: str = "alpha"
-    adjudicated_at: str
+class AdjudicationMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run: _RunMeta      # tool, tool_version, run_at, validation_skipped
     threshold: int
     input_count: int
     accepted_count: int

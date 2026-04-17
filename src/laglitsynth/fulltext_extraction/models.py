@@ -1,23 +1,28 @@
-from laglitsynth.models import _Base
+from pydantic import BaseModel, ConfigDict
+
+from laglitsynth.models import _RunMeta
+
+TOOL_NAME = "laglitsynth.fulltext_extraction.extract"
 
 
-class TextSection(_Base):
+class TextSection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     title: str
     text: str
 
 
-class ExtractedDocument(_Base):
+class ExtractedDocument(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     work_id: str
     sections: list[TextSection]
     raw_text: str
-    extracted_at: str
+    extracted_at: str  # per-record wall-clock timestamp
 
 
-class ExtractionMeta(_Base):
-    tool: str = "laglitsynth.fulltext_extraction.extract"
-    tool_version: str = "alpha"
+class ExtractionMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run: _RunMeta
     grobid_version: str
-    extracted_at: str
     total_pdfs: int
     extracted_count: int
     failed_count: int

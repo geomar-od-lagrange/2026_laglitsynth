@@ -318,13 +318,50 @@ laglitsynth synthesis-narrative \
     --output-dir data/synthesis-narrative/
 ```
 
+## Shared meta shapes
+
+Two shared Pydantic models live in [`src/laglitsynth/models.py`](../src/laglitsynth/models.py) and are nested inside every `*Meta` class.
+
+### `_RunMeta`
+
+Run-level provenance carried by every stage meta record.
+
+```python
+class _RunMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tool: str          # module-level TOOL_NAME constant from each stage
+    tool_version: str  # "alpha" placeholder until releases
+    run_at: str        # ISO-8601 UTC timestamp of run completion
+    validation_skipped: int  # records dropped by read_jsonl on ValidationError
+```
+
+### `_LlmMeta`
+
+LLM configuration carried by `ScreeningMeta`. Enables reproducibility checks across runs.
+
+```python
+class _LlmMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model: str           # Ollama model tag
+    temperature: float   # explicit value passed to the API (currently 0.8)
+    prompt_sha256: str   # sha256(SYSTEM_PROMPT + "\n" + user prompt), 64 hex chars
+```
+
+## Extra policy
+
+| Category | Policy | Models |
+|---|---|---|
+| OpenAlex-sourced | `extra="ignore"` — upstream may add fields | `Work`, `Author`, `Authorship`, `Institution`, `Source`, `Location`, `OpenAccess`, `Biblio`, `TopicHierarchy`, `Topic`, `Keyword` |
+| Internally owned | `extra="forbid"` — unexpected fields are bugs | All `*Meta`, `_RunMeta`, `_LlmMeta`, `ScreeningVerdict`, `AdjudicationVerdict`, `RetrievalRecord`, `RetrievalStatus`, `ExtractedDocument`, `TextSection` |
+
 ## Model dependency graph
 
 ### Existing models
 
 | Model | Module | Used by stages |
 |---|---|---|
-| [`_Base`](../src/laglitsynth/models.py) | `laglitsynth.models` | All (base class) |
+| [`_RunMeta`](../src/laglitsynth/models.py) | `laglitsynth.models` | All `*Meta` |
+| [`_LlmMeta`](../src/laglitsynth/models.py) | `laglitsynth.models` | `ScreeningMeta` |
 | [`Work`](../src/laglitsynth/catalogue_fetch/models.py) | `laglitsynth.catalogue_fetch.models` | 1, 2, 3 |
 | [`FetchMeta`](../src/laglitsynth/catalogue_fetch/models.py) | `laglitsynth.catalogue_fetch.models` | 1 |
 | [`ScreeningVerdict`](../src/laglitsynth/screening_abstracts/models.py) | `laglitsynth.screening_abstracts.models` | 3 |

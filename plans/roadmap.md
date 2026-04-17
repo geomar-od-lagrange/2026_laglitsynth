@@ -27,17 +27,18 @@ Update this file when a plan is written, implemented, or archived.
   `fulltext-retrieval.md`, `fulltext-extraction.md`);
   [pipeline.md](../docs/pipeline.md) headings and mermaid labels
   synced; [README.md](../README.md) rewritten to list the real CLI.
+- [Reproducibility meta refactor](done/reproducibility-meta-refactor.md)
+  — `_Base` deleted; OpenAlex models use `extra="ignore"`, internal
+  models use `extra="forbid"`. Shared `_RunMeta` and `_LlmMeta` live
+  in `src/laglitsynth/models.py`; every `*Meta` nests `run: _RunMeta`
+  (`tool`, `tool_version`, `run_at`, `validation_skipped`). Stage 3
+  passes `temperature=0.8` and a per-call `random.randint(...)` seed
+  to Ollama; each `ScreeningVerdict` carries its seed;
+  `ScreeningMeta.llm` carries `prompt_sha256`.
 
 ## In flight
 
-- [Reproducibility meta refactor](reproducibility-meta-refactor.md)
-  — nested `_RunMeta` across every `*Meta`; `_Base` deletion with
-  `extra="ignore"` on OpenAlex models and `extra="forbid"` on
-  internal; stage 3 LLM determinism (explicit `temperature=0.8`,
-  per-call random seed on each `ScreeningVerdict`, `prompt_sha256`
-  on `ScreeningMeta.llm`). Skipped: commit SHA, input hashing,
-  dirty-tree, CLI temp/seed flags. Two open questions (both
-  low-stakes).
+- (None.)
 
 ## Queued — ready to plan
 

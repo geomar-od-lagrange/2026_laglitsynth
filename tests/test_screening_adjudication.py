@@ -144,7 +144,8 @@ def test_meta_correctness(tmp_path: Path) -> None:
     assert meta.accepted_count == 1
     assert meta.rejected_count == 0
     assert meta.threshold == 50
-    assert meta.tool == "laglitsynth.screening_adjudication.adjudicate"
+    assert meta.run.tool == "laglitsynth.screening_adjudication.adjudicate"
+    assert meta.run.validation_skipped == 0
 
 
 def test_empty_input(tmp_path: Path) -> None:

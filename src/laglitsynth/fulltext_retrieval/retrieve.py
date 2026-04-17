@@ -17,9 +17,10 @@ from urllib.parse import quote, urlparse
 import httpx
 
 from laglitsynth.catalogue_fetch.models import Work
-from laglitsynth.fulltext_retrieval.models import RetrievalMeta, RetrievalRecord, RetrievalStatus
+from laglitsynth.fulltext_retrieval.models import TOOL_NAME, RetrievalMeta, RetrievalRecord, RetrievalStatus
 from laglitsynth.ids import work_id_to_filename
-from laglitsynth.io import append_jsonl, read_jsonl, read_works_jsonl, write_meta
+from laglitsynth.io import JsonlReadStats, append_jsonl, read_jsonl, read_works_jsonl, write_meta
+from laglitsynth.models import _RunMeta
 
 logger = logging.getLogger(__name__)
 
@@ -334,6 +335,8 @@ def run(args: argparse.Namespace) -> None:
     if manual_dir is None:
         manual_dir = output_dir / "manual"
 
+    stats = JsonlReadStats()
+
     # Load all previously recorded records (regardless of --skip-existing, so
     # we can preserve rows for works not in this run's input).
     existing: dict[str, RetrievalRecord] = _load_existing(output_dir)
@@ -354,7 +357,7 @@ def run(args: argparse.Namespace) -> None:
             )
 
     retrieval_path = output_dir / "retrieval.jsonl"
-    works = list(read_works_jsonl(args.input))
+    works = list(read_works_jsonl(args.input, stats))
     total = len(works)
     works_by_id: dict[str, Work] = {w.id: w for w in works}
     input_ids = {w.id for w in works}
@@ -449,10 +452,15 @@ def run(args: argparse.Namespace) -> None:
         elif status == RetrievalStatus.failed:
             failed_count += 1
 
+    run_meta = _RunMeta(
+        tool=TOOL_NAME,
+        run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+        validation_skipped=stats.skipped,
+    )
     write_meta(
         output_dir / "retrieval-meta.json",
         RetrievalMeta(
-            retrieved_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+            run=run_meta,
             total_works=total,
             retrieved_count=retrieved_count,
             abstract_only_count=abstract_only_count,

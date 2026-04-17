@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
+import random
 import sys
 import time
 from collections.abc import Iterator
@@ -13,8 +15,9 @@ from pathlib import Path
 
 from openai import OpenAI
 
-from laglitsynth.io import read_works_jsonl, write_jsonl, write_meta
-from laglitsynth.screening_abstracts.models import ScreeningMeta, ScreeningVerdict
+from laglitsynth.io import JsonlReadStats, read_works_jsonl, write_jsonl, write_meta
+from laglitsynth.models import _LlmMeta, _RunMeta
+from laglitsynth.screening_abstracts.models import TOOL_NAME, ScreeningMeta, ScreeningVerdict
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +29,8 @@ You must return a JSON object with exactly two fields:
 - "reason": a short string (one sentence) explaining your score
 
 Return ONLY the JSON object, nothing else."""
+
+_TEMPERATURE = 0.8
 
 
 class ClassifyError(Exception):
@@ -41,6 +46,7 @@ def classify_abstract(
     base_url: str,
     client: OpenAI,
 ) -> ScreeningVerdict:
+    seed = random.randint(0, 2**31 - 1)
     response = client.chat.completions.create(
         model=model,
         response_format={"type": "json_object"},
@@ -51,6 +57,8 @@ def classify_abstract(
                 "content": f"Criterion: {prompt}\n\nAbstract: {abstract}",
             },
         ],
+        temperature=_TEMPERATURE,
+        seed=seed,
     )
     content = response.choices[0].message.content or "{}"
     try:
@@ -61,6 +69,7 @@ def classify_abstract(
             work_id=work_id,
             relevance_score=int(score),
             reason=str(reason),
+            seed=seed,
         )
     except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
         raise ClassifyError(
@@ -85,7 +94,7 @@ def screen_works(
         processed += 1
         if work.abstract is None:
             logger.warning("Skipping work %s: no abstract", work.id)
-            yield ScreeningVerdict(work_id=work.id, relevance_score=None, reason="no-abstract")
+            yield ScreeningVerdict(work_id=work.id, relevance_score=None, reason="no-abstract", seed=None)
             continue
         try:
             verdict = classify_abstract(
@@ -93,7 +102,7 @@ def screen_works(
             )
         except ClassifyError:
             logger.warning("LLM parse failure for %s, recording as invalid", work.id)
-            yield ScreeningVerdict(work_id=work.id, relevance_score=None, reason="llm-parse-failure")
+            yield ScreeningVerdict(work_id=work.id, relevance_score=None, reason="llm-parse-failure", seed=None)
             continue
         yield verdict
 
@@ -160,7 +169,14 @@ def run(args: argparse.Namespace) -> None:
     meta_path = output_dir / "screening-meta.json"
     threshold: int = args.screening_threshold
 
-    total = sum(1 for _ in read_works_jsonl(args.input))
+    # Compute prompt digest once for the meta record.
+    user_prompt: str = args.prompt
+    prompt_sha256 = hashlib.sha256(
+        (SYSTEM_PROMPT + "\n" + user_prompt).encode("utf-8")
+    ).hexdigest()
+
+    stats = JsonlReadStats()
+    total = sum(1 for _ in read_works_jsonl(args.input, stats))
 
     print(f"Screening {total} works with model {args.model}", file=sys.stderr)
     print(f"Threshold: {threshold}, Prompt: {args.prompt!r}", file=sys.stderr)
@@ -220,13 +236,22 @@ def run(args: argparse.Namespace) -> None:
 
     if not args.dry_run:
         write_jsonl(verdicts, verdicts_path)
+        run_meta = _RunMeta(
+            tool=TOOL_NAME,
+            run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+            validation_skipped=stats.skipped,
+        )
+        llm_meta = _LlmMeta(
+            model=args.model,
+            temperature=_TEMPERATURE,
+            prompt_sha256=prompt_sha256,
+        )
         write_meta(
             meta_path,
             ScreeningMeta(
-                prompt=args.prompt,
-                model=args.model,
+                run=run_meta,
+                llm=llm_meta,
                 threshold=threshold,
-                screened_at=datetime.now(UTC).isoformat(timespec="microseconds"),
                 input_path=str(args.input),
                 input_count=total,
                 above_threshold_count=above_threshold_count,

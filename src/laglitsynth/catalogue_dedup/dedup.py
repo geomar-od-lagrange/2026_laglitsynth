@@ -8,8 +8,9 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from laglitsynth.catalogue_dedup.models import DeduplicationMeta
-from laglitsynth.io import read_works_jsonl, write_jsonl, write_meta
+from laglitsynth.catalogue_dedup.models import TOOL_NAME, DeduplicationMeta
+from laglitsynth.io import JsonlReadStats, read_works_jsonl, write_jsonl, write_meta
+from laglitsynth.models import _RunMeta
 
 
 def build_subparser(
@@ -32,16 +33,22 @@ def run(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     t0 = time.monotonic()
-    works = list(read_works_jsonl(args.input))
+    stats = JsonlReadStats()
+    works = list(read_works_jsonl(args.input, stats))
     input_count = len(works)
 
     count = write_jsonl(works, output_dir / "deduplicated.jsonl")
     write_jsonl([], output_dir / "dropped.jsonl")
 
+    run_meta = _RunMeta(
+        tool=TOOL_NAME,
+        run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+        validation_skipped=stats.skipped,
+    )
     write_meta(
         output_dir / "dedup-meta.json",
         DeduplicationMeta(
-            deduplicated_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+            run=run_meta,
             input_count=input_count,
             output_count=count,
             duplicates_removed=0,

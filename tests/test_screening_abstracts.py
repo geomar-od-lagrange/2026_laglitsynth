@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -10,12 +11,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from laglitsynth.screening_abstracts.screen import (
+    SYSTEM_PROMPT,
     ClassifyError,
     classify_abstract,
     screen_works,
 )
 from laglitsynth.screening_abstracts.models import ScreeningMeta, ScreeningVerdict
 from laglitsynth.catalogue_fetch.models import Work
+from laglitsynth.models import _LlmMeta, _RunMeta
 
 
 def _make_work(
@@ -127,6 +130,7 @@ def _mock_classify(
             work_id=work_id,
             relevance_score=entry["relevance_score"],
             reason=entry["reason"],
+            seed=12345,
         )
 
     return side_effect
@@ -313,25 +317,36 @@ def test_screening_verdict_defaults() -> None:
     assert v.reason is None
 
 
-def test_screening_verdict_extra_fields_ignored() -> None:
-    v = ScreeningVerdict(
-        work_id="W1",
-        relevance_score=50,
-        reason="ok",
-        bonus_field="should be ignored",  # type: ignore[call-arg]
-    )
-    assert not hasattr(v, "bonus_field")
+def test_screening_verdict_extra_fields_forbidden() -> None:
+    from pydantic import ValidationError as PydanticValidationError
+
+    with pytest.raises(PydanticValidationError):
+        ScreeningVerdict(
+            work_id="W1",
+            relevance_score=50,
+            reason="ok",
+            bonus_field="extra fields now forbidden",  # type: ignore[call-arg]
+        )
 
 
 # --- ScreeningMeta model ---
 
 
 def test_screening_meta_serialization() -> None:
-    meta = ScreeningMeta(
-        prompt="test",
+    run_meta = _RunMeta(
+        tool="laglitsynth.screening_abstracts.screen",
+        run_at="2026-01-01T00:00:00+00:00",
+        validation_skipped=0,
+    )
+    llm_meta = _LlmMeta(
         model="gemma3:4b",
+        temperature=0.8,
+        prompt_sha256="a" * 64,
+    )
+    meta = ScreeningMeta(
+        run=run_meta,
+        llm=llm_meta,
         threshold=50,
-        screened_at="2026-01-01T00:00:00",
         input_path="data/catalogue-dedup/deduplicated.jsonl",
         input_count=17,
         above_threshold_count=10,
@@ -339,8 +354,9 @@ def test_screening_meta_serialization() -> None:
         skipped_count=2,
     )
     data = meta.model_dump()
-    assert data["tool"] == "laglitsynth.screening_abstracts.screen"
+    assert data["run"]["tool"] == "laglitsynth.screening_abstracts.screen"
     assert data["above_threshold_count"] == 10
+    assert data["llm"]["temperature"] == 0.8
 
 
 # --- _preflight ---
@@ -453,8 +469,115 @@ def test_run_writes_output_files(tmp_path: Path) -> None:
     assert "W2" in work_ids_in_verdicts
     assert "W3" in work_ids_in_verdicts
 
-    # Meta should exist with correct counts
+    # Meta should exist with correct counts and nested run/llm structure
     meta = json.loads((out_dir / "screening-meta.json").read_text())
     assert meta["above_threshold_count"] == 1
     assert meta["below_threshold_count"] == 1
     assert meta["skipped_count"] == 1
+    assert meta["run"]["tool"] == "laglitsynth.screening_abstracts.screen"
+    assert meta["llm"]["temperature"] == 0.8
+
+
+# --- New tests: seed, sentinel seed=None, prompt_sha256 ---
+
+
+def test_seed_recorded_on_verdict(tmp_path: Path) -> None:
+    """Patch random.randint to a known value; verify verdict.seed matches."""
+    works = [_make_work("W1", abstract="An ocean abstract.")]
+    _write_works_jsonl(tmp_path / "input.jsonl", works)
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = _mock_openai_response(
+        '{"relevance_score": 75, "reason": "relevant"}'
+    )
+
+    with patch("laglitsynth.screening_abstracts.screen.random.randint", return_value=42):
+        verdict = classify_abstract(
+            "W1",
+            "An ocean abstract.",
+            "about oceans",
+            model="m",
+            base_url="http://x",
+            client=mock_client,
+        )
+
+    assert verdict.seed == 42
+    # Confirm seed was forwarded to the Ollama call
+    call_kwargs = mock_client.chat.completions.create.call_args[1]
+    assert call_kwargs["seed"] == 42
+    assert call_kwargs["temperature"] == 0.8
+
+
+def test_seed_none_on_sentinel_reasons(tmp_path: Path) -> None:
+    """no-abstract and llm-parse-failure verdicts carry seed=None."""
+    works = [
+        _make_work("W1", abstract=None),
+        _make_work("W2", abstract="Has abstract."),
+    ]
+    _write_works_jsonl(tmp_path / "input.jsonl", works)
+
+    def raise_classify_error(*args: Any, **kwargs: Any) -> ScreeningVerdict:
+        raise ClassifyError("mock failure")
+
+    with (
+        patch(
+            "laglitsynth.screening_abstracts.screen.classify_abstract",
+            side_effect=raise_classify_error,
+        ),
+        patch("laglitsynth.screening_abstracts.screen.OpenAI"),
+    ):
+        results = list(
+            screen_works(
+                tmp_path / "input.jsonl",
+                "prompt",
+                model="m",
+                base_url="http://x",
+                threshold=50,
+                max_records=None,
+            )
+        )
+
+    assert results[0].reason == "no-abstract"
+    assert results[0].seed is None
+    assert results[1].reason == "llm-parse-failure"
+    assert results[1].seed is None
+
+
+def test_prompt_sha256_matches(tmp_path: Path) -> None:
+    """meta.llm.prompt_sha256 must equal sha256(SYSTEM_PROMPT + '\\n' + prompt)."""
+    works = [_make_work("W1", abstract="An abstract.")]
+    _write_works_jsonl(tmp_path / "input.jsonl", works)
+
+    user_prompt = "about oceans"
+    expected_digest = hashlib.sha256(
+        (SYSTEM_PROMPT + "\n" + user_prompt).encode("utf-8")
+    ).hexdigest()
+
+    classify_results = {"W1": {"relevance_score": 80, "reason": "yes"}}
+    out_dir = tmp_path / "out"
+
+    args = MagicMock()
+    args.input = tmp_path / "input.jsonl"
+    args.prompt = user_prompt
+    args.output_dir = out_dir
+    args.model = "m"
+    args.base_url = "http://x"
+    args.screening_threshold = 50
+    args.max_records = None
+    args.dry_run = False
+
+    with (
+        patch("laglitsynth.screening_abstracts.screen._preflight"),
+        patch(
+            "laglitsynth.screening_abstracts.screen.classify_abstract",
+            side_effect=_mock_classify(classify_results),
+        ),
+        patch("laglitsynth.screening_abstracts.screen.OpenAI"),
+    ):
+        from laglitsynth.screening_abstracts.screen import run
+
+        run(args)
+
+    meta = json.loads((out_dir / "screening-meta.json").read_text())
+    assert meta["llm"]["prompt_sha256"] == expected_digest
+    assert len(meta["llm"]["prompt_sha256"]) == 64  # full hex digest

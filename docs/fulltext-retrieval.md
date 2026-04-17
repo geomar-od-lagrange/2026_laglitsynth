@@ -94,24 +94,24 @@ no source had a PDF. `failed` means a source was found but download failed
 One per work in the included catalogue, regardless of outcome.
 
 ```python
-class RetrievalRecord(_Base):
+class RetrievalRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     work_id: str                          # OpenAlex ID
     retrieval_status: RetrievalStatus
     source_url: str | None = None         # URL the PDF was fetched from
     pdf_path: str | None = None           # relative path to stored PDF
     error: str | None = None              # error message if failed
-    retrieved_at: str                      # ISO timestamp
+    retrieved_at: str                     # per-record wall-clock timestamp
 ```
 
 ### RetrievalMeta
 
-Run-level metadata, following the `FetchMeta` / `FilterMeta` pattern.
+Run-level metadata.
 
 ```python
-class RetrievalMeta(_Base):
-    tool: str = "laglitsynth.fulltext_retrieval.retrieve"
-    tool_version: str = "alpha"
-    retrieved_at: str
+class RetrievalMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run: _RunMeta      # tool, tool_version, run_at, validation_skipped
     total_works: int
     retrieved_count: int
     abstract_only_count: int

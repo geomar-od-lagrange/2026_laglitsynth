@@ -17,7 +17,8 @@ from dotenv import load_dotenv
 from pydantic import ValidationError
 
 from laglitsynth.io import write_jsonl, write_meta
-from laglitsynth.catalogue_fetch.models import FetchMeta, Work
+from laglitsynth.catalogue_fetch.models import TOOL_NAME, FetchMeta, Work
+from laglitsynth.models import _RunMeta
 
 logger = logging.getLogger(__name__)
 
@@ -188,11 +189,16 @@ def run(args: argparse.Namespace) -> None:
     elapsed = time.monotonic() - t0
     file_size = output.stat().st_size
 
+    run_meta = _RunMeta(
+        tool=TOOL_NAME,
+        run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+        validation_skipped=0,  # fetch validates inline; no stats accumulator needed
+    )
     write_meta(
         meta_path,
         FetchMeta(
+            run=run_meta,
             query=args.query,
-            fetched_at=datetime.now(UTC).isoformat(timespec="microseconds"),
             total_count=count,
             records_written=count,
         ),

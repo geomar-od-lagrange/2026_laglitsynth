@@ -1,9 +1,14 @@
 from typing import Literal
 
-from laglitsynth.models import _Base
+from pydantic import BaseModel, ConfigDict
+
+from laglitsynth.models import _RunMeta
+
+TOOL_NAME = "laglitsynth.screening_adjudication.adjudicate"
 
 
-class AdjudicationVerdict(_Base):
+class AdjudicationVerdict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     work_id: str
     decision: Literal["accept", "reject", "skip"]
     reviewer: str
@@ -11,10 +16,9 @@ class AdjudicationVerdict(_Base):
     reason: str | None = None
 
 
-class AdjudicationMeta(_Base):
-    tool: str = "laglitsynth.screening_adjudication.adjudicate"
-    tool_version: str = "alpha"
-    adjudicated_at: str
+class AdjudicationMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run: _RunMeta
     threshold: int
     input_count: int
     accepted_count: int

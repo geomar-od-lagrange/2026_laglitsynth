@@ -8,9 +8,10 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from laglitsynth.screening_adjudication.models import AdjudicationMeta, AdjudicationVerdict
+from laglitsynth.screening_adjudication.models import TOOL_NAME, AdjudicationMeta, AdjudicationVerdict
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
-from laglitsynth.io import read_jsonl, read_works_jsonl, write_jsonl, write_meta
+from laglitsynth.io import JsonlReadStats, read_jsonl, read_works_jsonl, write_jsonl, write_meta
+from laglitsynth.models import _RunMeta
 
 
 def build_subparser(
@@ -55,11 +56,12 @@ def run(args: argparse.Namespace) -> None:
 
     t0 = time.monotonic()
 
+    stats = JsonlReadStats()
     # Load catalogue into a lookup dict by work_id
-    works_by_id = {w.id: w for w in read_works_jsonl(args.catalogue)}
+    works_by_id = {w.id: w for w in read_works_jsonl(args.catalogue, stats)}
 
     # Load stage-3 verdicts
-    verdicts = list(read_jsonl(args.input, ScreeningVerdict))
+    verdicts = list(read_jsonl(args.input, ScreeningVerdict, stats))
     input_count = len(verdicts)
 
     now = datetime.now(UTC).isoformat(timespec="microseconds")
@@ -88,10 +90,16 @@ def run(args: argparse.Namespace) -> None:
 
     write_jsonl(adj_verdicts, output_dir / "verdicts.jsonl")
     write_jsonl(accepted_works, output_dir / "included.jsonl")
+
+    run_meta = _RunMeta(
+        tool=TOOL_NAME,
+        run_at=now,
+        validation_skipped=stats.skipped,
+    )
     write_meta(
         output_dir / "adjudication-meta.json",
         AdjudicationMeta(
-            adjudicated_at=now,
+            run=run_meta,
             threshold=threshold,
             input_count=input_count,
             accepted_count=accepted_count,

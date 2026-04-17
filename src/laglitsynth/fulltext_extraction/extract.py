@@ -13,12 +13,14 @@ import httpx
 from lxml import etree
 
 from laglitsynth.fulltext_extraction.models import (
+    TOOL_NAME,
     ExtractedDocument,
     ExtractionMeta,
     TextSection,
 )
 from laglitsynth.ids import filename_to_work_id
 from laglitsynth.io import append_jsonl, read_jsonl, write_meta
+from laglitsynth.models import _RunMeta
 
 logger = logging.getLogger(__name__)
 
@@ -254,11 +256,16 @@ def run(args: argparse.Namespace) -> None:
 
     elapsed = time.monotonic() - t0
 
+    run_meta = _RunMeta(
+        tool=TOOL_NAME,
+        run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+        validation_skipped=0,  # extraction reads PDFs, not JSONL records
+    )
     write_meta(
         output_dir / "extraction-meta.json",
         ExtractionMeta(
+            run=run_meta,
             grobid_version=version,
-            extracted_at=datetime.now(UTC).isoformat(timespec="microseconds"),
             total_pdfs=total,
             extracted_count=extracted_count,
             failed_count=failed_count,
