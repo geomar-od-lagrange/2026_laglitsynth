@@ -52,6 +52,17 @@ Stages 1–8 are implemented. Each stage has its own doc under [`docs/`](docs/).
 Stage 9+ are specified in [`docs/pipeline.md`](docs/pipeline.md) but not
 yet implemented.
 
+### Smoke test
+
+[`scripts/test-run-all-stages.sh`](scripts/test-run-all-stages.sh) runs all
+eight implemented stages end-to-end on a small sample, writing outputs under
+`data/test-run/`. Requires Ollama and GROBID running locally (see below).
+
+```bash
+scripts/test-run-all-stages.sh                            # defaults
+scripts/test-run-all-stages.sh "particle dispersion" 10   # custom query, N=10
+```
+
 ## OpenAlex API key
 
 Since February 2026, OpenAlex requires a (free) API key. Register at
