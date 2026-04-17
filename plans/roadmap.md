@@ -1,7 +1,7 @@
 # Roadmap
 
 One-page overview of what's done, in flight, and queued. Details live
-in the linked plans and in the [2026-04-16 review](review-2026-04-16.md).
+in the linked plans and in the [2026-04-16 review](done/review-2026-04-16.md).
 Update this file when a plan is written, implemented, or archived.
 
 ## Implemented
@@ -35,20 +35,16 @@ Update this file when a plan is written, implemented, or archived.
   passes `temperature=0.8` and a per-call `random.randint(...)` seed
   to Ollama; each `ScreeningVerdict` carries its seed;
   `ScreeningMeta.llm` carries `prompt_sha256`.
-
-## In flight
-
-- (None.)
-
-## In flight
-
-- [Thin TEI wrapper for `ExtractedDocument`](tei-wrapper.md) —
+- [Thin TEI wrapper for `ExtractedDocument`](done/tei-wrapper.md) —
   `ExtractedDocument` trims to `{work_id, tei_path, content_sha256,
   extracted_at}`; lazy `TeiDocument` wrapper exposes
   `sections()`, `figures()`, `citations()`, `bibliography()` over
   the TEI bytes we already keep on disk. Recursive `Section.children`
-  resolves the flat-vs-recursive question. All three plan open
-  questions resolved.
+  resolves the flat-vs-recursive question.
+
+## In flight
+
+- (None.)
 
 ## Queued — ready to plan
 
@@ -81,9 +77,9 @@ Update this file when a plan is written, implemented, or archived.
 
 ## Latest review
 
-[plans/review-2026-04-16.md](review-2026-04-16.md) indexes the three
-sub-reviews ([surface](review-2026-04-16-surface.md),
-[code](review-2026-04-16-code.md),
-[system](review-2026-04-16-system.md)) and groups findings into seven
+[plans/done/review-2026-04-16.md](done/review-2026-04-16.md) indexes the three
+sub-reviews ([surface](done/review-2026-04-16-surface.md),
+[code](done/review-2026-04-16-code.md),
+[system](done/review-2026-04-16-system.md)) and groups findings into seven
 cross-cutting themes. Every queued item above traces to a finding
 there.
