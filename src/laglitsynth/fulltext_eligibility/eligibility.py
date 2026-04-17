@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import logging
 import random
 import sys
@@ -15,6 +14,7 @@ from pathlib import Path
 
 from lxml import etree
 from openai import OpenAI
+from pydantic import ValidationError
 
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.fulltext_eligibility.models import (
@@ -22,6 +22,7 @@ from laglitsynth.fulltext_eligibility.models import (
     EligibilityMeta,
     EligibilityVerdict,
     SourceBasis,
+    _EligibilityPayload,
 )
 from laglitsynth.fulltext_eligibility.prompts import (
     SYSTEM_PROMPT,
@@ -47,10 +48,6 @@ _TEMPERATURE = 0.8
 _NUM_CTX = 32768
 
 
-class ClassifyError(Exception):
-    """Raised when the LLM response cannot be parsed into an EligibilityVerdict."""
-
-
 def classify_eligibility(
     work_id: str,
     prompt: str,
@@ -59,6 +56,13 @@ def classify_eligibility(
     model: str,
     client: OpenAI,
 ) -> EligibilityVerdict:
+    """Call the LLM, validate the payload, compose the verdict.
+
+    On JSON parse error or ``ValidationError`` returns a
+    ``reason="llm-parse-failure"`` sentinel with ``eligible=None``,
+    ``seed=None``, and the raw response attached for audit. Mirrors
+    stage 8's ``extract_codebook`` shape and error handling.
+    """
     seed = random.randint(0, 2**31 - 1)
     response = client.chat.completions.create(
         model=model,
@@ -73,22 +77,25 @@ def classify_eligibility(
     )
     content = response.choices[0].message.content or "{}"
     try:
-        parsed = json.loads(content)
-        eligible = parsed["eligible"]
-        reason = parsed["reason"]
-        if not isinstance(eligible, bool):
-            raise ValueError(f"'eligible' is not a bool: {eligible!r}")
+        payload = _EligibilityPayload.model_validate_json(content)
+    except (ValidationError, ValueError) as exc:
+        logger.warning("LLM parse failure for %s: %s", work_id, exc)
         return EligibilityVerdict(
             work_id=work_id,
-            eligible=eligible,
+            eligible=None,
             source_basis=source_basis,
-            reason=str(reason),
-            seed=seed,
+            reason="llm-parse-failure",
+            seed=None,
+            raw_response=content,
         )
-    except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
-        raise ClassifyError(
-            f"Failed to parse LLM response for {work_id}: {exc}"
-        ) from exc
+    return EligibilityVerdict(
+        work_id=work_id,
+        eligible=payload.eligible,
+        source_basis=source_basis,
+        reason=payload.reason,
+        seed=seed,
+        raw_response=content,
+    )
 
 
 def _load_extractions(
@@ -145,7 +152,7 @@ def _assess_one(
             )
         if rendered:
             prompt = build_user_message("full_text", rendered)
-            return _classify_or_sentinel(
+            return classify_eligibility(
                 work.id, prompt, "full_text", client=client, model=model
             )
         # Empty body (valid XML, no content): fall through to abstract.
@@ -154,7 +161,7 @@ def _assess_one(
     if work.abstract:
         rendered = render_abstract(work.abstract)
         prompt = build_user_message("abstract_only", rendered)
-        return _classify_or_sentinel(
+        return classify_eligibility(
             work.id, prompt, "abstract_only", client=client, model=model
         )
 
@@ -167,29 +174,6 @@ def _assess_one(
         reason="no-source",
         seed=None,
     )
-
-
-def _classify_or_sentinel(
-    work_id: str,
-    prompt: str,
-    source_basis: SourceBasis,
-    *,
-    client: OpenAI,
-    model: str,
-) -> EligibilityVerdict:
-    try:
-        return classify_eligibility(
-            work_id, prompt, source_basis, client=client, model=model
-        )
-    except ClassifyError:
-        logger.warning("LLM parse failure for %s; recording as invalid", work_id)
-        return EligibilityVerdict(
-            work_id=work_id,
-            eligible=None,
-            source_basis=source_basis,
-            reason="llm-parse-failure",
-            seed=None,
-        )
 
 
 def _preflight(args: argparse.Namespace) -> None:
@@ -281,7 +265,7 @@ def run(args: argparse.Namespace) -> None:
     )
 
     prompt_sha256 = hashlib.sha256(
-        (SYSTEM_PROMPT + "\n" + USER_TEMPLATE).encode("utf-8")
+        (SYSTEM_PROMPT + "\n" + USER_TEMPLATE + "\n" + str(_NUM_CTX)).encode("utf-8")
     ).hexdigest()
 
     stats = JsonlReadStats()
@@ -355,15 +339,24 @@ def run(args: argparse.Namespace) -> None:
 
     eligible_count = sum(1 for v in all_verdicts if v.eligible is True)
     excluded_count = sum(1 for v in all_verdicts if v.eligible is False)
-    skipped_count = sum(1 for v in all_verdicts if v.eligible is None)
+    no_source_count = sum(1 for v in all_verdicts if v.reason == "no-source")
+    tei_parse_failure_count = sum(
+        1 for v in all_verdicts if v.reason == "tei-parse-failure"
+    )
+    llm_parse_failure_count = sum(
+        1 for v in all_verdicts if v.reason == "llm-parse-failure"
+    )
 
     by_source_basis: dict[str, int] = {}
     for v in all_verdicts:
         by_source_basis[v.source_basis] = by_source_basis.get(v.source_basis, 0) + 1
 
+    skipped_total = no_source_count + tei_parse_failure_count + llm_parse_failure_count
     print(
         f"\nDone in {elapsed:.1f}s: {eligible_count} eligible, "
-        f"{excluded_count} excluded, {skipped_count} skipped.",
+        f"{excluded_count} excluded, {skipped_total} skipped "
+        f"({no_source_count} no-source, {tei_parse_failure_count} tei-parse-failure, "
+        f"{llm_parse_failure_count} llm-parse-failure).",
         file=sys.stderr,
     )
 
@@ -397,7 +390,9 @@ def run(args: argparse.Namespace) -> None:
             input_count=total,
             eligible_count=eligible_count,
             excluded_count=excluded_count,
-            skipped_count=skipped_count,
+            no_source_count=no_source_count,
+            tei_parse_failure_count=tei_parse_failure_count,
+            llm_parse_failure_count=llm_parse_failure_count,
             by_source_basis=by_source_basis,
         ),
     )

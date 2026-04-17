@@ -11,7 +11,6 @@ import pytest
 
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.fulltext_eligibility.eligibility import (
-    ClassifyError,
     assess_works,
     classify_eligibility,
 )
@@ -105,6 +104,7 @@ class TestClassifyEligibility:
         assert verdict.reason == "matches"
         assert verdict.source_basis == "full_text"
         assert isinstance(verdict.seed, int)
+        assert verdict.raw_response == '{"eligible": true, "reason": "matches"}'
 
     def test_valid_eligible_false(self) -> None:
         resp = _mock_openai_response('{"eligible": false, "reason": "review article"}')
@@ -116,32 +116,62 @@ class TestClassifyEligibility:
         assert verdict.eligible is False
         assert verdict.source_basis == "abstract_only"
 
-    def test_malformed_json_raises(self) -> None:
+    def test_malformed_json_returns_sentinel(self) -> None:
         resp = _mock_openai_response("not json at all")
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
-        with pytest.raises(ClassifyError):
-            classify_eligibility(
-                "W1", "prompt", "full_text", model="m", client=mock_client
-            )
+        verdict = classify_eligibility(
+            "W1", "prompt", "full_text", model="m", client=mock_client
+        )
+        assert verdict.reason == "llm-parse-failure"
+        assert verdict.eligible is None
+        assert verdict.seed is None
+        assert verdict.raw_response == "not json at all"
 
-    def test_missing_eligible_field_raises(self) -> None:
+    def test_missing_eligible_field_returns_sentinel(self) -> None:
         resp = _mock_openai_response('{"reason": "ok"}')
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
-        with pytest.raises(ClassifyError):
-            classify_eligibility(
-                "W1", "prompt", "full_text", model="m", client=mock_client
-            )
+        verdict = classify_eligibility(
+            "W1", "prompt", "full_text", model="m", client=mock_client
+        )
+        assert verdict.reason == "llm-parse-failure"
+        assert verdict.raw_response == '{"reason": "ok"}'
 
-    def test_non_bool_eligible_raises(self) -> None:
-        resp = _mock_openai_response('{"eligible": "yes", "reason": "ok"}')
+    def test_extra_fields_dropped(self) -> None:
+        # LLMs at t>0 sprinkle extras; they should not fail the record.
+        resp = _mock_openai_response(
+            '{"eligible": true, "reason": "ok", "confidence": 95}'
+        )
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
-        with pytest.raises(ClassifyError):
-            classify_eligibility(
-                "W1", "prompt", "full_text", model="m", client=mock_client
-            )
+        verdict = classify_eligibility(
+            "W1", "prompt", "full_text", model="m", client=mock_client
+        )
+        assert verdict.reason == "ok"
+        assert verdict.eligible is True
+
+    def test_reason_list_coerced(self) -> None:
+        resp = _mock_openai_response(
+            '{"eligible": true, "reason": ["a", "b"]}'
+        )
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = resp
+        verdict = classify_eligibility(
+            "W1", "prompt", "full_text", model="m", client=mock_client
+        )
+        assert verdict.reason == "a / b"
+
+    def test_string_eligible_coerced_by_pydantic(self) -> None:
+        # Pydantic v2 accepts "true"/"false" → bool in non-strict mode.
+        resp = _mock_openai_response('{"eligible": "true", "reason": "ok"}')
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = resp
+        verdict = classify_eligibility(
+            "W1", "prompt", "full_text", model="m", client=mock_client
+        )
+        assert verdict.eligible is True
+        assert verdict.reason == "ok"
 
     def test_seed_forwarded_to_client(self) -> None:
         resp = _mock_openai_response('{"eligible": true, "reason": "ok"}')
@@ -176,7 +206,14 @@ def _mock_classify(
     ) -> EligibilityVerdict:
         entry = results[work_id]
         if entry == "error":
-            raise ClassifyError(f"mock failure for {work_id}")
+            return EligibilityVerdict(
+                work_id=work_id,
+                eligible=None,
+                source_basis=source_basis,
+                reason="llm-parse-failure",
+                seed=None,
+                raw_response="mock failure",
+            )
         assert isinstance(entry, dict)
         return EligibilityVerdict(
             work_id=work_id,
@@ -598,7 +635,9 @@ class TestRun:
         assert meta["input_count"] == 3
         assert meta["eligible_count"] == 1
         assert meta["excluded_count"] == 1
-        assert meta["skipped_count"] == 1
+        assert meta["no_source_count"] == 1
+        assert meta["tei_parse_failure_count"] == 0
+        assert meta["llm_parse_failure_count"] == 0
         assert meta["by_source_basis"] == {"abstract_only": 2, "none": 1}
         assert meta["run"]["tool"] == "laglitsynth.fulltext_eligibility.assess"
         assert meta["llm"]["temperature"] == 0.8
@@ -665,7 +704,9 @@ class TestRun:
         meta = json.loads((out_dir / "eligibility-meta.json").read_text())
         assert meta["eligible_count"] == 1
         assert meta["excluded_count"] == 1
-        assert meta["skipped_count"] == 0
+        assert meta["no_source_count"] == 0
+        assert meta["tei_parse_failure_count"] == 0
+        assert meta["llm_parse_failure_count"] == 0
 
         eligible_lines = [
             l

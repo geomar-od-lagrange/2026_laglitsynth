@@ -60,14 +60,20 @@ the complete run record. See
 [codebook.md](codebook.md) for the field list.
 
 The record carries an identification block (`work_id`, `source_basis`,
-`reason`, `seed`, `truncated`) plus the content fields from the
-codebook. Every content value is paired with a `*_context: str | None`
-verbatim snippet. Sentinel records have `reason` set and every content
-field `None`; a successful record has `reason=None`.
+`reason`, `seed`, `truncated`, `raw_response`) plus the content fields
+from the codebook. Every content value is paired with a
+`*_context: str | None` verbatim snippet. Sentinel records have
+`reason` set and every content field `None`; a successful record has
+`reason=None`.
 
 A successful-but-truncated record has `reason=None` and
 `truncated=True`: the LLM answered, but on a shortened body. Abstract
 and sentinel records are never truncated.
+
+`raw_response` carries the LLM's message text before parsing. Set on
+successful records and on `llm-parse-failure` sentinels so an operator
+can see what the model actually said; `None` on sentinels emitted
+without an LLM call (`no-source`, `tei-parse-failure`).
 
 ### ExtractionCodebookMeta
 
@@ -90,7 +96,10 @@ class ExtractionCodebookMeta(BaseModel):
 `run` and `llm` are the shared reproducibility nests from
 [`src/laglitsynth/models.py`](../src/laglitsynth/models.py); they
 carry `tool`, `tool_version`, `run_at`, `validation_skipped`, `model`,
-`temperature`, and `prompt_sha256`.
+`temperature`, and `prompt_sha256`. `prompt_sha256` covers
+`SYSTEM_PROMPT`, `USER_TEMPLATE`, the Ollama `num_ctx` setting, and
+`CHAR_BUDGET`, so any prompt, context-window, or truncation-budget
+change shifts the hash.
 
 ## Storage layout
 

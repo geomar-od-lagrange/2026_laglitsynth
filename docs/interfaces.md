@@ -350,15 +350,28 @@ class _RunMeta(BaseModel):
 
 ### `_LlmMeta`
 
-LLM configuration carried by `ScreeningMeta` and `EligibilityMeta`. Enables reproducibility checks across runs.
+LLM configuration carried by `ScreeningMeta`, `EligibilityMeta`, and
+`ExtractionCodebookMeta`. Enables reproducibility checks across runs.
 
 ```python
 class _LlmMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     model: str           # Ollama model tag
     temperature: float   # explicit value passed to the API (currently 0.8)
-    prompt_sha256: str   # sha256(SYSTEM_PROMPT + "\n" + user prompt), 64 hex chars
+    prompt_sha256: str   # 64 hex chars
 ```
+
+Per stage, the hash input is:
+
+| Stage | `prompt_sha256` covers |
+|---|---|
+| 3 — screening-abstracts | `SYSTEM_PROMPT + "\n" + user_prompt` (user prompt is a CLI arg) |
+| 7 — fulltext-eligibility | `SYSTEM_PROMPT + "\n" + USER_TEMPLATE + "\n" + num_ctx` |
+| 8 — extraction-codebook | `SYSTEM_PROMPT + "\n" + USER_TEMPLATE + "\n" + num_ctx + "\n" + CHAR_BUDGET` |
+
+Stages 7 and 8 fold their Ollama `num_ctx` setting into the hash so a
+context-window change produces a different digest. Stage 8 also folds
+`CHAR_BUDGET`, its prompt-truncation placeholder.
 
 ## Extra policy
 

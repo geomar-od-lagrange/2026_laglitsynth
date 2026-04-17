@@ -12,7 +12,6 @@ import pytest
 
 from laglitsynth.screening_abstracts.screen import (
     SYSTEM_PROMPT,
-    ClassifyError,
     classify_abstract,
     screen_works,
 )
@@ -64,36 +63,42 @@ def test_classify_abstract_valid_response() -> None:
     assert verdict.work_id == "W1"
     assert verdict.relevance_score == 85
     assert verdict.reason == "relevant"
+    assert verdict.raw_response == '{"relevance_score": 85, "reason": "relevant"}'
 
 
-def test_classify_abstract_malformed_json() -> None:
+def test_classify_abstract_malformed_json_returns_sentinel() -> None:
     resp = _mock_openai_response("this is not json at all")
     mock_client = MagicMock()
     mock_client.chat.completions.create.return_value = resp
-    with pytest.raises(ClassifyError):
-        classify_abstract(
-            "W1", "abstract", "prompt", model="m", base_url="http://x", client=mock_client
-        )
+    verdict = classify_abstract(
+        "W1", "abstract", "prompt", model="m", base_url="http://x", client=mock_client
+    )
+    assert verdict.reason == "llm-parse-failure"
+    assert verdict.relevance_score is None
+    assert verdict.seed is None
+    assert verdict.raw_response == "this is not json at all"
 
 
-def test_classify_abstract_missing_fields() -> None:
+def test_classify_abstract_missing_fields_returns_sentinel() -> None:
     resp = _mock_openai_response('{"relevance_score": 50}')
     mock_client = MagicMock()
     mock_client.chat.completions.create.return_value = resp
-    with pytest.raises(ClassifyError):
-        classify_abstract(
-            "W1", "abstract", "prompt", model="m", base_url="http://x", client=mock_client
-        )
+    verdict = classify_abstract(
+        "W1", "abstract", "prompt", model="m", base_url="http://x", client=mock_client
+    )
+    assert verdict.reason == "llm-parse-failure"
+    assert verdict.raw_response == '{"relevance_score": 50}'
 
 
-def test_classify_abstract_wrong_types() -> None:
+def test_classify_abstract_wrong_types_returns_sentinel() -> None:
     resp = _mock_openai_response('{"relevance_score": "high", "reason": "good"}')
     mock_client = MagicMock()
     mock_client.chat.completions.create.return_value = resp
-    with pytest.raises(ClassifyError):
-        classify_abstract(
-            "W1", "abstract", "prompt", model="m", base_url="http://x", client=mock_client
-        )
+    verdict = classify_abstract(
+        "W1", "abstract", "prompt", model="m", base_url="http://x", client=mock_client
+    )
+    assert verdict.reason == "llm-parse-failure"
+    assert verdict.raw_response == '{"relevance_score": "high", "reason": "good"}'
 
 
 # --- screen_works ---
@@ -111,7 +116,7 @@ def _mock_classify(
     """Return a side_effect function for classify_abstract.
 
     results maps work_id to {"relevance_score": ..., "reason": ...}
-    or "error" to raise ClassifyError.
+    or "error" to return an llm-parse-failure sentinel verdict.
     """
 
     def side_effect(
@@ -125,7 +130,13 @@ def _mock_classify(
     ) -> ScreeningVerdict:
         entry = results[work_id]
         if entry == "error":
-            raise ClassifyError(f"mock failure for {work_id}")
+            return ScreeningVerdict(
+                work_id=work_id,
+                relevance_score=None,
+                reason="llm-parse-failure",
+                seed=None,
+                raw_response="mock failure",
+            )
         return ScreeningVerdict(
             work_id=work_id,
             relevance_score=entry["relevance_score"],
@@ -281,7 +292,13 @@ def test_verdict_reason_llm_parse_failure(tmp_path: Path) -> None:
     _write_works_jsonl(tmp_path / "input.jsonl", works)
 
     def raise_classify_error(*args: Any, **kwargs: Any) -> ScreeningVerdict:
-        raise ClassifyError("mock failure")
+        return ScreeningVerdict(
+            work_id="W1",
+            relevance_score=None,
+            reason="llm-parse-failure",
+            seed=None,
+            raw_response="mock failure",
+        )
 
     with patch(
         "laglitsynth.screening_abstracts.screen.classify_abstract",
@@ -512,7 +529,13 @@ def test_seed_none_on_sentinel_reasons(tmp_path: Path) -> None:
     _write_works_jsonl(tmp_path / "input.jsonl", works)
 
     def raise_classify_error(*args: Any, **kwargs: Any) -> ScreeningVerdict:
-        raise ClassifyError("mock failure")
+        return ScreeningVerdict(
+            work_id="W1",
+            relevance_score=None,
+            reason="llm-parse-failure",
+            seed=None,
+            raw_response="mock failure",
+        )
 
     with (
         patch(

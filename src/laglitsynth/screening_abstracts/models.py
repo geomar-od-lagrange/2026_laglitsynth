@@ -11,6 +11,7 @@ class ScreeningVerdict(BaseModel):
     relevance_score: int | None = None
     reason: str | None = None
     seed: int | None = None  # Ollama seed used for this call; None for sentinel reasons
+    raw_response: str | None = None  # LLM's raw message content; None when no call was made
 
 
 class ScreeningMeta(BaseModel):

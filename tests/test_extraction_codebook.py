@@ -299,6 +299,57 @@ class TestExtractCodebook:
         assert record.reason is None
         assert record.passage_locations is None
 
+    def test_extra_fields_dropped_by_coercer(self) -> None:
+        # LLMs at t>0 sprinkle extras like "confidence", "notes". The
+        # coercer drops unknown keys so a stray field does not nuke the
+        # whole 30-field record via extra="forbid".
+        resp = _mock_openai_response(
+            '{"integration_scheme": "RK4", "confidence": 95, "notes": "extra"}'
+        )
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = resp
+        record = extract_codebook(
+            "W1",
+            "full_text",
+            "body",
+            client=mock_client,
+            model="m",
+            truncated=False,
+        )
+        assert record.reason is None
+        assert record.integration_scheme == "RK4"
+
+    def test_raw_response_captured_on_success(self) -> None:
+        content = '{"integration_scheme": "RK4"}'
+        resp = _mock_openai_response(content)
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = resp
+        record = extract_codebook(
+            "W1",
+            "full_text",
+            "body",
+            client=mock_client,
+            model="m",
+            truncated=False,
+        )
+        assert record.raw_response == content
+
+    def test_raw_response_captured_on_llm_parse_failure(self) -> None:
+        content = "this is not json at all"
+        resp = _mock_openai_response(content)
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = resp
+        record = extract_codebook(
+            "W1",
+            "full_text",
+            "body",
+            client=mock_client,
+            model="m",
+            truncated=False,
+        )
+        assert record.reason == "llm-parse-failure"
+        assert record.raw_response == content
+
 
 # --- extract_works cascade ---
 

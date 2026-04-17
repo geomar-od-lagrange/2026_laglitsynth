@@ -12,3 +12,4 @@ pixi.lock
 .coverage
 *.jsonl
 *.meta.json
+.tmp-*

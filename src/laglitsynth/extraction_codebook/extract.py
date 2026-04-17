@@ -53,8 +53,15 @@ def _sentinel_record(
     *,
     source_basis: SourceBasis,
     reason: str,
+    raw_response: str | None = None,
 ) -> ExtractionRecord:
-    """Build a sentinel record: identification set, every content field None."""
+    """Build a sentinel record: identification set, every content field None.
+
+    ``raw_response`` is passed through on ``llm-parse-failure`` so an
+    operator can see what the LLM actually said; left ``None`` on
+    sentinels emitted without an LLM call (``no-source``,
+    ``tei-parse-failure``).
+    """
     payload_fields = {name: None for name in _ExtractionPayload.model_fields}
     return ExtractionRecord(
         work_id=work_id,
@@ -62,6 +69,7 @@ def _sentinel_record(
         reason=reason,
         seed=None,
         truncated=False,
+        raw_response=raw_response,
         **payload_fields,
     )
 
@@ -101,7 +109,10 @@ def extract_codebook(
     except (ValidationError, ValueError) as exc:
         logger.warning("LLM parse failure for %s: %s", work_id, exc)
         return _sentinel_record(
-            work_id, source_basis=source_basis, reason="llm-parse-failure"
+            work_id,
+            source_basis=source_basis,
+            reason="llm-parse-failure",
+            raw_response=content,
         )
 
     return ExtractionRecord(
@@ -110,6 +121,7 @@ def extract_codebook(
         reason=None,
         seed=seed,
         truncated=truncated,
+        raw_response=content,
         **payload.model_dump(),
     )
 
@@ -278,7 +290,15 @@ def run(args: argparse.Namespace) -> None:
     )
 
     prompt_sha256 = hashlib.sha256(
-        (SYSTEM_PROMPT + "\n" + USER_TEMPLATE).encode("utf-8")
+        (
+            SYSTEM_PROMPT
+            + "\n"
+            + USER_TEMPLATE
+            + "\n"
+            + str(_NUM_CTX)
+            + "\n"
+            + str(CHAR_BUDGET)
+        ).encode("utf-8")
     ).hexdigest()
 
     stats = JsonlReadStats()

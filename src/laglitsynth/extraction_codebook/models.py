@@ -91,11 +91,20 @@ class _ExtractionPayload(BaseModel):
         JSON bool, or ``passage_locations`` with a list. Rather than fail
         the whole record on a type mismatch, flatten to string at ingest.
         ``None`` and empty lists pass through as ``None``.
+
+        Unknown keys are dropped here rather than hitting ``extra="forbid"``
+        on the model — LLMs at t>0 routinely sprinkle extras like
+        ``"confidence"`` or ``"notes"``, and those should not nuke the
+        whole record. The 30-field contract remains strict for the model
+        shape itself; widening happens only at the ingestion boundary.
         """
         if not isinstance(data, dict):
             return data
+        known = set(cls.model_fields)
         coerced: dict[str, Any] = {}
         for key, value in data.items():
+            if key not in known:
+                continue
             if value is None or isinstance(value, str):
                 coerced[key] = value
             elif isinstance(value, bool):  # must precede int; bool is an int subclass
@@ -120,6 +129,7 @@ class ExtractionRecord(BaseModel):
     reason: str | None  # sentinel for skips; None for normal records
     seed: int | None
     truncated: bool
+    raw_response: str | None = None  # LLM's raw message content; None when no call was made
 
     # Tagging (free-text, consolidated later).
     sub_discipline: str | None

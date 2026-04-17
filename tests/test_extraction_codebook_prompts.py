@@ -167,5 +167,6 @@ class TestSystemPromptCoversEveryField:
             "reason",
             "seed",
             "truncated",
+            "raw_response",
         }
         assert payload_fields == record_fields - identification

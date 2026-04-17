@@ -70,16 +70,29 @@ email. Set it in `.env`:
 UNPAYWALL_EMAIL=you@example.com
 ```
 
-## Ollama (for LLM screening)
+## Ollama (for LLM stages)
 
-The screening stage requires a running Ollama instance:
+Stages 3 ([`screening-abstracts`](docs/screening-abstracts.md)), 7
+([`fulltext-eligibility`](docs/eligibility.md)), and 8
+([`extraction-codebook`](docs/extraction-codebook.md)) all call a local
+Ollama instance via the OpenAI-compatible API.
 
 ```bash
 ollama serve
 ollama pull gemma3:4b
 ```
 
-See [`docs/screening-abstracts.md`](docs/screening-abstracts.md) for details.
+`gemma3:4b` (the CLI default) handles stages 3 and 7 comfortably but
+struggles with stage 8's 30-field structured JSON on typical paper
+bodies. For stage 8 a larger model is usually needed — in our smoke
+tests `llama3.1:8b` and `qwen2.5:14b` both produced valid records
+where `gemma3:4b` returned empty JSON. Pull whichever you want to use
+and pass it via `--model`.
+
+```bash
+ollama pull llama3.1:8b        # or qwen2.5:14b, etc.
+laglitsynth extraction-codebook --model llama3.1:8b ...
+```
 
 ## GROBID (for full-text extraction)
 

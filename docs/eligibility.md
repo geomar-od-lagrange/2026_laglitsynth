@@ -59,11 +59,23 @@ class EligibilityVerdict(BaseModel):
     source_basis: SourceBasis
     reason: str | None                 # LLM free-text or sentinel
     seed: int | None                   # Ollama seed used; None for sentinels
+    raw_response: str | None           # LLM's raw message content; None when no call was made
 ```
 
 `eligible` is tri-state. `True` and `False` are real LLM verdicts;
 `None` indicates a sentinel skip — the LLM was not called or its output
 could not be parsed. See [Sentinel reasons](#sentinel-reasons) below.
+
+`raw_response` captures the LLM's message text before parsing. Present
+on successful verdicts and on `llm-parse-failure` sentinels (so a
+reviewer can see what the model actually said); `None` on sentinels
+that did not call the LLM (`no-source`, `tei-parse-failure`).
+
+The LLM's response is validated through a private
+[`_EligibilityPayload`](../src/laglitsynth/fulltext_eligibility/models.py)
+pydantic submodel. A `mode="before"` validator drops unknown keys
+(LLMs at `temperature > 0` sprinkle extras) and coerces a `reason`
+returned as a list into a `" / "`-joined string.
 
 ### EligibilityMeta
 
@@ -77,14 +89,23 @@ class EligibilityMeta(BaseModel):
     input_count: int
     eligible_count: int
     excluded_count: int
-    skipped_count: int
+    no_source_count: int
+    tei_parse_failure_count: int
+    llm_parse_failure_count: int
     by_source_basis: dict[str, int]
 ```
 
 `run` and `llm` are the shared reproducibility nests from
 [`src/laglitsynth/models.py`](../src/laglitsynth/models.py) — they
 carry `tool`, `tool_version`, `run_at`, `validation_skipped`, `model`,
-`temperature`, and `prompt_sha256`.
+`temperature`, and `prompt_sha256`. `prompt_sha256` covers
+`SYSTEM_PROMPT`, `USER_TEMPLATE`, and the Ollama `num_ctx` setting, so
+any prompt- or context-window change shifts the hash.
+
+Per-sentinel counts (`no_source_count`, `tei_parse_failure_count`,
+`llm_parse_failure_count`) let operators diagnose a run without
+re-reading `verdicts.jsonl`. The count symmetry with stage 8
+(`extraction-codebook`) is deliberate.
 
 ## Storage layout
 
