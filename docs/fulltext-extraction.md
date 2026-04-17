@@ -38,23 +38,29 @@ From [grobid-lessons.md](grobid-lessons.md):
 - `consolidateCitations=0` (default off). We already have references from
   OpenAlex.
 
-### TEI XML parsing
+### TEI XML as the canonical artefact
 
-Parse GROBID's TEI XML output into a flat list of sections. Each section
-has a title and body text. Handle known failure modes:
+GROBID's TEI XML output is saved to disk as the canonical extraction
+artefact — one `.tei.xml` per PDF. The stored `ExtractedDocument`
+record carries only `work_id`, `tei_path` (relative to the output
+directory), `content_sha256` of the TEI bytes, and the
+`extracted_at` timestamp. Section text, figures, citations, and
+bibliography are not persisted in the JSONL; they are parsed lazily
+from the TEI on demand (see "Reading TEI" below).
 
-- Missing `<head>` elements: use `"Untitled section"` as the title.
-- No `<div>` sections at all: treat the entire `<body>` as a single
-  section titled `"Body"`.
-- Abstract outside `<body>`: skip it — the abstract is already in the
-  `Work` record from OpenAlex.
-- Figure captions interleaved with body: strip `<figure>` elements before
-  extracting paragraph text.
+Known TEI shape details the parser handles:
+
+- Missing `<head>` elements on a `<div>`: `Section.title` is `None`.
+- Figure captions interleaved with body: stripped before building
+  `Section.paragraphs` so captions don't leak into section text.
+  Figures remain accessible via `figures()` on the same document.
+- Abstract outside `<body>`: ignored — the abstract is already in
+  the `Work` record from OpenAlex.
 - TEI namespace: all elements are in
-  `{http://www.tei-c.org/ns/1.0}` — use this prefix throughout.
+  `{http://www.tei-c.org/ns/1.0}`.
 
-Output is plain text organized by section. No XML, no HTML. Downstream
-stages consume text.
+Nested `<div>` hierarchy is preserved via `Section.children`, so
+sub-sections (Methods → Sub-methods) remain reachable.
 
 ### Extraction quality gate
 
@@ -81,16 +87,7 @@ body text only.
 
 ## Data model
 
-New models in [`src/laglitsynth/fulltext_extraction/models.py`](../src/laglitsynth/fulltext_extraction/models.py).
-
-### TextSection
-
-```python
-class TextSection(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    title: str
-    text: str
-```
+Models in [`src/laglitsynth/fulltext_extraction/models.py`](../src/laglitsynth/fulltext_extraction/models.py).
 
 ### ExtractedDocument
 
@@ -99,16 +96,64 @@ One per successfully extracted PDF.
 ```python
 class ExtractedDocument(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    work_id: str                           # OpenAlex ID
-    sections: list[TextSection]
-    raw_text: str                          # concatenated sections
-    extracted_at: str                      # per-record wall-clock timestamp
+    work_id: str                 # OpenAlex ID
+    tei_path: str                # relative to output_dir, e.g. "tei/W123.tei.xml"
+    content_sha256: str          # sha256 hex digest of the TEI bytes on disk
+    extracted_at: str            # per-record wall-clock timestamp
+
+    def open_tei(self, output_dir: Path) -> TeiDocument:
+        ...
 ```
 
-`sections` is the structured representation. `raw_text` is the
-concatenation (for full-text search, token counting, or stages that do not
-need section structure). For works where GROBID fails, no
-`ExtractedDocument` is created — the absence is the signal.
+`tei_path` is stored as the relative string `"tei/<work_id>.tei.xml"`,
+mirroring [`RetrievalRecord.pdf_path`](../src/laglitsynth/fulltext_retrieval/models.py).
+Consumers join with their `output_dir` at read time — typically via
+`ExtractedDocument.open_tei(output_dir)`, which returns a
+`TeiDocument` wrapper over the TEI file on disk.
+
+`content_sha256` is a sha256 of the TEI bytes, computed at extract
+time. The hash becomes the stable identity for a given extraction
+across re-runs (a newer GROBID version may emit different TEI for the
+same `work_id`).
+
+For works where GROBID fails, no `ExtractedDocument` is created — the
+absence is the signal.
+
+### Reading TEI
+
+The [`fulltext_extraction/tei.py`](../src/laglitsynth/fulltext_extraction/tei.py)
+module exposes lazy typed views over a TEI file. Parsing happens on
+the first accessor call and is cached on the instance.
+
+```python
+doc = extracted.open_tei(output_dir)
+for section in doc.sections():           # list[Section]
+    ...
+for figure in doc.figures():             # list[Figure]
+    ...
+for cite in doc.citations():             # list[Citation] — inline <ref type="bibr">
+    ...
+for bib in doc.bibliography():           # list[BibReference]
+    ...
+```
+
+Return-type fields (all `extra="forbid"`):
+
+- [`Section`](../src/laglitsynth/fulltext_extraction/tei.py) —
+  `id`, `title`, `paragraphs: list[str]`, `children: list[Section]`
+  (recursive).
+- [`Figure`](../src/laglitsynth/fulltext_extraction/tei.py) —
+  `id`, `label`, `caption`.
+- [`Citation`](../src/laglitsynth/fulltext_extraction/tei.py) —
+  `target_id` (the bib id the inline ref points at, sans leading
+  `#`), `text` (the citation string as it appears inline).
+- [`BibReference`](../src/laglitsynth/fulltext_extraction/tei.py) —
+  `id`, `authors: list[str]` (`"Surname, F."` form), `title`, `year`,
+  `doi`, `raw` (full text of the `<biblStruct>`, whitespace-collapsed).
+
+`TeiDocument(path)` raises `FileNotFoundError` eagerly on missing
+files. XML parse errors surface lazily as `lxml.etree.XMLSyntaxError`
+on the first accessor call.
 
 ### ExtractionMeta
 
@@ -127,17 +172,19 @@ class ExtractionMeta(BaseModel):
 
 ```
 data/fulltext-extraction/
-  extraction.jsonl        # one ExtractedDocument per successfully parsed PDF
+  extraction.jsonl        # one ExtractedDocument per successfully parsed PDF,
+                          # carrying tei_path + content_sha256
   extraction-meta.json    # ExtractionMeta
-  tei/                    # raw GROBID TEI XML output (retained for debugging)
+  tei/                    # canonical GROBID TEI XML output — the extraction
+                          # artefact, read lazily via ExtractedDocument.open_tei
     W1234567890.tei.xml
 ```
 
-TEI XML files are retained so parsing can be re-run without re-calling
-GROBID. They are not committed to git.
+TEI XML files are the canonical extraction artefact; the JSONL record
+is a thin index over them. They are not committed to git.
 
-The `extraction.jsonl` file is the artifact consumed by downstream stages
-(eligibility, data extraction).
+The `extraction.jsonl` file plus the `tei/` subdirectory together are
+consumed by downstream stages (eligibility, data extraction).
 
 ## CLI interface
 
@@ -165,9 +212,10 @@ laglitsynth fulltext-extraction \
 2. Load existing `extraction.jsonl` if present (for `--skip-existing`).
 3. For each unprocessed PDF:
    a. Submit to GROBID.
-   b. Save TEI XML to `tei/`.
-   c. Parse TEI into sections.
-   d. Write `ExtractedDocument` to `extraction.jsonl`.
+   b. Save TEI XML to `tei/<work_id>.tei.xml`.
+   c. Hash the TEI bytes (`sha256`).
+   d. Write `ExtractedDocument(work_id, tei_path, content_sha256,
+      extracted_at)` to `extraction.jsonl`.
 4. Write `ExtractionMeta`.
 5. Print summary: extracted count, failed count.
 
@@ -179,10 +227,11 @@ command to start it.
 
 ## What to build now
 
-- GROBID client (POST PDF, receive TEI XML).
-- TEI XML parser with the fallback rules above.
+- GROBID client (POST PDF, receive TEI XML, write to `tei/`).
 - `ExtractedDocument` / `ExtractionMeta` models and JSONL output.
 - The `fulltext-extraction` CLI subcommand with `--skip-existing`.
+- `TeiDocument` wrapper for downstream TEI access (see
+  [`fulltext_extraction/tei.py`](../src/laglitsynth/fulltext_extraction/tei.py)).
 
 ## What to defer
 

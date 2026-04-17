@@ -1,8 +1,9 @@
-"""Full-text extraction via GROBID TEI XML parsing."""
+"""Full-text extraction via GROBID: PDF in, TEI XML on disk."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
 import sys
 import time
@@ -10,73 +11,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
-from lxml import etree
 
 from laglitsynth.fulltext_extraction.models import (
     TOOL_NAME,
     ExtractedDocument,
     ExtractionMeta,
-    TextSection,
 )
 from laglitsynth.ids import filename_to_work_id
 from laglitsynth.io import append_jsonl, read_jsonl, write_meta
 from laglitsynth.models import _RunMeta
 
 logger = logging.getLogger(__name__)
-
-TEI_NS = "{http://www.tei-c.org/ns/1.0}"
-
-# Hardened parser: no external-entity resolution, no network access.
-_TEI_PARSER = etree.XMLParser(resolve_entities=False, no_network=True)
-
-
-def _element_text(el: etree._Element) -> str:
-    result: str = etree.tostring(el, method="text", encoding="unicode")
-    return result.strip()
-
-
-def parse_tei(xml_bytes: bytes) -> list[TextSection]:
-    root = etree.fromstring(xml_bytes, parser=_TEI_PARSER)
-    body = root.find(f".//{TEI_NS}body")
-    if body is None:
-        return []
-
-    # Strip figure elements (captions are noisy)
-    for fig in body.findall(f".//{TEI_NS}figure"):
-        parent = fig.getparent()
-        if parent is not None:
-            parent.remove(fig)
-
-    divs = body.findall(f"{TEI_NS}div")
-
-    if not divs:
-        # No div sections — treat entire body as one section
-        text = _element_text(body)
-        if not text:
-            return []
-        return [TextSection(title="Body", text=text)]
-
-    sections: list[TextSection] = []
-    for div in divs:
-        head = div.find(f"{TEI_NS}head")
-        title = "Untitled section"
-        if head is not None:
-            head_text = _element_text(head)
-            if head_text:
-                title = head_text
-
-        paragraphs: list[str] = []
-        for p in div.findall(f"{TEI_NS}p"):
-            p_text = _element_text(p)
-            if p_text:
-                paragraphs.append(p_text)
-
-        if not paragraphs:
-            continue
-
-        sections.append(TextSection(title=title, text="\n\n".join(paragraphs)))
-
-    return sections
 
 
 def _grobid_health(grobid_url: str, client: httpx.Client) -> bool:
@@ -230,20 +175,14 @@ def run(args: argparse.Namespace) -> None:
                 )
                 continue
 
-            # Save raw TEI
-            tei_path = tei_dir / f"{pdf.stem}.tei.xml"
-            tei_path.write_bytes(tei_bytes)
-
-            # Parse
-            sections = parse_tei(tei_bytes)
-            raw_text = "\n\n".join(
-                f"## {s.title}\n\n{s.text}" for s in sections
-            )
+            # Save raw TEI — the canonical extraction artefact.
+            tei_filename = f"{pdf.stem}.tei.xml"
+            (tei_dir / tei_filename).write_bytes(tei_bytes)
 
             doc = ExtractedDocument(
                 work_id=work_id,
-                sections=sections,
-                raw_text=raw_text,
+                tei_path=f"tei/{tei_filename}",
+                content_sha256=hashlib.sha256(tei_bytes).hexdigest(),
                 extracted_at=datetime.now(UTC).isoformat(timespec="microseconds"),
             )
             append_jsonl(doc, extraction_path)
