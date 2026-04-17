@@ -67,17 +67,21 @@ Each run produces two files in `--output-dir`:
 | `relevance_score` | `int \| null` | 0–100 from LLM; `null` for sentinel reasons |
 | `reason` | `str \| null` | LLM justification string, or a sentinel reason code |
 | `seed` | `int \| null` | Ollama random seed passed for this call; `null` for sentinel reasons |
+| `raw_response` | `str \| null` | LLM's raw message content; `null` when no call was made |
 
 ### Sentinel reason values
 
 Two fixed strings mark non-LLM outcomes:
 
 - `reason="no-abstract"` — the work had no abstract; the LLM was not
-  called. `relevance_score=null`, `seed=null`.
+  called. `relevance_score=null`, `seed=null`, `raw_response=null`.
 - `reason="llm-parse-failure"` — the LLM returned a response that could
-  not be parsed. `relevance_score=null`, `seed=null`.
+  not be parsed. `relevance_score=null`, `seed=null`, `raw_response`
+  carries the raw message for audit.
 
 All other `reason` values are the LLM's free-text justification.
+`raw_response` is set on successful verdicts and on `llm-parse-failure`
+sentinels; it is `None` on `no-abstract` sentinels.
 
 ### ScreeningMeta fields
 

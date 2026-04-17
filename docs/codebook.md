@@ -141,7 +141,7 @@ not state the information, both the value and context are `None`.
 
 | Field | Type | Notes |
 |---|---|---|
-| passage_locations | free text | Where in the paper the information was found. Becomes ground truth for the two-pass extraction pattern. |
+| in_text_locations | free text | Where in the paper the extracted values were found — section headings, figures, tables. Not the paper's subject matter. Becomes ground truth for the two-pass extraction pattern. |
 | extraction_notes | free text | What was ambiguous, surprising, or hard to classify. Human-written in phase 3; LLM can attempt in phase 2 but this field is primarily for human review. |
 
 ## Design decisions
@@ -187,17 +187,21 @@ distinct artifacts with different availability patterns — a paper may
 name the tracking software (e.g. OceanParcels) without sharing the
 scripts that configured or analysed the experiment.
 
-### passage_locations is load-bearing
+### in_text_locations is load-bearing
 
 This field records where in the paper each piece of information was found.
 It serves two purposes:
 
 - **Validation.** A human reviewer can check the LLM's extraction against
   the source text without re-reading the whole paper.
-- **Two-pass calibration.** The passage locations from the pilot become the
+- **Two-pass calibration.** The in-text locations from the pilot become the
   ground truth for evaluating whether pass 1 (locate relevant passages)
   of the [two-pass extraction](two-pass-extraction.md) pattern is finding
   the right text.
+
+The field name is deliberately unambiguous: it is about locations
+inside the paper, not about geographic passages or ocean pathways the
+paper may describe.
 
 ### The seed codebook is a hypothesis
 

@@ -20,7 +20,7 @@ All tools are accessed via the `laglitsynth` CLI:
 laglitsynth --help
 ```
 
-Stages 1–6 are implemented. Each stage has its own doc under [`docs/`](docs/).
+Stages 1–8 are implemented. Each stage has its own doc under [`docs/`](docs/).
 
 - `laglitsynth catalogue-fetch` — search OpenAlex by keyword and store
   validated bibliographic records as JSONL. See
@@ -40,8 +40,16 @@ Stages 1–6 are implemented. Each stage has its own doc under [`docs/`](docs/).
 - `laglitsynth fulltext-extraction` — parse retrieved PDFs into
   structured section text via GROBID. See
   [`docs/fulltext-extraction.md`](docs/fulltext-extraction.md).
+- `laglitsynth fulltext-eligibility` — assess full-text eligibility of
+  included works with a local LLM, emitting an `EligibilityVerdict`
+  sidecar plus an `eligible.jsonl` convenience file. See
+  [`docs/eligibility.md`](docs/eligibility.md).
+- `laglitsynth extraction-codebook` — extract structured codebook
+  records (numerical choices, reproducibility indicators,
+  sub-discipline tags) from each eligible work with a local LLM. See
+  [`docs/extraction-codebook.md`](docs/extraction-codebook.md).
 
-Stage 7+ are specified in [`docs/pipeline.md`](docs/pipeline.md) but not
+Stage 9+ are specified in [`docs/pipeline.md`](docs/pipeline.md) but not
 yet implemented.
 
 ## OpenAlex API key
@@ -62,16 +70,29 @@ email. Set it in `.env`:
 UNPAYWALL_EMAIL=you@example.com
 ```
 
-## Ollama (for LLM screening)
+## Ollama (for LLM stages)
 
-The screening stage requires a running Ollama instance:
+Stages 3 ([`screening-abstracts`](docs/screening-abstracts.md)), 7
+([`fulltext-eligibility`](docs/eligibility.md)), and 8
+([`extraction-codebook`](docs/extraction-codebook.md)) all call a local
+Ollama instance via the OpenAI-compatible API.
 
 ```bash
 ollama serve
 ollama pull gemma3:4b
 ```
 
-See [`docs/screening-abstracts.md`](docs/screening-abstracts.md) for details.
+`gemma3:4b` (the CLI default) handles stages 3 and 7 comfortably but
+struggles with stage 8's 30-field structured JSON on typical paper
+bodies. For stage 8 a larger model is usually needed — in our smoke
+tests `llama3.1:8b` and `qwen2.5:14b` both produced valid records
+where `gemma3:4b` returned empty JSON. Pull whichever you want to use
+and pass it via `--model`.
+
+```bash
+ollama pull llama3.1:8b        # or qwen2.5:14b, etc.
+laglitsynth extraction-codebook --model llama3.1:8b ...
+```
 
 ## GROBID (for full-text extraction)
 

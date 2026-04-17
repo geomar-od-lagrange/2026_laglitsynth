@@ -33,10 +33,6 @@ Return ONLY the JSON object, nothing else."""
 _TEMPERATURE = 0.8
 
 
-class ClassifyError(Exception):
-    """Raised when the LLM response cannot be parsed into a ScreeningVerdict."""
-
-
 def classify_abstract(
     work_id: str,
     abstract: str,
@@ -46,6 +42,12 @@ def classify_abstract(
     base_url: str,
     client: OpenAI,
 ) -> ScreeningVerdict:
+    """Call the LLM, validate the payload, compose the verdict.
+
+    On JSON parse error returns a ``reason="llm-parse-failure"``
+    sentinel with ``seed=None`` and the raw response attached so an
+    operator can see what the LLM actually said.
+    """
     seed = random.randint(0, 2**31 - 1)
     response = client.chat.completions.create(
         model=model,
@@ -70,11 +72,17 @@ def classify_abstract(
             relevance_score=int(score),
             reason=str(reason),
             seed=seed,
+            raw_response=content,
         )
     except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
-        raise ClassifyError(
-            f"Failed to parse LLM response for {work_id}: {exc}"
-        ) from exc
+        logger.warning("LLM parse failure for %s: %s", work_id, exc)
+        return ScreeningVerdict(
+            work_id=work_id,
+            relevance_score=None,
+            reason="llm-parse-failure",
+            seed=None,
+            raw_response=content,
+        )
 
 
 def screen_works(
@@ -93,17 +101,16 @@ def screen_works(
         processed += 1
         if work.abstract is None:
             logger.warning("Skipping work %s: no abstract", work.id)
-            yield ScreeningVerdict(work_id=work.id, relevance_score=None, reason="no-abstract", seed=None)
-            continue
-        try:
-            verdict = classify_abstract(
-                work.id, work.abstract, prompt, model=model, base_url=base_url, client=client
+            yield ScreeningVerdict(
+                work_id=work.id,
+                relevance_score=None,
+                reason="no-abstract",
+                seed=None,
             )
-        except ClassifyError:
-            logger.warning("LLM parse failure for %s, recording as invalid", work.id)
-            yield ScreeningVerdict(work_id=work.id, relevance_score=None, reason="llm-parse-failure", seed=None)
             continue
-        yield verdict
+        yield classify_abstract(
+            work.id, work.abstract, prompt, model=model, base_url=base_url, client=client
+        )
 
 
 def _preflight(args: argparse.Namespace) -> None:
