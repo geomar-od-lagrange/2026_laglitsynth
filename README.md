@@ -56,7 +56,16 @@ yet implemented.
 
 [`scripts/test-run-all-stages.sh`](scripts/test-run-all-stages.sh) runs all
 eight implemented stages end-to-end on a small sample, writing outputs under
-`data/test-run/`. Requires Ollama and GROBID running locally (see below).
+`data/test-run/`. Start Ollama and GROBID first (see the
+[Ollama](#ollama-for-llm-stages) and [GROBID](#grobid-for-full-text-extraction)
+sections below for details):
+
+```bash
+ollama serve                                                  # stages 3, 7, 8
+docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0           # stage 6
+```
+
+Then:
 
 ```bash
 scripts/test-run-all-stages.sh                            # defaults
