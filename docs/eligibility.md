@@ -1,17 +1,17 @@
 # Eligibility
 
-Full-text assessment of whether each work meets the review's inclusion
-criteria. Distinct from screening (stage 3), which uses only title and
-abstract. Reading the full text may reveal that a paper is not actually
-about computational Lagrangian methods, or that it is a review article
-rather than primary research.
+Full-text assessment of whether each included work meets the review's
+inclusion criteria. Distinct from [screening](screening-abstracts.md),
+which uses only title and abstract. Reading the full text may reveal
+that a paper is not actually about computational Lagrangian methods, or
+that it is a review article rather than primary research.
 
 ## Prototype scope
 
-A single LLM pass over the extracted text (or abstract for abstract-only
-works). Same pattern as the existing `screening-abstracts` stage: structured
-JSON output, Pydantic validation, verdicts stored separately for
-re-thresholding.
+A single LLM pass over the extracted text (or the abstract for
+abstract-only works). Same flag-don't-filter pattern as
+[`screening-abstracts`](screening-abstracts.md): structured JSON output,
+Pydantic validation, verdicts stored in a sidecar keyed by `work_id`.
 
 The eligibility criteria below are provisional placeholders for the
 prototype. They are deliberately broad — designed to let papers through,
@@ -31,53 +31,113 @@ prototype; false negatives are not.
 
 The stage consumes two artifacts:
 
-- The included catalogue (`Work` records with metadata and abstracts).
-- The extraction JSONL (`ExtractedDocument` records with structured
-  sections) from the full-text extraction step.
+- The included catalogue ([`Work`](../src/laglitsynth/catalogue_fetch/models.py)
+  records from [`screening-adjudication`](screening-adjudication.md)).
+- The extraction JSONL ([`ExtractedDocument`](../src/laglitsynth/fulltext_extraction/models.py)
+  records from [`fulltext-extraction`](fulltext-extraction.md)).
 
-For works that have an `ExtractedDocument`, the LLM sees the full text
-(concatenated sections). For abstract-only works, the LLM sees the
-abstract from the `Work` record.
+Works that have an `ExtractedDocument` with non-empty
+[`sections()`](../src/laglitsynth/fulltext_extraction/tei.py) are
+assessed on their full text. Works without a usable extraction fall back
+to the abstract. Works without either are recorded with a sentinel
+verdict and no LLM call.
 
 ## Data model
 
 ### EligibilityVerdict
 
+One per catalogue work that reached this stage.
+
 ```python
-class EligibilityVerdict(_Base):
+SourceBasis = Literal["full_text", "abstract_only", "none"]
+
+
+class EligibilityVerdict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     work_id: str
-    eligible: bool
-    source_basis: str                    # "full_text" or "abstract_only"
-    reason: str                          # LLM's explanation
-    confidence: int                      # 0–100
+    eligible: bool | None              # None for sentinel-reason skips
+    source_basis: SourceBasis
+    reason: str | None                 # LLM free-text or sentinel
+    seed: int | None                   # Ollama seed used; None for sentinels
 ```
+
+`eligible` is tri-state. `True` and `False` are real LLM verdicts;
+`None` indicates a sentinel skip — the LLM was not called or its output
+could not be parsed. See [Sentinel reasons](#sentinel-reasons) below.
 
 ### EligibilityMeta
 
 ```python
-class EligibilityMeta(_Base):
-    tool: str = "laglitsynth.fulltext_eligibility.assess"
-    tool_version: str = "alpha"
-    assessed_at: str
-    total_works: int
+class EligibilityMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run: _RunMeta
+    llm: _LlmMeta
+    input_catalogue: str
+    input_extractions: str
+    input_count: int
     eligible_count: int
     excluded_count: int
+    skipped_count: int
     by_source_basis: dict[str, int]
 ```
+
+`run` and `llm` are the shared reproducibility nests from
+[`src/laglitsynth/models.py`](../src/laglitsynth/models.py) — they
+carry `tool`, `tool_version`, `run_at`, `validation_skipped`, `model`,
+`temperature`, and `prompt_sha256`.
 
 ## Storage layout
 
 ```
 data/fulltext-eligibility/
-  eligible.jsonl            # Work records that passed eligibility
-  verdicts.jsonl            # EligibilityVerdict for every work
+  verdicts.jsonl            # one EligibilityVerdict per input work
+  eligible.jsonl            # Work records where verdict.eligible is True
   eligibility-meta.json     # EligibilityMeta
 ```
 
-The `verdicts.jsonl` file contains all verdicts (eligible and excluded),
-mirroring the screened/rejected pattern from stage 3. The `eligible.jsonl`
-file contains only the works that passed — this is the eligible corpus
-consumed by stage 8.
+`verdicts.jsonl` is the source of truth. `eligible.jsonl` is a derived
+convenience file rebuilt each run by joining the catalogue against the
+verdict sidecar — same pattern as stage 4's
+[`included.jsonl`](screening-adjudication.md).
+
+## Fallback cascade
+
+For each catalogue work, in catalogue order:
+
+1. If an `ExtractedDocument` exists and its
+   [`sections()`](../src/laglitsynth/fulltext_extraction/tei.py) is
+   non-empty, render the full text and take the `full_text` branch.
+2. Else, if `work.abstract` is non-empty, render the abstract and take
+   the `abstract_only` branch.
+3. Else, record `source_basis="none"`, `eligible=None`,
+   `reason="no-source"`. No LLM call.
+
+## Sentinel reasons
+
+All sentinels set `eligible=None` and `seed=None`. Downstream consumers
+read [`eligible.jsonl`](#storage-layout) and never see the tri-state —
+sentinels are excluded from it by construction.
+
+| Reason | Branch | Trigger |
+|---|---|---|
+| `no-source` | `none` | No `ExtractedDocument`, empty TEI body, and no abstract. |
+| `tei-parse-failure` | `full_text` | `sections()` raises `lxml.etree.XMLSyntaxError`. No abstract fallback — a malformed TEI is an operator-visible bug. |
+| `llm-parse-failure` | whichever branch called the LLM | The LLM returned output that could not be parsed into `{"eligible": bool, "reason": str}`. |
+
+Empty-body TEI (valid XML, no content) returns `[]` from `sections()`
+and falls back to the abstract per step 2 — extraction succeeded, just
+produced nothing extractable.
+
+## Surfacing TEI to the LLM
+
+[`laglitsynth.fulltext_eligibility.prompts.render_fulltext`](../src/laglitsynth/fulltext_eligibility/prompts.py)
+walks `tei.sections()` depth-first. Each section contributes a block
+whose first line is the title (when present) followed by its paragraphs
+(one per line); nested children contribute further blocks. Blocks are
+joined by blank lines. Figures and bibliography are dropped — the three
+criteria are answered from body text. Empty `sections()` returns the
+empty string, which the caller treats as a signal to fall back to the
+abstract.
 
 ## CLI interface
 
@@ -85,25 +145,43 @@ consumed by stage 8.
 laglitsynth fulltext-eligibility \
     --catalogue data/screening-adjudication/included.jsonl \
     --extractions data/fulltext-extraction/extraction.jsonl \
-    --output-dir data/fulltext-eligibility/ \
-    [--skip-existing]
+    [--extraction-output-dir data/fulltext-extraction/] \
+    [--output-dir data/fulltext-eligibility/] \
+    [--skip-existing] [--max-records N] [--dry-run] \
+    [--model gemma3:4b] [--base-url http://localhost:11434]
 ```
 
 ### Arguments
 
-- `--catalogue`: the included catalogue (Work records).
-- `--extractions`: the extraction JSONL (ExtractedDocument records). Works
-  without a matching ExtractedDocument are assessed on their abstract.
-- `--output-dir`: where to write verdicts and the eligible corpus.
-- `--skip-existing`: skip works that already have a verdict.
+- `--catalogue`: the included catalogue (`Work` records).
+- `--extractions`: the extraction JSONL (`ExtractedDocument` records).
+  Works without a matching record fall back to the abstract.
+- `--extraction-output-dir`: directory that
+  `ExtractedDocument.tei_path` is relative to. Defaults to the parent
+  of `--extractions`. See
+  [`tei-wrapper`](../plans/done/tei-wrapper.md) for why the path is
+  stored relative.
+- `--output-dir`: where to write verdicts, `eligible.jsonl`, and the
+  meta file.
+- `--skip-existing`: load any prior `verdicts.jsonl` and skip already-
+  assessed `work_id`s. The per-work verdict sidecar is appended to;
+  `eligible.jsonl` is regenerated from the union.
+- `--max-records`: process only the first N works from the catalogue.
+- `--dry-run`: print verdicts to stderr without writing any output.
+- `--model`, `--base-url`: Ollama configuration. `--base-url` is checked
+  at startup with the same preflight pattern as
+  [`screening-abstracts`](screening-abstracts.md).
 
 ## LLM prompt
 
-The prompt is deliberately simple for the prototype:
+Hardcoded in
+[`laglitsynth.fulltext_eligibility.prompts`](../src/laglitsynth/fulltext_eligibility/prompts.py);
+the digest is recorded as `meta.llm.prompt_sha256`.
 
 ```
-You are assessing whether a scientific paper meets the inclusion criteria
-for a systematic review of numerical methods in Lagrangian oceanography.
+System: You are assessing whether a scientific paper meets the inclusion
+criteria for a systematic review of numerical methods in Lagrangian
+oceanography.
 
 Criteria:
 1. The paper describes a computation that tracks particles, tracers, or
@@ -112,25 +190,21 @@ Criteria:
 3. The paper contains at least some description of the numerical methods
    used.
 
-Respond with JSON: {"eligible": true/false, "reason": "...",
-"confidence": 0-100}
+Respond with JSON: {"eligible": true|false, "reason": "<one sentence>"}.
+
+User: <source_basis>:
+<rendered text>
 ```
 
-The prompt will be refined during tuning. The structured output and
-validation pattern is identical to `screening-abstracts`.
-
-## Export for human review
-
-Eligibility verdicts are exported as a flat table (e.g. CSV) for
-spot-checking. The table contains one row per work: work ID, title,
-verdict, reason, confidence, and source basis. This follows the general
-pattern that every LLM-driven stage produces output reviewable by a
-human without specialised tooling.
+`response_format={"type": "json_object"}`, `temperature=0.8`, per-call
+random seed recorded on the verdict. Same shape as
+[`screening-abstracts`](screening-abstracts.md).
 
 ## What to defer
 
 - Fine-grained exclusion reasons (enum of why a paper was excluded).
-- Multi-criteria assessment (separate verdict per criterion).
-- Calibration against human judgments (that is stage 4/9 territory).
-- Threshold-based re-eligibility (currently binary; could add a score
-  like screening does).
+- Per-criterion verdicts (three booleans).
+- Calibration against human judgments.
+- Threshold-based re-eligibility (currently binary).
+- Chunking or retrieval over long papers; prompt length policy is
+  addressed as a follow-up in the stage 7 plan.

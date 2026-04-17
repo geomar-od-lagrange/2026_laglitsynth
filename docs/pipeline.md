@@ -99,12 +99,16 @@ Full-text assessment of whether each work meets the review's eligibility
 criteria. Distinct from screening (which uses only title and abstract).
 Reading the full text may reveal that a paper is not actually about
 computational Lagrangian methods, or that it is a review/meta-analysis
-rather than primary research. Works that fail eligibility are excluded with
-a recorded reason.
+rather than primary research. The stage prefers the extracted full text,
+falls back to the abstract when no `ExtractedDocument` is available, and
+records a sentinel verdict when neither source exists or the TEI is
+malformed. See [eligibility.md](eligibility.md) for the verdict shape
+and sentinel reasons.
 
-- **Consumes:** full-text corpus, eligibility criteria (defined in the
-  protocol)
-- **Produces:** eligible corpus — works confirmed for data extraction
+- **Consumes:** included catalogue, full-text corpus, eligibility
+  criteria (defined in the protocol)
+- **Produces:** per-work `EligibilityVerdict` sidecar plus an
+  `eligible.jsonl` of works confirmed for data extraction
 
 ### 8. extraction-codebook
 

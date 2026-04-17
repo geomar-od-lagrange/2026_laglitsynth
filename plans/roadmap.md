@@ -41,6 +41,13 @@ Update this file when a plan is written, implemented, or archived.
   `sections()`, `figures()`, `citations()`, `bibliography()` over
   the TEI bytes we already keep on disk. Recursive `Section.children`
   resolves the flat-vs-recursive question.
+- [Stage 7 `fulltext-eligibility`](stage-7-fulltext-eligibility.md) —
+  one LLM pass per included work deciding inclusion on the full text
+  (or the abstract when no extraction is available). Tri-state
+  `eligible: bool | None` with three sentinel reasons (`no-source`,
+  `tei-parse-failure`, `llm-parse-failure`). `ExtractedDocument.extraction_status`
+  was not needed: missing and empty `sections()` already trigger the
+  right fallback.
 
 ## In flight
 
@@ -61,19 +68,19 @@ Update this file when a plan is written, implemented, or archived.
 
 ## Queued — driven by future stages
 
-- Stage 7 (`fulltext-eligibility`). Needs plan. Specced in
-  [docs/eligibility.md](../docs/eligibility.md) but that spec pre-dates
-  the flag-don't-filter design; update or replace when planning.
-- Stage 8 (`extraction-codebook`). Needs a stage 8 doc first (does not
-  exist yet), then a plan. `ExtractionRecord` decided to be fully
+- Stage 8 (`extraction-codebook`). Plan drafted in
+  [stage-8-extraction-codebook.md](stage-8-extraction-codebook.md);
+  implementation still pending. `ExtractionRecord` decided to be fully
   typed, regenerated alongside codebook changes.
 - Stages 9–12 (`extraction-adjudication`, `synthesis-quantitative`,
   `synthesis-thematic`, `synthesis-narrative`). No plans yet.
 - `Work` model additions — `source_catalogues: list[str]`,
   `catalogue_ids: dict[str, str]`, derived `is_peer_reviewed: bool |
-  None`. Defer until stage 7+ consumer arrives.
+  None`. Defer until a stage 7+ consumer arrives — stage 7 itself does
+  not branch on these.
 - `ExtractedDocument` quality gate — `extraction_status` enum + metrics.
-  Defer until stage 7/8 consumer arrives.
+  Defer until a stage 8+ consumer arrives — stage 7 fell back to
+  source-basis selection instead.
 
 ## Latest review
 

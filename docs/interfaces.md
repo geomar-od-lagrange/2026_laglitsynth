@@ -102,16 +102,17 @@ abstract-only) and the PDF path. Already follows the flag pattern.
 | `data/fulltext-extraction/extraction-meta.json` | [`ExtractionMeta`](../src/laglitsynth/fulltext_extraction/models.py) | GROBID version, counts |
 | `data/fulltext-extraction/tei/<work_id>.tei.xml` | (XML) | Canonical GROBID TEI output — read lazily via [`TeiDocument`](../src/laglitsynth/fulltext_extraction/tei.py) |
 
-### Stage 7 — fulltext-eligibility
+### Stage 7 — fulltext-eligibility *(exists)*
 
 | Path | Model | Description |
 |---|---|---|
-| `data/fulltext-eligibility/verdicts.jsonl` | `EligibilityVerdict` (new) | Per-work eligibility decision |
-| `data/fulltext-eligibility/eligibility-meta.json` | `EligibilityMeta` (new) | Counts by source basis |
+| `data/fulltext-eligibility/verdicts.jsonl` | [`EligibilityVerdict`](../src/laglitsynth/fulltext_eligibility/models.py) | Per-work eligibility decision (tri-state with sentinel reasons) |
+| `data/fulltext-eligibility/eligible.jsonl` | [`Work`](../src/laglitsynth/catalogue_fetch/models.py) | Work records where `verdict.eligible is True` (derived convenience for stage 8) |
+| `data/fulltext-eligibility/eligibility-meta.json` | [`EligibilityMeta`](../src/laglitsynth/fulltext_eligibility/models.py) | Counts by source basis, nested `run` + `llm` |
 
-Verdicts cover all works that the resolve module passes to this stage.
-No `eligible.jsonl` — downstream stages resolve the eligible set from
-the verdict sidecar.
+`verdicts.jsonl` is the source of truth; `eligible.jsonl` rebuilds each
+run from the catalogue join against the verdict sidecar, mirroring
+stage 4's [`included.jsonl`](screening-adjudication.md).
 
 ### Stage 8 — extraction-codebook
 
@@ -180,6 +181,22 @@ laglitsynth fulltext-retrieval \
     --output-dir data/fulltext-retrieval/ \
     --email EMAIL \
     [--manual-dir DIR] [--skip-existing] [--dry-run]
+
+# Stage 6 — fulltext-extraction
+laglitsynth fulltext-extraction \
+    --pdf-dir data/fulltext-retrieval/pdfs/ \
+    --output-dir data/fulltext-extraction/ \
+    --grobid-url URL \
+    [--skip-existing]
+
+# Stage 7 — fulltext-eligibility
+laglitsynth fulltext-eligibility \
+    --catalogue data/screening-adjudication/included.jsonl \
+    --extractions data/fulltext-extraction/extraction.jsonl \
+    [--extraction-output-dir data/fulltext-extraction/] \
+    [--output-dir data/fulltext-eligibility/] \
+    [--skip-existing] [--max-records N] [--dry-run] \
+    [--model MODEL] [--base-url URL]
 ```
 
 Stages 1 and 3 use positional arguments. All other subcommands use
@@ -190,20 +207,6 @@ constraints ([AGENTS.md](../AGENTS.md)).
 ### Planned subcommands
 
 ```sh
-# Stage 6 — fulltext-extraction
-laglitsynth fulltext-extraction \
-    --pdf-dir data/fulltext-retrieval/pdfs/ \
-    --output-dir data/fulltext-extraction/ \
-    --grobid-url URL \
-    [--skip-existing]
-
-# Stage 7 — fulltext-eligibility
-laglitsynth fulltext-eligibility \
-    --data-dir data/ \
-    --extractions data/fulltext-extraction/extraction.jsonl \
-    --output-dir data/fulltext-eligibility/ \
-    [--skip-existing]
-
 # Stage 8 — extraction-codebook
 laglitsynth extraction-codebook \
     --data-dir data/ \
@@ -286,8 +289,9 @@ laglitsynth fulltext-extraction \
 
 # 7. Fulltext eligibility
 laglitsynth fulltext-eligibility \
-    --data-dir data/ \
+    --catalogue data/screening-adjudication/included.jsonl \
     --extractions data/fulltext-extraction/extraction.jsonl \
+    --extraction-output-dir data/fulltext-extraction/ \
     --output-dir data/fulltext-eligibility/
 
 # 8. Extraction codebook
@@ -337,7 +341,7 @@ class _RunMeta(BaseModel):
 
 ### `_LlmMeta`
 
-LLM configuration carried by `ScreeningMeta`. Enables reproducibility checks across runs.
+LLM configuration carried by `ScreeningMeta` and `EligibilityMeta`. Enables reproducibility checks across runs.
 
 ```python
 class _LlmMeta(BaseModel):
@@ -352,7 +356,7 @@ class _LlmMeta(BaseModel):
 | Category | Policy | Models |
 |---|---|---|
 | OpenAlex-sourced | `extra="ignore"` — upstream may add fields | `Work`, `Author`, `Authorship`, `Institution`, `Source`, `Location`, `OpenAccess`, `Biblio`, `TopicHierarchy`, `Topic`, `Keyword` |
-| Internally owned | `extra="forbid"` — unexpected fields are bugs | All `*Meta`, `_RunMeta`, `_LlmMeta`, `ScreeningVerdict`, `AdjudicationVerdict`, `RetrievalRecord`, `RetrievalStatus`, `ExtractedDocument`, `Section`, `Figure`, `Citation`, `BibReference` |
+| Internally owned | `extra="forbid"` — unexpected fields are bugs | All `*Meta`, `_RunMeta`, `_LlmMeta`, `ScreeningVerdict`, `AdjudicationVerdict`, `RetrievalRecord`, `RetrievalStatus`, `ExtractedDocument`, `Section`, `Figure`, `Citation`, `BibReference`, `EligibilityVerdict` |
 
 ## Model dependency graph
 
@@ -375,13 +379,13 @@ class _LlmMeta(BaseModel):
 | [`ExtractedDocument`](../src/laglitsynth/fulltext_extraction/models.py) | `laglitsynth.fulltext_extraction.models` | 6, 7, 8 |
 | [`ExtractionMeta`](../src/laglitsynth/fulltext_extraction/models.py) | `laglitsynth.fulltext_extraction.models` | 6 |
 | [`Section`](../src/laglitsynth/fulltext_extraction/tei.py), [`Figure`](../src/laglitsynth/fulltext_extraction/tei.py), [`Citation`](../src/laglitsynth/fulltext_extraction/tei.py), [`BibReference`](../src/laglitsynth/fulltext_extraction/tei.py) | `laglitsynth.fulltext_extraction.tei` | 7, 8 (lazy views over TEI) |
+| [`EligibilityVerdict`](../src/laglitsynth/fulltext_eligibility/models.py) | `laglitsynth.fulltext_eligibility.models` | 7 |
+| [`EligibilityMeta`](../src/laglitsynth/fulltext_eligibility/models.py) | `laglitsynth.fulltext_eligibility.models` | 7 |
 
 ### Models not yet defined
 
 | Model | Planned module | Stage |
 |---|---|---|
-| `EligibilityVerdict` | `laglitsynth.fulltext_eligibility.models` | 7 |
-| `EligibilityMeta` | `laglitsynth.fulltext_eligibility.models` | 7 |
 | `ExtractionRecord` | `laglitsynth.extraction_codebook.models` | 8, 9, 10, 11 |
 | `DataExtractionMeta` | `laglitsynth.extraction_codebook.models` | 8 |
 | `ExtractionCorrection` | `laglitsynth.extraction_adjudication.models` | 9 |
@@ -399,7 +403,7 @@ class _LlmMeta(BaseModel):
 | 4. screening-adjudication | ScreeningVerdict, Work | AdjudicationVerdict, AdjudicationMeta, Work (included.jsonl) |
 | 5. fulltext-retrieval | Work (via resolve) | RetrievalRecord, RetrievalMeta |
 | 6. fulltext-extraction | (PDFs) | ExtractedDocument, ExtractionMeta |
-| 7. fulltext-eligibility | Work, ExtractedDocument (via resolve) | EligibilityVerdict, EligibilityMeta |
+| 7. fulltext-eligibility | Work, ExtractedDocument (via resolve) | EligibilityVerdict, EligibilityMeta, Work (eligible.jsonl) |
 | 8. extraction-codebook | Work, ExtractedDocument (via resolve) | ExtractionRecord, DataExtractionMeta |
 | 9. extraction-adjudication | ExtractionRecord (via resolve) | ExtractionCorrection, ExtractionAdjudicationMeta |
 | 10. synthesis-quantitative | ExtractionRecord (via resolve) | SynthesisStatistics |
