@@ -42,27 +42,32 @@ def _call(client: OpenAI, model: str, i: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base-url", required=True)
+    parser.add_argument(
+        "--base-url",
+        required=True,
+        help=(
+            "Ollama URL, or comma-separated list of URLs. With multiple, "
+            "client threads round-robin across them (static assignment by "
+            "task index)."
+        ),
+    )
     parser.add_argument("--model", required=True)
     parser.add_argument("--n-calls", type=int, default=30)
     parser.add_argument("--concurrency", type=int, required=True)
-    parser.add_argument(
-        "--warmup",
-        type=int,
-        default=1,
-        help="Warmup calls before timing (default 1).",
-    )
     args = parser.parse_args()
 
-    client = OpenAI(base_url=f"{args.base_url}/v1", api_key="ollama")
+    urls = [u.strip() for u in args.base_url.split(",") if u.strip()]
+    clients = [OpenAI(base_url=f"{u}/v1", api_key="ollama") for u in urls]
 
-    for i in range(args.warmup):
-        _call(client, args.model, i - args.warmup)
+    # One warmup call per backend so model-load isn't in the timed window.
+    for idx, c in enumerate(clients):
+        _call(c, args.model, -idx - 1)
 
     t0 = time.monotonic()
     with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
         futures = [
-            pool.submit(_call, client, args.model, i) for i in range(args.n_calls)
+            pool.submit(_call, clients[i % len(clients)], args.model, i)
+            for i in range(args.n_calls)
         ]
         for fut in as_completed(futures):
             fut.result()
