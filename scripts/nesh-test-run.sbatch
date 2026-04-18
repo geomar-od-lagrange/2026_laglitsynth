@@ -78,7 +78,14 @@ fi
 
 GROBID_LOG="logs/grobid-${SLURM_JOB_ID:-local}.log"
 echo "==> singularity run $GROBID_SIF (log: $GROBID_LOG)"
-singularity run "$GROBID_SIF" >"$GROBID_LOG" 2>&1 &
+# --pwd /opt/grobid: the image sets WORKDIR there and its entrypoint
+#   (./grobid-service/bin/grobid-service) is a relative path; Singularity
+#   otherwise keeps the host cwd and the exec fails with ENOENT.
+# --writable-tmpfs: GROBID writes to /opt/grobid/logs and temp paths
+#   inside the image, which are read-only under Singularity without an
+#   overlay.
+singularity run --pwd /opt/grobid --writable-tmpfs "$GROBID_SIF" \
+    >"$GROBID_LOG" 2>&1 &
 GROBID_PID=$!
 
 # --- Ollama: Slurm has already set CUDA_VISIBLE_DEVICES; do not unset ---
