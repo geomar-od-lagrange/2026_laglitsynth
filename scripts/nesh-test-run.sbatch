@@ -8,8 +8,8 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --time=02:00:00
-#SBATCH --output=logs/nesh-test-run-%j.out
-#SBATCH --error=logs/nesh-test-run-%j.err
+#SBATCH --output=nesh-test-run-%j.out
+#SBATCH --error=nesh-test-run-%j.err
 #
 # Run scripts/test-run-all-stages.sh on one NESH V100 node. Ollama and
 # GROBID both run as background processes on the same compute node:
@@ -22,7 +22,6 @@
 #   - Repo cloned under $WORK (the fast per-user scratch; $HOME is small
 #     and backed up). Default REPO_DIR is $WORK/2026_laglitsynth;
 #     override via the env var if you clone elsewhere.
-#   - mkdir -p $REPO_DIR/logs/  (sbatch won't create --output's parent).
 #   - $REPO_DIR/.env with OPENALEX_API_KEY and UNPAYWALL_EMAIL.
 #   - Ollama binary + bundled CUDA libs at $OLLAMA_DIR (default
 #     $HOME/.local/share/ollama-install). See
@@ -54,6 +53,7 @@ ELIGIBILITY_MODEL="${ELIGIBILITY_MODEL:-gemma3:4b}"
 EXTRACTION_MODEL="${EXTRACTION_MODEL:-llama3.1:8b}"
 
 cd "$REPO_DIR"
+mkdir -p logs
 
 [[ -f .env ]] || {
     echo "Missing $REPO_DIR/.env (OPENALEX_API_KEY, UNPAYWALL_EMAIL)" >&2
