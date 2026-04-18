@@ -250,3 +250,70 @@ def test_export_raises_on_missing_work(tmp_path: Path) -> None:
         export_review_xlsx(
             verdicts_path, catalogue_path, output_path, n_subset=None
         )
+
+
+# --- CLI smoke ---
+
+
+def test_cli_smoke_default_output(tmp_path: Path) -> None:
+    from laglitsynth.cli import main
+
+    works = [_make_work("https://openalex.org/W1")]
+    verdicts = [
+        ScreeningVerdict(
+            work_id="https://openalex.org/W1",
+            relevance_score=80,
+            reason="ok",
+            seed=1,
+        )
+    ]
+    verdicts_path, catalogue_path, _ = _write_inputs(tmp_path, works, verdicts)
+
+    main(
+        [
+            "screening-abstracts-export-xlsx",
+            "--verdicts",
+            str(verdicts_path),
+            "--catalogue",
+            str(catalogue_path),
+        ]
+    )
+
+    assert (tmp_path / "review.xlsx").exists()
+
+
+def test_cli_smoke_subset(tmp_path: Path) -> None:
+    from laglitsynth.cli import main
+
+    works = [_make_work(f"https://openalex.org/W{i}") for i in range(6)]
+    verdicts = [
+        ScreeningVerdict(
+            work_id=f"https://openalex.org/W{i}",
+            relevance_score=60,
+            reason="ok",
+            seed=i,
+        )
+        for i in range(6)
+    ]
+    verdicts_path, catalogue_path, _ = _write_inputs(tmp_path, works, verdicts)
+    output = tmp_path / "sub.xlsx"
+
+    main(
+        [
+            "screening-abstracts-export-xlsx",
+            "--verdicts",
+            str(verdicts_path),
+            "--catalogue",
+            str(catalogue_path),
+            "--output",
+            str(output),
+            "--n-subset",
+            "2",
+            "--subset-seed",
+            "3",
+        ]
+    )
+
+    wb = load_workbook(output)
+    # Index + 2 per-work sheets.
+    assert len(wb.sheetnames) == 3

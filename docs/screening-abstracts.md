@@ -154,3 +154,51 @@ in the verdicts file but absent from the catalogue aborts the export
 The export is read-only. When a stage-4 ingestor lands it will read
 only `work_id`, `reviewer_decision`, and `reviewer_reason` from the
 edited CSV; edits to the other columns are ignored by design.
+
+## XLSX review workbook
+
+`laglitsynth screening-abstracts-export-xlsx` writes a workbook with
+one `Index` sheet plus one tab per included work. The per-work tab
+uses a vertical `Field | Value` layout so the abstract and
+`raw_response` wrap into tall cells without horizontal scrolling —
+better than the flat CSV for per-work deep review.
+
+```bash
+laglitsynth screening-abstracts-export-xlsx \
+    --verdicts data/screening-abstracts/verdicts.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl
+
+# Spot-check a reproducible random sample of 30 works.
+laglitsynth screening-abstracts-export-xlsx \
+    --verdicts data/screening-abstracts/verdicts.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    --n-subset 30 --subset-seed 1
+```
+
+Default output: `<verdicts parent>/review.xlsx`. Override with
+`--output`.
+
+### Sampling
+
+`--n-subset N` draws a uniform random sample of `N` verdicts using
+`--subset-seed` (default: `0`) and emits them in their original
+verdict-file order. When `N >= len(verdicts)` or `--n-subset` is
+unset the whole set is emitted — the same command covers both
+"spot-check 30" and "all of them."
+
+### Sheet layout
+
+| Sheet | Contents |
+|---|---|
+| `Index` | One row per included work: `work_id`, `title`, `relevance_score`, `llm_reason`, and a hyperlink into the per-work tab. Header row frozen. |
+| `W<id>` (one per work) | Two columns, `Field | Value`, field list top-down: `work_id`, `title`, `doi`, `publication_year`, `abstract`, `relevance_score`, `llm_reason`, `reviewer_decision` (empty), `reviewer_reason` (empty), `raw_response`. |
+
+Sheet names are the trailing OpenAlex id (e.g. `W3213722062`);
+collisions are suffixed `_2`, `_3`, … Sentinel verdicts
+(`reason="no-abstract"` or `"llm-parse-failure"`) still get a
+per-work sheet — `relevance_score` is blank and `llm_reason` carries
+the sentinel string.
+
+Same read-only contract as the CSV: a stage-4 ingestor will read
+`work_id` / `reviewer_decision` / `reviewer_reason` from each
+per-work sheet; edits to other cells are ignored.
