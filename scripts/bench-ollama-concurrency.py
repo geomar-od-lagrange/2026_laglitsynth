@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 from openai import OpenAI
 
@@ -127,6 +128,31 @@ def _call(
     )
 
 
+def _load_tei_prompt(tei_path: Path) -> tuple[str, str]:
+    """Return (system_prompt, user_tmpl) from a real TEI file, shaped
+    exactly as stage 8 (`extraction-codebook`) would send it to the LLM.
+
+    Import locally so the short/long modes keep working without an
+    editable-install of laglitsynth.
+    """
+    from laglitsynth.extraction_codebook.prompts import (
+        CHAR_BUDGET,
+        SYSTEM_PROMPT,
+        build_user_message,
+        render_fulltext,
+    )
+    from laglitsynth.fulltext_extraction.tei import TeiDocument
+
+    tei = TeiDocument(tei_path)
+    text, _truncated = render_fulltext(tei, char_budget=CHAR_BUDGET)
+    user_msg = build_user_message("full_text", text)
+    # {i} in the template is only used by synthetic modes; include a
+    # harmless trailing marker so every warmup/timed call has a unique
+    # suffix and Ollama doesn't cache a response across threads.
+    user_tmpl = user_msg + "\n\n(bench call #{i})"
+    return SYSTEM_PROMPT, user_tmpl
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -143,18 +169,29 @@ def main() -> None:
     parser.add_argument("--concurrency", type=int, required=True)
     parser.add_argument(
         "--prompt-kind",
-        choices=("short", "long"),
+        choices=("short", "long", "tei"),
         default="short",
         help=(
             "short: ~300-token screening-style prompt (default). "
-            "long: ~1300-token methods-section prompt + structured "
-            "extraction question, modeling stage 8. Requires a server "
-            "context window big enough (set OLLAMA_CONTEXT_LENGTH)."
+            "long: ~1300-token synthetic methods-section prompt. "
+            "tei: render a real TEI via stage 8's prompt helpers (needs "
+            "--tei-path; ~15k tokens, real-paper methods content). "
+            "long/tei need OLLAMA_CONTEXT_LENGTH set on the server."
         ),
+    )
+    parser.add_argument(
+        "--tei-path",
+        type=Path,
+        default=None,
+        help="Path to a TEI XML file (required for --prompt-kind tei).",
     )
     args = parser.parse_args()
 
-    if args.prompt_kind == "long":
+    if args.prompt_kind == "tei":
+        if args.tei_path is None:
+            parser.error("--prompt-kind tei requires --tei-path")
+        system_prompt, user_tmpl = _load_tei_prompt(args.tei_path)
+    elif args.prompt_kind == "long":
         system_prompt, user_tmpl = LONG_SYSTEM_PROMPT, LONG_USER_TMPL
     else:
         system_prompt, user_tmpl = SHORT_SYSTEM_PROMPT, SHORT_USER_TMPL

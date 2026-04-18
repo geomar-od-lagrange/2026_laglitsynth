@@ -1,6 +1,15 @@
 data/**
 !data/**/
 !data/**/.gitkeep
+
+# Bench-mode TEI files live at the repo root (rsync'd in). Copyright.
+*.tei.xml
+
+# sbatch --output / --error files (default to submission cwd).
+nesh-test-run-*.out
+nesh-test-run-*.err
+bench-*.out
+bench-*.err
 .claude/
 .env
 .pixi/
