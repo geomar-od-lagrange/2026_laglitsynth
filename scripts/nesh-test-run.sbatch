@@ -77,15 +77,21 @@ if [[ ! -f "$GROBID_SIF" ]]; then
 fi
 
 GROBID_LOG="logs/grobid-${SLURM_JOB_ID:-local}.log"
+GROBID_WORK="data/nesh/grobid-work"
+mkdir -p "$GROBID_WORK/tmp" "$GROBID_WORK/logs"
 echo "==> singularity run $GROBID_SIF (log: $GROBID_LOG)"
-# --pwd /opt/grobid: the image sets WORKDIR there and its entrypoint
-#   (./grobid-service/bin/grobid-service) is a relative path; Singularity
-#   otherwise keeps the host cwd and the exec fails with ENOENT.
-# --writable-tmpfs: GROBID writes to /opt/grobid/logs and temp paths
-#   inside the image, which are read-only under Singularity without an
-#   overlay.
-singularity run --pwd /opt/grobid --writable-tmpfs "$GROBID_SIF" \
-    >"$GROBID_LOG" 2>&1 &
+# --pwd /opt/grobid: the image sets WORKDIR there; its entrypoint uses
+#   a relative path and the logback appender writes to logs/grobid-service.log.
+# --bind ...: GROBID needs to write to /opt/grobid/grobid-home/tmp
+#   (intermediate PDF extract) and /opt/grobid/logs (service log).
+#   Those paths are read-only in the Singularity image, so the service
+#   comes up (isalive ok) but every real request 500s with
+#   "Could not create temporary file". Bind host dirs on $WORK so the
+#   writes land on fast scratch and survive the job for inspection.
+singularity run --pwd /opt/grobid \
+    --bind "$PWD/$GROBID_WORK/tmp:/opt/grobid/grobid-home/tmp" \
+    --bind "$PWD/$GROBID_WORK/logs:/opt/grobid/logs" \
+    "$GROBID_SIF" >"$GROBID_LOG" 2>&1 &
 GROBID_PID=$!
 
 # --- Ollama: Slurm has already set CUDA_VISIBLE_DEVICES; do not unset ---
