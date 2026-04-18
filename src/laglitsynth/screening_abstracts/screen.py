@@ -10,12 +10,19 @@ import random
 import sys
 import time
 from collections.abc import Iterator
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 
 from openai import OpenAI
 
-from laglitsynth.io import JsonlReadStats, read_works_jsonl, write_jsonl, write_meta
+from laglitsynth.catalogue_fetch.models import Work
+from laglitsynth.io import (
+    JsonlReadStats,
+    append_jsonl,
+    read_works_jsonl,
+    write_meta,
+)
 from laglitsynth.models import _LlmMeta, _RunMeta
 from laglitsynth.screening_abstracts.models import TOOL_NAME, ScreeningMeta, ScreeningVerdict
 
@@ -85,6 +92,15 @@ def classify_abstract(
         )
 
 
+def _no_abstract_verdict(work_id: str) -> ScreeningVerdict:
+    return ScreeningVerdict(
+        work_id=work_id,
+        relevance_score=None,
+        reason="no-abstract",
+        seed=None,
+    )
+
+
 def screen_works(
     input_path: Path,
     prompt: str,
@@ -92,25 +108,62 @@ def screen_works(
     model: str,
     base_url: str,
     max_records: int | None,
+    concurrency: int = 1,
 ) -> Iterator[ScreeningVerdict]:
+    """Yield a verdict per input work.
+
+    ``concurrency=1`` (default) keeps the legacy sequential path: verdicts
+    are yielded in catalogue order. ``concurrency>1`` dispatches LLM calls
+    through a ``ThreadPoolExecutor`` of that size; verdicts for works
+    without an abstract come first in catalogue order, followed by
+    abstract-backed verdicts in completion order. The server's
+    ``OLLAMA_NUM_PARALLEL`` must be at least ``concurrency`` for actual
+    parallelism.
+    """
     client = OpenAI(base_url=f"{base_url}/v1", api_key="ollama")
-    processed = 0
-    for work in read_works_jsonl(input_path):
-        if max_records is not None and processed >= max_records:
-            return
-        processed += 1
-        if work.abstract is None:
-            logger.warning("Skipping work %s: no abstract", work.id)
-            yield ScreeningVerdict(
-                work_id=work.id,
-                relevance_score=None,
-                reason="no-abstract",
-                seed=None,
+
+    works: list[Work] = []
+    for idx, work in enumerate(read_works_jsonl(input_path)):
+        if max_records is not None and idx >= max_records:
+            break
+        works.append(work)
+
+    if concurrency <= 1:
+        for work in works:
+            if work.abstract is None:
+                logger.warning("Skipping work %s: no abstract", work.id)
+                yield _no_abstract_verdict(work.id)
+                continue
+            yield classify_abstract(
+                work.id,
+                work.abstract,
+                prompt,
+                model=model,
+                base_url=base_url,
+                client=client,
             )
-            continue
-        yield classify_abstract(
-            work.id, work.abstract, prompt, model=model, base_url=base_url, client=client
-        )
+        return
+
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures: dict[Future[ScreeningVerdict], str] = {}
+        for work in works:
+            if work.abstract is None:
+                logger.warning("Skipping work %s: no abstract", work.id)
+                yield _no_abstract_verdict(work.id)
+                continue
+            fut = pool.submit(
+                classify_abstract,
+                work.id,
+                work.abstract,
+                prompt,
+                model=model,
+                base_url=base_url,
+                client=client,
+            )
+            futures[fut] = work.id
+
+        for fut in as_completed(futures):
+            yield fut.result()
 
 
 def _preflight(args: argparse.Namespace) -> None:
@@ -163,6 +216,16 @@ def build_subparser(
         action="store_true",
         help="Print verdicts to stderr without writing output",
     )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help=(
+            "In-flight LLM requests (default: 1). Must not exceed the "
+            "Ollama server's OLLAMA_NUM_PARALLEL for actual parallelism. "
+            "See docs/llm-concurrency.md."
+        ),
+    )
     parser.set_defaults(run=run)
     return parser
 
@@ -189,13 +252,18 @@ def run(args: argparse.Namespace) -> None:
     if not args.dry_run:
         print(f"Output dir: {output_dir}", file=sys.stderr)
 
+    # Clean-rerun: truncate any prior verdicts file before streaming
+    # append. Resume is explicitly not supported — see
+    # docs/llm-concurrency.md.
+    if not args.dry_run:
+        verdicts_path.parent.mkdir(parents=True, exist_ok=True)
+        verdicts_path.write_text("")
+
     t0 = time.monotonic()
     above_threshold_count = 0
     below_threshold_count = 0
     skipped_count = 0
     index = 0
-
-    verdicts: list[ScreeningVerdict] = []
 
     for verdict in screen_works(
         args.input,
@@ -203,9 +271,9 @@ def run(args: argparse.Namespace) -> None:
         model=args.model,
         base_url=args.base_url,
         max_records=args.max_records,
+        concurrency=args.concurrency,
     ):
         index += 1
-        verdicts.append(verdict)
 
         if verdict.reason in ("no-abstract", "llm-parse-failure"):
             skipped_count += 1
@@ -231,6 +299,9 @@ def run(args: argparse.Namespace) -> None:
                 file=sys.stderr,
             )
 
+        if not args.dry_run:
+            append_jsonl(verdict, verdicts_path)
+
     elapsed = time.monotonic() - t0
 
     print(
@@ -240,7 +311,6 @@ def run(args: argparse.Namespace) -> None:
     )
 
     if not args.dry_run:
-        write_jsonl(verdicts, verdicts_path)
         run_meta = _RunMeta(
             tool=TOOL_NAME,
             run_at=datetime.now(UTC).isoformat(timespec="microseconds"),

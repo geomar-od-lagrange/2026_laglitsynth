@@ -49,6 +49,7 @@ laglitsynth screening-abstracts input.jsonl "..." --dry-run --max-records 20
 | `--base-url` | Ollama API base URL (default: `http://localhost:11434`). |
 | `--max-records` | Process only the first N works. Useful with `--dry-run`. |
 | `--dry-run` | Print verdicts to stderr without writing any output files. |
+| `--concurrency` | In-flight LLM requests (default: `1`). See [llm-concurrency.md](llm-concurrency.md). |
 
 ## Output format
 

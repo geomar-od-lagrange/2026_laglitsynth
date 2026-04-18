@@ -411,6 +411,7 @@ def test_run_dry_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None
     args.screening_threshold = 50
     args.max_records = None
     args.dry_run = True
+    args.concurrency = 1
 
     with (
         patch("laglitsynth.screening_abstracts.screen._preflight"),
@@ -453,6 +454,7 @@ def test_run_writes_output_files(tmp_path: Path) -> None:
     args.screening_threshold = 50
     args.max_records = None
     args.dry_run = False
+    args.concurrency = 1
 
     with (
         patch("laglitsynth.screening_abstracts.screen._preflight"),
@@ -582,6 +584,7 @@ def test_prompt_sha256_matches(tmp_path: Path) -> None:
     args.screening_threshold = 50
     args.max_records = None
     args.dry_run = False
+    args.concurrency = 1
 
     with (
         patch("laglitsynth.screening_abstracts.screen._preflight"),
@@ -598,3 +601,110 @@ def test_prompt_sha256_matches(tmp_path: Path) -> None:
     meta = json.loads((out_dir / "screening-meta.json").read_text())
     assert meta["llm"]["prompt_sha256"] == expected_digest
     assert len(meta["llm"]["prompt_sha256"]) == 64  # full hex digest
+
+
+# --- Concurrent screening ---
+
+
+def test_screen_works_concurrent_processes_all(tmp_path: Path) -> None:
+    """With concurrency>1, every input work still gets exactly one verdict.
+
+    Ordering is completion order (not catalogue order), so the test asserts
+    the set of processed work_ids and per-work verdict values rather than
+    positional equality.
+    """
+    works = [_make_work(f"W{i}", abstract=f"Abstract {i}") for i in range(8)]
+    works.append(_make_work("W8", abstract=None))  # one sentinel
+    _write_works_jsonl(tmp_path / "input.jsonl", works)
+
+    classify_results = {
+        f"W{i}": {"relevance_score": 10 * i, "reason": f"r{i}"} for i in range(8)
+    }
+
+    with (
+        patch(
+            "laglitsynth.screening_abstracts.screen.classify_abstract",
+            side_effect=_mock_classify(classify_results),
+        ),
+        patch("laglitsynth.screening_abstracts.screen.OpenAI"),
+    ):
+        from laglitsynth.screening_abstracts.screen import screen_works
+
+        results = list(
+            screen_works(
+                tmp_path / "input.jsonl",
+                "prompt",
+                model="m",
+                base_url="http://x",
+                max_records=None,
+                concurrency=4,
+            )
+        )
+
+    assert len(results) == 9
+    by_id = {v.work_id: v for v in results}
+    assert set(by_id) == {f"W{i}" for i in range(9)}
+    # Sentinel work:
+    assert by_id["W8"].reason == "no-abstract"
+    assert by_id["W8"].relevance_score is None
+    # Abstract-backed works:
+    for i in range(8):
+        v = by_id[f"W{i}"]
+        assert v.relevance_score == 10 * i
+        assert v.reason == f"r{i}"
+
+
+def test_run_streaming_append_partial_is_valid(tmp_path: Path) -> None:
+    """A killed run leaves a valid partial verdicts.jsonl (clean-rerun only —
+    resume is not supported, but the file shouldn't be truncated mid-line)."""
+    works = [_make_work(f"W{i}", abstract=f"a{i}") for i in range(4)]
+    _write_works_jsonl(tmp_path / "input.jsonl", works)
+
+    call_count = {"n": 0}
+
+    def side_effect(
+        work_id: str,
+        abstract: str,
+        prompt: str,
+        *,
+        model: str,
+        base_url: str,
+        client: Any,
+    ) -> ScreeningVerdict:
+        call_count["n"] += 1
+        if call_count["n"] == 3:
+            raise RuntimeError("simulated crash")
+        return ScreeningVerdict(
+            work_id=work_id, relevance_score=50, reason="ok", seed=1
+        )
+
+    out_dir = tmp_path / "out"
+    args = MagicMock()
+    args.input = tmp_path / "input.jsonl"
+    args.prompt = "p"
+    args.output_dir = out_dir
+    args.model = "m"
+    args.base_url = "http://x"
+    args.screening_threshold = 50
+    args.max_records = None
+    args.dry_run = False
+    args.concurrency = 1
+
+    with (
+        patch("laglitsynth.screening_abstracts.screen._preflight"),
+        patch(
+            "laglitsynth.screening_abstracts.screen.classify_abstract",
+            side_effect=side_effect,
+        ),
+        patch("laglitsynth.screening_abstracts.screen.OpenAI"),
+        pytest.raises(RuntimeError, match="simulated crash"),
+    ):
+        from laglitsynth.screening_abstracts.screen import run
+
+        run(args)
+
+    # verdicts.jsonl should exist and every line should be valid JSON.
+    lines = (out_dir / "verdicts.jsonl").read_text().splitlines()
+    assert 0 < len(lines) < 4
+    for line in lines:
+        json.loads(line)  # raises if corrupted

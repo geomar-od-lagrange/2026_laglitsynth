@@ -89,6 +89,10 @@ singularity run --pwd /opt/grobid --writable-tmpfs "$GROBID_SIF" \
 GROBID_PID=$!
 
 # --- Ollama: Slurm has already set CUDA_VISIBLE_DEVICES; do not unset ---
+# OLLAMA_NUM_PARALLEL must match the client's --concurrency for real
+# parallelism. See docs/llm-concurrency.md. PoC default: 3.
+export OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-3}"
+export SCREENING_CONCURRENCY="${SCREENING_CONCURRENCY:-$OLLAMA_NUM_PARALLEL}"
 export OLLAMA_HOST="127.0.0.1:11434"
 OLLAMA_LOG="logs/ollama-${SLURM_JOB_ID:-local}.log"
 "$OLLAMA_DIR/bin/ollama" serve >"$OLLAMA_LOG" 2>&1 &
@@ -129,6 +133,6 @@ done
 # Run the smoke-test end-to-end.
 export OLLAMA_BASE="http://127.0.0.1:11434"
 export GROBID_URL="http://localhost:8070"
-export SCREENING_MODEL ELIGIBILITY_MODEL EXTRACTION_MODEL
+export SCREENING_MODEL ELIGIBILITY_MODEL EXTRACTION_MODEL SCREENING_CONCURRENCY
 
 pixi run scripts/test-run-all-stages.sh "$QUERY" "$N"

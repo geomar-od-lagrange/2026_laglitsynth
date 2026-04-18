@@ -29,6 +29,7 @@ GROBID_URL="${GROBID_URL:-http://localhost:8070}"
 SCREENING_MODEL="${SCREENING_MODEL:-gemma3:4b}"
 ELIGIBILITY_MODEL="${ELIGIBILITY_MODEL:-gemma3:4b}"
 EXTRACTION_MODEL="${EXTRACTION_MODEL:-llama3.1:8b}"
+SCREENING_CONCURRENCY="${SCREENING_CONCURRENCY:-1}"
 
 mkdir -p "$ROOT"
 
@@ -48,7 +49,8 @@ laglitsynth screening-abstracts \
     "Is this abstract about Lagrangian particle tracking in oceanography?" \
     --output-dir "$ROOT/screening-abstracts" \
     --model "$SCREENING_MODEL" \
-    --base-url "$OLLAMA_BASE"
+    --base-url "$OLLAMA_BASE" \
+    --concurrency "$SCREENING_CONCURRENCY"
 
 echo "==> [4/8] screening-adjudication"
 laglitsynth screening-adjudication \
