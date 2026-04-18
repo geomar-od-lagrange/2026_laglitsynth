@@ -109,3 +109,48 @@ laglitsynth screening-abstracts input.jsonl \
 Adjust the prompt wording and `--screening-threshold` until the
 above/below split looks right, then run without `--dry-run` for the full
 set.
+
+## Human review export
+
+`laglitsynth screening-abstracts-export` joins `verdicts.jsonl` with
+the dedup catalogue and writes a single `review.csv` a reviewer opens
+in Excel, Numbers, or Keynote.
+
+```bash
+laglitsynth screening-abstracts-export \
+    --verdicts data/screening-abstracts/verdicts.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl
+```
+
+Default output: `<verdicts parent>/review.csv`. Override with
+`--output`.
+
+The CSV is UTF-8 with BOM (so Excel-on-Windows renders non-ASCII
+correctly) and uses the stdlib `csv` dialect (`QUOTE_MINIMAL`,
+`\r\n`), round-tripping commas, quotes, and embedded newlines
+through every spreadsheet tested.
+
+### Columns
+
+| # | Column | Source |
+|---|---|---|
+| 1 | `work_id` | verdict |
+| 2 | `title` | catalogue |
+| 3 | `doi` | catalogue |
+| 4 | `publication_year` | catalogue |
+| 5 | `abstract` | catalogue |
+| 6 | `relevance_score` | verdict (blank for sentinels) |
+| 7 | `llm_reason` | verdict |
+| 8 | `reviewer_decision` | empty — filled by reviewer |
+| 9 | `reviewer_reason` | empty — filled by reviewer |
+| 10 | `raw_response` | verdict (blank when no call was made) |
+
+Sentinel verdicts (`reason="no-abstract"` or `"llm-parse-failure"`)
+render `relevance_score` as an empty cell; `llm_reason` keeps the
+sentinel string so the reviewer can filter on it. A `work_id` present
+in the verdicts file but absent from the catalogue aborts the export
+— the two inputs are expected to come from the same pipeline run.
+
+The export is read-only. When a stage-4 ingestor lands it will read
+only `work_id`, `reviewer_decision`, and `reviewer_reason` from the
+edited CSV; edits to the other columns are ignored by design.
