@@ -183,7 +183,9 @@ not touched in waves 1–3; it is reconciled in wave 4.
    [src/laglitsynth/extraction_codebook/prompts.py](../src/laglitsynth/extraction_codebook/prompts.py),
    [src/laglitsynth/fulltext_extraction/tei.py](../src/laglitsynth/fulltext_extraction/tei.py),
    [tests/test_fulltext_eligibility.py](../tests/test_fulltext_eligibility.py),
+   [tests/test_fulltext_eligibility_prompts.py](../tests/test_fulltext_eligibility_prompts.py),
    [tests/test_extraction_codebook.py](../tests/test_extraction_codebook.py),
+   [tests/test_extraction_codebook_prompts.py](../tests/test_extraction_codebook_prompts.py),
    [tests/test_fulltext_tei.py](../tests/test_fulltext_tei.py),
    [docs/eligibility.md](../docs/eligibility.md),
    [docs/extraction-codebook.md](../docs/extraction-codebook.md).
