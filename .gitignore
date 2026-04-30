@@ -20,7 +20,6 @@ __pycache__/
 *.egg-info/
 *.pyc
 dist/
-pixi.lock
 .coverage
 *.jsonl
 *.meta.json
