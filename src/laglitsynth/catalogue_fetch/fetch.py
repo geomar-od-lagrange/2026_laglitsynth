@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import re
 import sys
 import time
@@ -13,10 +12,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pyalex
-from dotenv import load_dotenv
 from pydantic import ValidationError
 
-from laglitsynth.io import write_jsonl, write_meta
+from laglitsynth.io import JsonlReadStats, write_jsonl, write_meta
 from laglitsynth.catalogue_fetch.models import TOOL_NAME, FetchMeta, Work
 from laglitsynth.models import _RunMeta
 
@@ -75,8 +73,12 @@ def search_openalex(
     from_year: int | None = None,
     to_year: int | None = None,
     max_results: int | None = None,
+    stats: JsonlReadStats | None = None,
 ) -> Iterator[Work]:
-    """Search OpenAlex for works matching a query and yield validated Work models."""
+    """Search OpenAlex for works matching a query and yield validated Work models.
+
+    Validation failures are logged and counted in `stats.skipped` (if provided).
+    """
     works_query = pyalex.Works().search(query)
 
     filters: dict[str, str] = {}
@@ -107,6 +109,8 @@ def search_openalex(
             except ValidationError as exc:
                 work_id = raw.get("id", "<unknown>")
                 logger.warning("Skipping invalid record %s: %s", work_id, exc)
+                if stats is not None:
+                    stats.skipped += 1
                 continue
 
             yield work
@@ -119,17 +123,7 @@ def search_openalex(
                 )
 
 
-def _preflight(args: argparse.Namespace) -> None:
-    load_dotenv()
-
-    api_key = os.environ.get("OPENALEX_API_KEY")
-    if not api_key:
-        raise SystemExit(
-            "OPENALEX_API_KEY environment variable is not set.\n"
-            "Register at https://openalex.org/settings/api to get a free key."
-        )
-
-    pyalex.config.api_key = api_key
+def _preflight() -> None:
     pyalex.config.max_retries = 3
     pyalex.config.retry_backoff_factor = 0.5
 
@@ -153,24 +147,21 @@ def build_subparser(
         "--max-records",
         type=int,
         default=None,
-        help="Maximum number of results to fetch (default: 199)",
+        help="Maximum number of results to fetch. Omit to fetch all matching works.",
+    )
+    parser.add_argument(
+        "--api-key",
+        required=True,
+        help="OpenAlex API key (register at https://openalex.org/settings/api).",
     )
     parser.set_defaults(run=run)
     return parser
 
 
 def run(args: argparse.Namespace) -> None:
-    _preflight(args)
+    _preflight()
 
-    max_records_defaulted = args.max_records is None
-    if max_records_defaulted:
-        args.max_records = 199
-    max_records_warning = (
-        "Warning: --max-records not set, defaulting to 199. "
-        "Pass --max-records explicitly to fetch more."
-    )
-    if max_records_defaulted:
-        print(max_records_warning, file=sys.stderr)
+    pyalex.config.api_key = args.api_key
 
     output = args.output or _default_output_path(args.query)
     meta_path = output.with_suffix(".meta.json")
@@ -178,11 +169,13 @@ def run(args: argparse.Namespace) -> None:
     print(f"Output: {output}", file=sys.stderr)
     t0 = time.monotonic()
 
+    fetch_stats = JsonlReadStats()
     works_iter = search_openalex(
         args.query,
         from_year=args.from_year,
         to_year=args.to_year,
         max_results=args.max_records,
+        stats=fetch_stats,
     )
 
     count = write_jsonl(works_iter, output)
@@ -192,7 +185,7 @@ def run(args: argparse.Namespace) -> None:
     run_meta = _RunMeta(
         tool=TOOL_NAME,
         run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
-        validation_skipped=0,  # fetch validates inline; no stats accumulator needed
+        validation_skipped=fetch_stats.skipped,
     )
     write_meta(
         meta_path,
@@ -208,6 +201,3 @@ def run(args: argparse.Namespace) -> None:
         f"Done: {count} records, {file_size / 1024:.1f} KiB, {elapsed:.1f}s elapsed.",
         file=sys.stderr,
     )
-
-    if max_records_defaulted:
-        print(max_records_warning, file=sys.stderr)
