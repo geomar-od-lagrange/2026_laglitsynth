@@ -82,8 +82,8 @@ returned as a list into a `" / "`-joined string.
 ```python
 class EligibilityMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    run: _RunMeta
-    llm: _LlmMeta
+    run: RunMeta
+    llm: LlmMeta
     input_catalogue: str
     input_extractions: str
     input_count: int

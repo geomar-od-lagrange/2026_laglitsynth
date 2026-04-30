@@ -17,7 +17,7 @@ dropped when empty.
 3. **Target state.** The shape of the repo after the plan lands:
    new files and paths, data models, CLI, schemas. Most of the plan
    lives here. Decisions that are obvious in context (e.g. "reuse
-   the existing `_RunMeta`") don't need to be named.
+   the existing `RunMeta`") don't need to be named.
 4. **Design decisions.** Choices worth naming because a reviewer
    might challenge them. Fold into Target state when light — one
    paragraph is usually enough. No heading per decision.

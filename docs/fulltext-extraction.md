@@ -160,7 +160,7 @@ on the first accessor call.
 ```python
 class ExtractionMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    run: _RunMeta      # tool, tool_version, run_at, validation_skipped
+    run: RunMeta      # tool, tool_version, run_at, validation_skipped
     grobid_version: str
     total_pdfs: int
     extracted_count: int

@@ -55,7 +55,7 @@ schema as the input, just fewer of them.
 ```python
 class DeduplicationMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    run: _RunMeta      # tool, tool_version, run_at, validation_skipped
+    run: RunMeta      # tool, tool_version, run_at, validation_skipped
     input_count: int
     output_count: int
     duplicates_removed: int

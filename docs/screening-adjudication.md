@@ -60,7 +60,7 @@ with a justification when overriding the LLM verdict.
 ```python
 class AdjudicationMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    run: _RunMeta      # tool, tool_version, run_at, validation_skipped
+    run: RunMeta      # tool, tool_version, run_at, validation_skipped
     threshold: int
     input_count: int
     accepted_count: int

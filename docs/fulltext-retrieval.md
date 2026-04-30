@@ -110,7 +110,7 @@ Run-level metadata.
 ```python
 class RetrievalMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    run: _RunMeta      # tool, tool_version, run_at, validation_skipped
+    run: RunMeta      # tool, tool_version, run_at, validation_skipped
     total_works: int
     retrieved_count: int
     abstract_only_count: int

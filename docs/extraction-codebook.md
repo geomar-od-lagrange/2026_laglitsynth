@@ -80,8 +80,8 @@ without an LLM call (`no-source`, `tei-parse-failure`).
 ```python
 class ExtractionCodebookMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    run: _RunMeta
-    llm: _LlmMeta
+    run: RunMeta
+    llm: LlmMeta
     input_catalogue: str
     input_extractions: str
     input_count: int

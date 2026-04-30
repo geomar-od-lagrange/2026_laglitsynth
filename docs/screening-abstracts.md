@@ -88,8 +88,8 @@ sentinels; it is `None` on `no-abstract` sentinels.
 
 The meta sidecar nests two shared blocks:
 
-- **`run`** (`_RunMeta`): `tool`, `tool_version`, `run_at`, `validation_skipped`.
-- **`llm`** (`_LlmMeta`): `model`, `temperature` (explicit; currently `0.8`),
+- **`run`** (`RunMeta`): `tool`, `tool_version`, `run_at`, `validation_skipped`.
+- **`llm`** (`LlmMeta`): `model`, `temperature` (explicit; currently `0.8`),
   `prompt_sha256` (sha256 of `SYSTEM_PROMPT + "\n" + user prompt`, 64 hex chars).
 
 The `prompt_sha256` is stable across runs with the same prompt wording.

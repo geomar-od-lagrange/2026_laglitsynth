@@ -29,8 +29,8 @@ Update this file when a plan is written, implemented, or archived.
   synced; [README.md](../README.md) rewritten to list the real CLI.
 - [Reproducibility meta refactor](done/reproducibility-meta-refactor.md)
   — `_Base` deleted; OpenAlex models use `extra="ignore"`, internal
-  models use `extra="forbid"`. Shared `_RunMeta` and `_LlmMeta` live
-  in `src/laglitsynth/models.py`; every `*Meta` nests `run: _RunMeta`
+  models use `extra="forbid"`. Shared `RunMeta` and `LlmMeta` live
+  in `src/laglitsynth/models.py`; every `*Meta` nests `run: RunMeta`
   (`tool`, `tool_version`, `run_at`, `validation_skipped`). Stage 3
   passes `temperature=0.8` and a per-call `random.randint(...)` seed
   to Ollama; each `ScreeningVerdict` carries its seed;

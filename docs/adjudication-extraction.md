@@ -25,13 +25,13 @@ The command copies the input to
 
 ### ExtractionAdjudicationMeta
 
-The sidecar follows the shared `_RunMeta`-based shape used by all pipeline
+The sidecar follows the shared `RunMeta`-based shape used by all pipeline
 stages (see [`docs/data-model.md`](data-model.md)):
 
 ```python
 class ExtractionAdjudicationMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    run: _RunMeta   # tool, tool_version, run_at, validation_skipped
+    run: RunMeta   # tool, tool_version, run_at, validation_skipped
     mode: str = "pass_through"
     input_count: int
     output_count: int

@@ -12,19 +12,19 @@ Pydantic models, not a generic abstraction. All downstream components consume
 errors.
 
 [`src/laglitsynth/models.py`](../src/laglitsynth/models.py) holds two shared
-types used by the pipeline's own internal records — `_RunMeta` and `_LlmMeta`
+types used by the pipeline's own internal records — `RunMeta` and `LlmMeta`
 — described below.
 
 ## Shared run-level types
 
-`_RunMeta` and `_LlmMeta` in
+`RunMeta` and `LlmMeta` in
 [`src/laglitsynth/models.py`](../src/laglitsynth/models.py) are the two
 shared types carried by every stage's `*Meta` sidecar.
 
-`_RunMeta` captures provenance for a single tool invocation:
+`RunMeta` captures provenance for a single tool invocation:
 
 ```python
-class _RunMeta(BaseModel):
+class RunMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     tool: str               # e.g. "laglitsynth.catalogue_fetch.fetch"
     tool_version: str       # "alpha" until first release
@@ -32,15 +32,15 @@ class _RunMeta(BaseModel):
     validation_skipped: int # records dropped by read_jsonl on ValidationError
 ```
 
-Every `*Meta` sidecar embeds `run: _RunMeta` rather than repeating these
+Every `*Meta` sidecar embeds `run: RunMeta` rather than repeating these
 four fields. The stage-specific `*_at` field names (`fetched_at`,
 `screened_at`, …) were removed in the reproducibility-meta refactor; the
 timestamp lives in `run.run_at`.
 
-`_LlmMeta` is added to stages that call an LLM (currently stages 3, 7, 8):
+`LlmMeta` is added to stages that call an LLM (currently stages 3, 7, 8):
 
 ```python
-class _LlmMeta(BaseModel):
+class LlmMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     model: str
     temperature: float
@@ -48,8 +48,8 @@ class _LlmMeta(BaseModel):
 ```
 
 Per-stage `*Meta` classes (e.g. `FetchMeta`, `ScreeningMeta`,
-`EligibilityMeta`, `ExtractionCodebookMeta`) each nest `run: _RunMeta` and,
-where applicable, `llm: _LlmMeta`. All pipeline-owned models carry
+`EligibilityMeta`, `ExtractionCodebookMeta`) each nest `run: RunMeta` and,
+where applicable, `llm: LlmMeta`. All pipeline-owned models carry
 `extra="forbid"` so schema drift is surfaced as a validation error.
 
 ## Design decisions
