@@ -52,29 +52,92 @@ Stages 1–8 are implemented. Each stage has its own doc under [`docs/`](docs/).
 Stage 9+ are specified in [`docs/pipeline.md`](docs/pipeline.md) but not
 yet implemented.
 
-### Running the pipeline
+## Running the pipeline
 
 [`scripts/run-pipeline.sh`](scripts/run-pipeline.sh) runs stages 1..8
-end-to-end, writing outputs under `data/run/`. Start Ollama and GROBID
-first (see the [Ollama](#ollama-for-llm-stages) and
-[GROBID](#grobid-for-full-text-extraction) sections below for details):
+end-to-end, writing outputs under `data/run/`. The runner sources
+`.env` and passes `--api-key` / `--email` as flags to the tools — no
+env-var leakage into the Python side.
+
+Defaults that apply to both local and NESH runs:
+
+- `N=5` (local) or `N=10` (NESH) — max records pulled from OpenAlex
+  and propagated as `--max-records` to each downstream stage. Override
+  as the runner's second positional arg (locally) or via `N=...` in
+  `sbatch --export=` (NESH).
+- `STOP_AFTER_STAGE=8` — full pipeline. Set to a smaller integer to
+  cut runs short while iterating on upstream stages.
+- Models: `gemma3:4b` for stages 3 and 7, `llama3.1:8b` for stage 8.
+  Override via `SCREENING_MODEL`, `ELIGIBILITY_MODEL`, `EXTRACTION_MODEL`.
+
+### Locally
+
+Start Ollama and GROBID yourself first (see [Ollama](#ollama-for-llm-stages)
+and [GROBID](#grobid-for-full-text-extraction) below), then invoke the
+runner:
 
 ```bash
-ollama serve                                                  # stages 3, 7, 8
-docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0           # stage 6
+ollama serve                                                # stages 3, 7, 8
+docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0         # stage 6
+
+scripts/run-pipeline.sh                                     # defaults, N=5
+scripts/run-pipeline.sh "particle dispersion" 200           # custom query, N=200
+STOP_AFTER_STAGE=3 scripts/run-pipeline.sh                  # stages 1..3 only
 ```
 
-Then:
+### On NESH (GPU compute node)
+
+[`scripts/nesh-pipeline.sbatch`](scripts/nesh-pipeline.sbatch) wraps the
+runner with the cluster's plumbing: it pulls (once) and starts a
+Singularity GROBID container, launches a bundled Ollama, pulls the LLM
+models via the NESH proxy, then invokes the runner. You don't need to
+start anything yourself.
 
 ```bash
-scripts/run-pipeline.sh                            # defaults (smoke-sized)
-scripts/run-pipeline.sh "particle dispersion" 10   # custom query, N=10
-STOP_AFTER_STAGE=3 scripts/run-pipeline.sh         # stages 1..3 only
+mkdir -p logs
+sbatch scripts/nesh-pipeline.sbatch                                                     # smoke, N=10
+sbatch --export=ALL,QUERY="particle dispersion",N=200 scripts/nesh-pipeline.sbatch
+sbatch --export=ALL,STOP_AFTER_STAGE=3,N=500 scripts/nesh-pipeline.sbatch
 ```
 
-On NESH the same runner is wrapped by
-[`scripts/nesh-pipeline.sbatch`](scripts/nesh-pipeline.sbatch), which
-launches Ollama and GROBID locally on the GPU node before invoking it.
+Per-user prerequisites:
+
+- Repo cloned under `$WORK/2026_laglitsynth` (override with `REPO_DIR`).
+- `$REPO_DIR/.env` populated with `OPENALEX_API_KEY` and `UNPAYWALL_EMAIL`.
+- Bundled Ollama install at `$HOME/.local/share/ollama-install` — the
+  full tarball, not just the binary. See
+  [docs/explorations/nesh-ollama.md](docs/explorations/nesh-ollama.md).
+
+The job header requests `--partition=gpu --constraint=V100
+--gpus-per-node=1 --cpus-per-task=4 --mem=32G --time=02:00:00`. Edit
+the sbatch script for larger time budgets or H100 nodes.
+
+### Reviewer exports
+
+The pipeline writes JSONL only — no human-readable spreadsheets are
+produced automatically. To spot-check stage 3's verdicts, run
+`screening-abstracts-export` after the pipeline lands its output:
+
+```bash
+# Flat CSV — one row per work, opens in Excel / Numbers / LibreOffice
+laglitsynth screening-abstracts-export --format csv \
+    --verdicts data/run/screening-abstracts/verdicts.jsonl \
+    --catalogue data/run/catalogue-dedup/deduplicated.jsonl
+
+# XLSX — one tab per work plus an index sheet (better for deep review)
+laglitsynth screening-abstracts-export --format xlsx \
+    --verdicts data/run/screening-abstracts/verdicts.jsonl \
+    --catalogue data/run/catalogue-dedup/deduplicated.jsonl
+
+# Reproducible random subset of 30 works (xlsx only)
+laglitsynth screening-abstracts-export --format xlsx \
+    --verdicts data/run/screening-abstracts/verdicts.jsonl \
+    --catalogue data/run/catalogue-dedup/deduplicated.jsonl \
+    --n-subset 30 --subset-seed 1
+```
+
+See [docs/screening-abstracts.md](docs/screening-abstracts.md) for the
+full export schema. There is no equivalent export for stages 7 or 8 yet.
 
 ## OpenAlex API key
 
