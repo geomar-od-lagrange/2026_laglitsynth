@@ -7,15 +7,59 @@ These are the contract between the fetch layer and all downstream consumers
 The pipeline builds on the OpenAlex data model. `Work` and its nested types
 (`Authorship`, `Source`, `Topic`, etc.) are OpenAlex's schema expressed as
 Pydantic models, not a generic abstraction. All downstream components consume
-`Work` records. The shared `_Base` in
-[`src/laglitsynth/models.py`](../src/laglitsynth/models.py) is a convenience
-base class (`extra="ignore"`) -- the domain models themselves are
-OpenAlex-specific.
+`Work` records. The domain models are OpenAlex-specific; they carry
+`extra="ignore"` directly so upstream field additions do not cause validation
+errors.
+
+[`src/laglitsynth/models.py`](../src/laglitsynth/models.py) holds two shared
+types used by the pipeline's own internal records — `_RunMeta` and `_LlmMeta`
+— described below.
+
+## Shared run-level types
+
+`_RunMeta` and `_LlmMeta` in
+[`src/laglitsynth/models.py`](../src/laglitsynth/models.py) are the two
+shared types carried by every stage's `*Meta` sidecar.
+
+`_RunMeta` captures provenance for a single tool invocation:
+
+```python
+class _RunMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tool: str               # e.g. "laglitsynth.catalogue_fetch.fetch"
+    tool_version: str       # "alpha" until first release
+    run_at: str             # ISO-8601 UTC
+    validation_skipped: int # records dropped by read_jsonl on ValidationError
+```
+
+Every `*Meta` sidecar embeds `run: _RunMeta` rather than repeating these
+four fields. The stage-specific `*_at` field names (`fetched_at`,
+`screened_at`, …) were removed in the reproducibility-meta refactor; the
+timestamp lives in `run.run_at`.
+
+`_LlmMeta` is added to stages that call an LLM (currently stages 3, 7, 8):
+
+```python
+class _LlmMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model: str
+    temperature: float
+    prompt_sha256: str  # sha256(SYSTEM_PROMPT + "\n" + user prompt), full hex digest
+```
+
+Per-stage `*Meta` classes (e.g. `FetchMeta`, `ScreeningMeta`,
+`EligibilityMeta`, `ExtractionCodebookMeta`) each nest `run: _RunMeta` and,
+where applicable, `llm: _LlmMeta`. All pipeline-owned models carry
+`extra="forbid"` so schema drift is surfaced as a validation error.
 
 ## Design decisions
 
-- **`ConfigDict(extra="ignore")`** on all models. OpenAlex adds new fields
-  regularly; unknown fields are silently dropped rather than causing errors.
+- **`extra="ignore"` on OpenAlex-sourced models** (`Work`, `Authorship`,
+  `Source`, `Topic`, etc.). OpenAlex adds new fields regularly; unknown
+  fields are silently dropped rather than causing errors.
+- **`extra="forbid"` on pipeline-owned models** (all `*Meta`, `*Verdict`,
+  `*Record`). Drift between the schema definition and the data on disk is
+  treated as a bug, not silently tolerated.
 - **Nullable where OpenAlex is nullable.** Many fields that the OpenAlex schema
   documents as required can be `null` in practice (errata, old records, data
   quality issues). The models accept `None` rather than skipping records.

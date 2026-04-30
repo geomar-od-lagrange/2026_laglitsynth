@@ -41,14 +41,14 @@ Update this file when a plan is written, implemented, or archived.
   `sections()`, `figures()`, `citations()`, `bibliography()` over
   the TEI bytes we already keep on disk. Recursive `Section.children`
   resolves the flat-vs-recursive question.
-- [Stage 7 `fulltext-eligibility`](stage-7-fulltext-eligibility.md) —
+- [Stage 7 `fulltext-eligibility`](done/stage-7-fulltext-eligibility.md) —
   one LLM pass per included work deciding inclusion on the full text
   (or the abstract when no extraction is available). Tri-state
   `eligible: bool | None` with three sentinel reasons (`no-source`,
   `tei-parse-failure`, `llm-parse-failure`). `ExtractedDocument.extraction_status`
   was not needed: missing and empty `sections()` already trigger the
   right fallback.
-- [Stage 8 `extraction-codebook`](stage-8-extraction-codebook.md) —
+- [Stage 8 `extraction-codebook`](done/stage-8-extraction-codebook.md) —
   one LLM pass per eligible work filling a structured
   [`ExtractionRecord`](../src/laglitsynth/extraction_codebook/models.py)
   (every value paired with a verbatim `*_context`, every content field
