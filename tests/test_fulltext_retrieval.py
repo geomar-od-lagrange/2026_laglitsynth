@@ -13,19 +13,12 @@ from laglitsynth.fulltext_retrieval.models import RetrievalRecord, RetrievalStat
 from laglitsynth.fulltext_retrieval.retrieve import (
     _DOI_PREFIX_RE,
     _RateLimiter,
-    _load_existing,
     _retrieve_one,
     _validate_pdf,
     run,
 )
 from laglitsynth.ids import work_id_to_filename
 from laglitsynth.catalogue_fetch.models import Work
-
-
-@pytest.fixture(autouse=True)
-def _unpaywall_email(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Default UNPAYWALL_EMAIL for tests that exercise run()."""
-    monkeypatch.setenv("UNPAYWALL_EMAIL", "test@example.com")
 
 
 def _make_work(
@@ -296,12 +289,13 @@ class TestFailedOnHttpError:
 
 class TestSkipExisting:
     def test_skip_retrieved_retry_failed(self, tmp_path: Path) -> None:
+        # Verify skip-existing logic: retrieved_oa is preserved without network
+        # calls; failed and abstract_only are retried.
         output_dir = tmp_path / "out"
         output_dir.mkdir()
         retrieval_path = output_dir / "retrieval.jsonl"
 
-        # Write existing records
-        records = [
+        seeded = [
             RetrievalRecord(
                 work_id="https://openalex.org/W1",
                 retrieval_status=RetrievalStatus.retrieved_oa,
@@ -320,19 +314,42 @@ class TestSkipExisting:
             ),
         ]
         with open(retrieval_path, "w") as f:
-            for r in records:
+            for r in seeded:
                 f.write(r.model_dump_json() + "\n")
 
-        existing = _load_existing(output_dir)
-        skip_ids = {
-            wid
-            for wid, rec in existing.items()
-            if rec.retrieval_status.value.startswith("retrieved_")
-        }
-        # retrieved_oa should be skipped; failed and abstract_only should not
-        assert "https://openalex.org/W1" in skip_ids
-        assert "https://openalex.org/W2" not in skip_ids
-        assert "https://openalex.org/W3" not in skip_ids
+        works = [
+            _make_work("https://openalex.org/W1", doi=None),
+            _make_work("https://openalex.org/W2", doi=None),
+            _make_work("https://openalex.org/W3", doi=None),
+        ]
+        _write_works_jsonl(tmp_path / "input.jsonl", works)
+
+        args = MagicMock()
+        args.input = tmp_path / "input.jsonl"
+        args.output_dir = output_dir
+        args.email = "test@example.com"
+        args.manual_dir = None
+        args.skip_existing = True
+        args.dry_run = False
+
+        client_mock = MagicMock(spec=httpx.Client)
+        client_mock.get.side_effect = httpx.ConnectError("connection refused")
+
+        rl = _RateLimiter()
+        with (
+            patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client", return_value=client_mock),
+            patch("laglitsynth.fulltext_retrieval.retrieve._RateLimiter", return_value=rl),
+        ):
+            run(args)
+
+        # W1 (retrieved_oa) must be preserved; no network call attempted for it.
+        # W2 (failed) and W3 (abstract_only) must be re-processed — both will
+        # again be abstract_only (no OA URLs, no DOI, no manual).
+        lines = [l for l in retrieval_path.read_text().splitlines() if l.strip()]
+        final = {json.loads(l)["work_id"]: json.loads(l)["retrieval_status"] for l in lines}
+        assert final["https://openalex.org/W1"] == "retrieved_oa"
+        assert final["https://openalex.org/W2"] == "abstract_only"
+        assert final["https://openalex.org/W3"] == "abstract_only"
 
 
 class TestUnretrievedTxt:
@@ -346,6 +363,7 @@ class TestUnretrievedTxt:
         args = MagicMock()
         args.input = tmp_path / "input.jsonl"
         args.output_dir = tmp_path / "out"
+        args.email = "test@example.com"
         args.manual_dir = None
         args.skip_existing = False
         args.dry_run = False
@@ -379,6 +397,7 @@ class TestUnretrievedTxt:
         args = MagicMock()
         args.input = tmp_path / "input.jsonl"
         args.output_dir = tmp_path / "out"
+        args.email = "test@example.com"
         args.manual_dir = None
         args.skip_existing = False
         args.dry_run = True
@@ -431,6 +450,7 @@ class TestUnretrievedTxt:
         args = MagicMock()
         args.input = tmp_path / "input.jsonl"
         args.output_dir = output_dir
+        args.email = "test@example.com"
         args.manual_dir = None
         args.skip_existing = True
         args.dry_run = False
@@ -465,6 +485,7 @@ class TestRetrievalJsonl:
         args = MagicMock()
         args.input = tmp_path / "input.jsonl"
         args.output_dir = tmp_path / "out"
+        args.email = "test@example.com"
         args.manual_dir = None
         args.skip_existing = False
         args.dry_run = False
@@ -509,6 +530,7 @@ class TestRetrievalJsonl:
         args = MagicMock()
         args.input = tmp_path / "input.jsonl"
         args.output_dir = output_dir
+        args.email = "test@example.com"
         args.manual_dir = None
         args.skip_existing = True
         args.dry_run = False
@@ -596,36 +618,58 @@ class TestDryRunStatusHonesty:
 
 
 class TestUnpaywallEmail:
-    """Email is read from UNPAYWALL_EMAIL; missing var is a hard error."""
+    """Email passed via --email is plumbed into the User-Agent and Unpaywall URL."""
 
-    def _base_args(self, tmp_path: Path) -> MagicMock:
+    def _base_args(self, tmp_path: Path, email: str = "test@example.com") -> MagicMock:
         _write_works_jsonl(tmp_path / "input.jsonl", [])
         args = MagicMock()
         args.input = tmp_path / "input.jsonl"
         args.output_dir = tmp_path / "out"
+        args.email = email
         args.manual_dir = None
         args.skip_existing = False
         args.dry_run = True
         return args
 
-    def test_env_var_used_in_user_agent(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("UNPAYWALL_EMAIL", "env@example.com")
-        args = self._base_args(tmp_path)
+    def test_email_flag_used_in_user_agent(self, tmp_path: Path) -> None:
+        args = self._base_args(tmp_path, email="flag@example.com")
 
         with patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client") as client_cls:
             run(args)
 
         ua = client_cls.call_args.kwargs["headers"]["User-Agent"]
-        assert "env@example.com" in ua
+        assert "flag@example.com" in ua
 
-    def test_missing_env_var_errors(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.delenv("UNPAYWALL_EMAIL", raising=False)
-        args = self._base_args(tmp_path)
+    def test_email_flag_plumbed_into_unpaywall_url(self, tmp_path: Path) -> None:
+        # Run a real (non-dry-run) retrieval for a work with a DOI and no OA
+        # URLs so the Unpaywall path is exercised.  Assert the URL the mock
+        # client received contains email=<value>.
+        work = _make_work(doi="https://doi.org/10.1234/test")
+        _write_works_jsonl(tmp_path / "input.jsonl", [work])
 
-        with patch("laglitsynth.fulltext_retrieval.retrieve.load_dotenv"):
-            with pytest.raises(SystemExit, match="UNPAYWALL_EMAIL"):
-                run(args)
+        args = MagicMock()
+        args.input = tmp_path / "input.jsonl"
+        args.output_dir = tmp_path / "out"
+        args.email = "addr@example.com"
+        args.manual_dir = None
+        args.skip_existing = False
+        args.dry_run = False
+
+        unpaywall_response = httpx.Response(
+            200,
+            json={"best_oa_location": None},
+            request=httpx.Request("GET", "https://api.unpaywall.org/v2/10.1234%2Ftest"),
+        )
+        client_mock = MagicMock(spec=httpx.Client)
+        client_mock.get.return_value = unpaywall_response
+
+        rl = _RateLimiter()
+        with (
+            patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client", return_value=client_mock),
+            patch("laglitsynth.fulltext_retrieval.retrieve._RateLimiter", return_value=rl),
+            patch.object(rl, "wait"),
+        ):
+            run(args)
+
+        called_url = client_mock.get.call_args[0][0]
+        assert "email=addr%40example.com" in called_url or "email=addr@example.com" in called_url

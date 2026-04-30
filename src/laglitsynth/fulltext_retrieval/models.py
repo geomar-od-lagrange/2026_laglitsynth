@@ -10,7 +10,6 @@ TOOL_NAME = "laglitsynth.fulltext_retrieval.retrieve"
 class RetrievalStatus(str, Enum):
     retrieved_oa = "retrieved_oa"
     retrieved_unpaywall = "retrieved_unpaywall"
-    retrieved_preprint = "retrieved_preprint"
     retrieved_manual = "retrieved_manual"
     abstract_only = "abstract_only"
     failed = "failed"

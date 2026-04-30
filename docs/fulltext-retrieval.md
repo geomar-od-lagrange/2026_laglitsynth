@@ -78,7 +78,6 @@ New models in [`src/laglitsynth/fulltext_retrieval/models.py`](../src/laglitsynt
 class RetrievalStatus(str, Enum):
     retrieved_oa = "retrieved_oa"
     retrieved_unpaywall = "retrieved_unpaywall"
-    retrieved_preprint = "retrieved_preprint"
     retrieved_manual = "retrieved_manual"
     abstract_only = "abstract_only"
     failed = "failed"
@@ -142,18 +141,18 @@ PDFs are not committed to git. Add `data/fulltext-retrieval/pdfs/` to `.gitignor
 laglitsynth fulltext-retrieval \
     --input data/screening-adjudication/included.jsonl \
     --output-dir data/fulltext-retrieval/ \
+    --email $UNPAYWALL_EMAIL \
     [--manual-dir data/fulltext-retrieval/manual/] \
     [--skip-existing] \
     [--dry-run]
 ```
 
-The Unpaywall API requires a contact email. Set `UNPAYWALL_EMAIL` in your
-environment or `.env`.
-
 ### Arguments
 
 - `--input`: path to the included catalogue JSONL (Work records).
 - `--output-dir`: where to write retrieval records, metadata, and PDFs.
+- `--email`: contact email for Unpaywall API requests. Required. Scripts
+  source `.env` and pass `--email $UNPAYWALL_EMAIL`.
 - `--manual-dir`: directory to scan for manually placed PDFs. Defaults to
   `<output-dir>/manual/`.
 - `--skip-existing`: do not re-retrieve works that already have a
@@ -185,7 +184,6 @@ Retrieval summary:
   Total works:            NNN
   Retrieved (OA):         NNN  (NN.N%)
   Retrieved (Unpaywall):  NNN  (NN.N%)
-  Retrieved (preprint):   NNN  (NN.N%)
   Retrieved (manual):     NNN  (NN.N%)
   Abstract-only:          NNN  (NN.N%)
   Failed:                 NNN  (NN.N%)
