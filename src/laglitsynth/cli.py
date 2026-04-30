@@ -22,9 +22,6 @@ from laglitsynth.fulltext_retrieval.retrieve import (
 from laglitsynth.screening_abstracts.export import (
     build_subparser as build_screening_export_subparser,
 )
-from laglitsynth.screening_abstracts.export_xlsx import (
-    build_subparser as build_screening_export_xlsx_subparser,
-)
 from laglitsynth.screening_abstracts.screen import (
     build_subparser as build_screening_subparser,
 )
@@ -45,7 +42,6 @@ def main(argv: list[str] | None = None) -> None:
     build_dedup_subparser(subparsers)
     build_screening_subparser(subparsers)
     build_screening_export_subparser(subparsers)
-    build_screening_export_xlsx_subparser(subparsers)
     build_adjudication_subparser(subparsers)
     build_retrieval_subparser(subparsers)
     build_extraction_subparser(subparsers)
