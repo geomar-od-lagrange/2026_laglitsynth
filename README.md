@@ -131,8 +131,6 @@ sbatch \
 
 Notes:
 
-- `--time` is an sbatch flag, not an `--export` variable; pass it
-  separately on the `sbatch` line.
 - Stage 8 (extraction-codebook) is the throughput floor; budget
   `--time` against it. Stages 7 and 8 do not yet honour
   `LLM_CONCURRENCY` — they call Ollama sequentially.
