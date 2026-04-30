@@ -19,8 +19,8 @@ import httpx
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.fulltext_retrieval.models import TOOL_NAME, RetrievalMeta, RetrievalRecord, RetrievalStatus
 from laglitsynth.ids import work_id_to_filename
-from laglitsynth.io import JsonlReadStats, append_jsonl, read_jsonl, read_works_jsonl, write_meta
-from laglitsynth.models import _RunMeta
+from laglitsynth.io import JsonlReadStats, append_jsonl, read_jsonl, write_meta
+from laglitsynth.models import RunMeta
 
 logger = logging.getLogger(__name__)
 
@@ -351,7 +351,7 @@ def run(args: argparse.Namespace) -> None:
                 file=sys.stderr,
             )
 
-    works = list(read_works_jsonl(args.input, stats))
+    works = list(read_jsonl(args.input, Work, stats))
     total = len(works)
     works_by_id: dict[str, Work] = {w.id: w for w in works}
     input_ids = {w.id for w in works}
@@ -446,7 +446,7 @@ def run(args: argparse.Namespace) -> None:
         elif status == RetrievalStatus.failed:
             failed_count += 1
 
-    run_meta = _RunMeta(
+    run_meta = RunMeta(
         tool=TOOL_NAME,
         run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
         validation_skipped=stats.skipped,

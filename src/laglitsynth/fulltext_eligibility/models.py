@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from laglitsynth.models import _LlmMeta, _RunMeta
+from laglitsynth.models import LlmMeta, RunMeta
 
 TOOL_NAME = "laglitsynth.fulltext_eligibility.assess"
 
@@ -65,8 +65,8 @@ class EligibilityVerdict(BaseModel):
 
 class EligibilityMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    run: _RunMeta
-    llm: _LlmMeta
+    run: RunMeta
+    llm: LlmMeta
     input_catalogue: str
     input_extractions: str
     input_count: int

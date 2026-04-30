@@ -20,10 +20,10 @@ from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.io import (
     JsonlReadStats,
     append_jsonl,
-    read_works_jsonl,
+    read_jsonl,
     write_meta,
 )
-from laglitsynth.models import _LlmMeta, _RunMeta
+from laglitsynth.models import LlmMeta, RunMeta
 from laglitsynth.screening_abstracts.models import TOOL_NAME, ScreeningMeta, ScreeningVerdict
 
 logger = logging.getLogger(__name__)
@@ -112,37 +112,20 @@ def screen_works(
 ) -> Iterator[ScreeningVerdict]:
     """Yield a verdict per input work.
 
-    ``concurrency=1`` (default) keeps the legacy sequential path: verdicts
-    are yielded in catalogue order. ``concurrency>1`` dispatches LLM calls
-    through a ``ThreadPoolExecutor`` of that size; verdicts for works
-    without an abstract come first in catalogue order, followed by
-    abstract-backed verdicts in completion order. The server's
-    ``OLLAMA_NUM_PARALLEL`` must be at least ``concurrency`` for actual
-    parallelism.
+    LLM calls are dispatched through a ``ThreadPoolExecutor`` of
+    ``concurrency`` workers (default 1, giving ordered sequential dispatch).
+    Works without an abstract yield a ``no-abstract`` sentinel immediately;
+    abstract-backed verdicts are yielded in completion order.
+    The server's ``OLLAMA_NUM_PARALLEL`` must be at least ``concurrency``
+    for actual parallelism.
     """
     client = OpenAI(base_url=f"{base_url}/v1", api_key="ollama")
 
     works: list[Work] = []
-    for idx, work in enumerate(read_works_jsonl(input_path)):
+    for idx, work in enumerate(read_jsonl(input_path, Work)):
         if max_records is not None and idx >= max_records:
             break
         works.append(work)
-
-    if concurrency <= 1:
-        for work in works:
-            if work.abstract is None:
-                logger.warning("Skipping work %s: no abstract", work.id)
-                yield _no_abstract_verdict(work.id)
-                continue
-            yield classify_abstract(
-                work.id,
-                work.abstract,
-                prompt,
-                model=model,
-                base_url=base_url,
-                client=client,
-            )
-        return
 
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures: dict[Future[ScreeningVerdict], str] = {}
@@ -245,7 +228,7 @@ def run(args: argparse.Namespace) -> None:
     ).hexdigest()
 
     stats = JsonlReadStats()
-    total = sum(1 for _ in read_works_jsonl(args.input, stats))
+    total = sum(1 for _ in read_jsonl(args.input, Work, stats))
 
     print(f"Screening {total} works with model {args.model}", file=sys.stderr)
     print(f"Threshold: {threshold}, Prompt: {args.prompt!r}", file=sys.stderr)
@@ -257,7 +240,7 @@ def run(args: argparse.Namespace) -> None:
     # docs/llm-concurrency.md.
     if not args.dry_run:
         verdicts_path.parent.mkdir(parents=True, exist_ok=True)
-        verdicts_path.write_text("")
+        verdicts_path.unlink(missing_ok=True)
 
     t0 = time.monotonic()
     above_threshold_count = 0
@@ -311,12 +294,12 @@ def run(args: argparse.Namespace) -> None:
     )
 
     if not args.dry_run:
-        run_meta = _RunMeta(
+        run_meta = RunMeta(
             tool=TOOL_NAME,
             run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
             validation_skipped=stats.skipped,
         )
-        llm_meta = _LlmMeta(
+        llm_meta = LlmMeta(
             model=args.model,
             temperature=_TEMPERATURE,
             prompt_sha256=prompt_sha256,

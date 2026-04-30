@@ -36,11 +36,10 @@ from laglitsynth.io import (
     JsonlReadStats,
     append_jsonl,
     read_jsonl,
-    read_works_jsonl,
     write_jsonl,
     write_meta,
 )
-from laglitsynth.models import _LlmMeta, _RunMeta
+from laglitsynth.models import LlmMeta, RunMeta
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +116,7 @@ def assess_works(
 ) -> Iterator[EligibilityVerdict]:
     skip_ids = skip_ids or set()
     processed = 0
-    for work in read_works_jsonl(catalogue_path, stats):
+    for work in read_jsonl(catalogue_path, Work, stats):
         if work.id in skip_ids:
             continue
         if max_records is not None and processed >= max_records:
@@ -283,7 +282,7 @@ def run(args: argparse.Namespace) -> None:
     stats = JsonlReadStats()
     extractions = _load_extractions(args.extractions, stats)
 
-    total = sum(1 for _ in read_works_jsonl(args.catalogue, stats))
+    total = sum(1 for _ in read_jsonl(args.catalogue, Work, stats))
 
     skip_ids: set[str] = set()
     prior_verdicts: list[EligibilityVerdict] = []
@@ -378,16 +377,16 @@ def run(args: argparse.Namespace) -> None:
     # Rebuild eligible.jsonl from the verdict sidecar + catalogue join.
     eligible_ids = {v.work_id for v in all_verdicts if v.eligible is True}
     eligible_works = [
-        w for w in read_works_jsonl(args.catalogue) if w.id in eligible_ids
+        w for w in read_jsonl(args.catalogue, Work) if w.id in eligible_ids
     ]
     write_jsonl(eligible_works, eligible_path)
 
-    run_meta = _RunMeta(
+    run_meta = RunMeta(
         tool=TOOL_NAME,
         run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
         validation_skipped=stats.skipped,
     )
-    llm_meta = _LlmMeta(
+    llm_meta = LlmMeta(
         model=args.model,
         temperature=_TEMPERATURE,
         prompt_sha256=prompt_sha256,

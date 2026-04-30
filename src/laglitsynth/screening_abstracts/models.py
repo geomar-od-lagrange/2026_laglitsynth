@@ -1,6 +1,6 @@
 from pydantic import BaseModel, ConfigDict
 
-from laglitsynth.models import _LlmMeta, _RunMeta
+from laglitsynth.models import LlmMeta, RunMeta
 
 TOOL_NAME = "laglitsynth.screening_abstracts.screen"
 
@@ -16,8 +16,8 @@ class ScreeningVerdict(BaseModel):
 
 class ScreeningMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    run: _RunMeta
-    llm: _LlmMeta
+    run: RunMeta
+    llm: LlmMeta
     threshold: int
     input_path: str
     input_count: int

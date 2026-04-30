@@ -9,10 +9,11 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.screening_adjudication.models import TOOL_NAME, AdjudicationMeta, AdjudicationVerdict
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
-from laglitsynth.io import JsonlReadStats, read_jsonl, read_works_jsonl, write_jsonl, write_meta
-from laglitsynth.models import _RunMeta
+from laglitsynth.io import JsonlReadStats, read_jsonl, write_jsonl, write_meta
+from laglitsynth.models import RunMeta
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ def run(args: argparse.Namespace) -> None:
 
     stats = JsonlReadStats()
     # Load catalogue into a lookup dict by work_id
-    works_by_id = {w.id: w for w in read_works_jsonl(args.catalogue, stats)}
+    works_by_id = {w.id: w for w in read_jsonl(args.catalogue, Work, stats)}
 
     # Load stage-3 verdicts
     verdicts = list(read_jsonl(args.input, ScreeningVerdict, stats))
@@ -100,7 +101,7 @@ def run(args: argparse.Namespace) -> None:
     write_jsonl(adj_verdicts, output_dir / "verdicts.jsonl")
     write_jsonl(accepted_works, output_dir / "included.jsonl")
 
-    run_meta = _RunMeta(
+    run_meta = RunMeta(
         tool=TOOL_NAME,
         run_at=now,
         validation_skipped=stats.skipped,

@@ -10,8 +10,6 @@ from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from laglitsynth.catalogue_fetch.models import Work
-
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T", bound=BaseModel)
@@ -20,23 +18,6 @@ _T = TypeVar("_T", bound=BaseModel)
 @dataclass
 class JsonlReadStats:
     skipped: int = field(default=0)
-
-
-def read_works_jsonl(
-    path: Path, stats: JsonlReadStats | None = None
-) -> Iterator[Work]:
-    """Yield validated Work records from a JSONL file."""
-    with open(path) as f:
-        for line_no, line in enumerate(f, start=1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                yield Work.model_validate_json(line)
-            except ValidationError as exc:
-                logger.warning("Skipping invalid record on line %d: %s", line_no, exc)
-                if stats is not None:
-                    stats.skipped += 1
 
 
 def write_jsonl(records: Iterable[BaseModel], path: Path) -> int:

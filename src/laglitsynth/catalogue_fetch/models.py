@@ -2,7 +2,7 @@ from datetime import date
 
 from pydantic import BaseModel, ConfigDict
 
-from laglitsynth.models import _RunMeta
+from laglitsynth.models import RunMeta
 
 
 class Institution(BaseModel):
@@ -117,7 +117,7 @@ TOOL_NAME = "laglitsynth.catalogue_fetch.fetch"
 
 class FetchMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    run: _RunMeta
+    run: RunMeta
     query: str
     total_count: int
     records_written: int

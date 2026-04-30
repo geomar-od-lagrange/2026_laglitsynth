@@ -17,7 +17,7 @@ from laglitsynth.screening_abstracts.screen import (
 )
 from laglitsynth.screening_abstracts.models import ScreeningMeta, ScreeningVerdict
 from laglitsynth.catalogue_fetch.models import Work
-from laglitsynth.models import _LlmMeta, _RunMeta
+from laglitsynth.models import LlmMeta, RunMeta
 
 
 def _make_work(
@@ -176,15 +176,17 @@ def test_screen_works_basic(tmp_path: Path) -> None:
             )
 
     assert len(results) == 3
+    by_id = {v.work_id: v for v in results}
+    assert set(by_id) == {"W1", "W2", "W3"}
     # W1: above threshold
-    assert results[0].relevance_score == 80
-    assert results[0].reason == "relevant"
+    assert by_id["W1"].relevance_score == 80
+    assert by_id["W1"].reason == "relevant"
     # W2: skipped (no abstract)
-    assert results[1].relevance_score is None
-    assert results[1].reason == "no-abstract"
+    assert by_id["W2"].relevance_score is None
+    assert by_id["W2"].reason == "no-abstract"
     # W3: below threshold but still emitted
-    assert results[2].relevance_score == 30
-    assert results[2].reason == "not relevant"
+    assert by_id["W3"].relevance_score == 30
+    assert by_id["W3"].reason == "not relevant"
 
 
 def test_screen_works_max_records_counts_all(tmp_path: Path) -> None:
@@ -221,7 +223,7 @@ def test_screen_works_max_records_counts_all(tmp_path: Path) -> None:
 
     # Should get W1 (skipped), W2 (classified), W3 (skipped) = 3 total
     assert len(results) == 3
-    assert [r.work_id for r in results] == ["W1", "W2", "W3"]
+    assert {r.work_id for r in results} == {"W1", "W2", "W3"}
 
 
 def test_screen_works_llm_failure(tmp_path: Path) -> None:
@@ -253,11 +255,13 @@ def test_screen_works_llm_failure(tmp_path: Path) -> None:
             )
 
     assert len(results) == 2
+    by_id = {v.work_id: v for v in results}
+    assert set(by_id) == {"W1", "W2"}
     # W1: LLM failure
-    assert results[0].relevance_score is None
-    assert results[0].reason == "llm-parse-failure"
+    assert by_id["W1"].relevance_score is None
+    assert by_id["W1"].reason == "llm-parse-failure"
     # W2: classified normally
-    assert results[1].relevance_score == 75
+    assert by_id["W2"].relevance_score == 75
 
 
 # --- New sentinel reason tests ---
@@ -345,12 +349,12 @@ def test_screening_verdict_extra_fields_forbidden() -> None:
 
 
 def test_screening_meta_serialization() -> None:
-    run_meta = _RunMeta(
+    run_meta = RunMeta(
         tool="laglitsynth.screening_abstracts.screen",
         run_at="2026-01-01T00:00:00+00:00",
         validation_skipped=0,
     )
-    llm_meta = _LlmMeta(
+    llm_meta = LlmMeta(
         model="gemma3:4b",
         temperature=0.8,
         prompt_sha256="a" * 64,

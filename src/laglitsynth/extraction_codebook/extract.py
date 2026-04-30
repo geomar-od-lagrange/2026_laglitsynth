@@ -37,10 +37,9 @@ from laglitsynth.io import (
     JsonlReadStats,
     append_jsonl,
     read_jsonl,
-    read_works_jsonl,
     write_meta,
 )
-from laglitsynth.models import _LlmMeta, _RunMeta
+from laglitsynth.models import LlmMeta, RunMeta
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +144,7 @@ def extract_works(
 ) -> Iterator[ExtractionRecord]:
     skip_ids = skip_ids or set()
     processed = 0
-    for work in read_works_jsonl(catalogue_path, stats):
+    for work in read_jsonl(catalogue_path, Work, stats):
         if work.id in skip_ids:
             continue
         if max_records is not None and processed >= max_records:
@@ -316,7 +315,7 @@ def run(args: argparse.Namespace) -> None:
     stats = JsonlReadStats()
     extractions = _load_extractions(args.extractions, stats)
 
-    total = sum(1 for _ in read_works_jsonl(args.eligible, stats))
+    total = sum(1 for _ in read_jsonl(args.eligible, Work, stats))
 
     skip_ids: set[str] = set()
     prior_records: list[ExtractionRecord] = []
@@ -408,12 +407,12 @@ def run(args: argparse.Namespace) -> None:
     if args.dry_run:
         return
 
-    run_meta = _RunMeta(
+    run_meta = RunMeta(
         tool=TOOL_NAME,
         run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
         validation_skipped=stats.skipped,
     )
-    llm_meta = _LlmMeta(
+    llm_meta = LlmMeta(
         model=args.model,
         temperature=_TEMPERATURE,
         prompt_sha256=prompt_sha256,

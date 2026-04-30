@@ -19,7 +19,7 @@ from laglitsynth.fulltext_extraction.models import (
 )
 from laglitsynth.ids import filename_to_work_id
 from laglitsynth.io import append_jsonl, read_jsonl, write_meta
-from laglitsynth.models import _RunMeta
+from laglitsynth.models import RunMeta
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +195,7 @@ def run(args: argparse.Namespace) -> None:
 
     elapsed = time.monotonic() - t0
 
-    run_meta = _RunMeta(
+    run_meta = RunMeta(
         tool=TOOL_NAME,
         run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
         validation_skipped=0,  # extraction reads PDFs, not JSONL records

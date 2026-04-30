@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from laglitsynth.io import JsonlReadStats, write_jsonl, write_meta
 from laglitsynth.catalogue_fetch.models import TOOL_NAME, FetchMeta, Work
-from laglitsynth.models import _RunMeta
+from laglitsynth.models import RunMeta
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +182,7 @@ def run(args: argparse.Namespace) -> None:
     elapsed = time.monotonic() - t0
     file_size = output.stat().st_size
 
-    run_meta = _RunMeta(
+    run_meta = RunMeta(
         tool=TOOL_NAME,
         run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
         validation_skipped=fetch_stats.skipped,

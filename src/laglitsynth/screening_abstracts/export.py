@@ -28,7 +28,7 @@ from openpyxl.worksheet.hyperlink import Hyperlink
 from openpyxl.worksheet.worksheet import Worksheet
 
 from laglitsynth.catalogue_fetch.models import Work
-from laglitsynth.io import read_jsonl, read_works_jsonl
+from laglitsynth.io import read_jsonl
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
 # ── CSV ───────────────────────────────────────────────────────────────────────
@@ -79,7 +79,7 @@ def export_review_csv(
     Raises ``ValueError`` naming the first ``work_id`` present in the
     verdicts file but absent from the catalogue.
     """
-    catalogue: dict[str, Work] = {w.id: w for w in read_works_jsonl(catalogue_path)}
+    catalogue: dict[str, Work] = {w.id: w for w in read_jsonl(catalogue_path, Work)}
     rows: list[dict[str, str]] = []
     for verdict in read_jsonl(verdicts_path, ScreeningVerdict):
         work = catalogue.get(verdict.work_id)
@@ -229,7 +229,7 @@ def export_review_xlsx(
     seed: int = _DEFAULT_SUBSET_SEED,
 ) -> int:
     """Build and save the review workbook, returning the per-work sheet count."""
-    catalogue: dict[str, Work] = {w.id: w for w in read_works_jsonl(catalogue_path)}
+    catalogue: dict[str, Work] = {w.id: w for w in read_jsonl(catalogue_path, Work)}
     verdicts = list(read_jsonl(verdicts_path, ScreeningVerdict))
     for verdict in verdicts:
         if verdict.work_id not in catalogue:

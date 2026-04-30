@@ -3,7 +3,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from laglitsynth.fulltext_extraction.tei import TeiDocument
-from laglitsynth.models import _RunMeta
+from laglitsynth.models import RunMeta
 
 TOOL_NAME = "laglitsynth.fulltext_extraction.extract"
 
@@ -22,7 +22,7 @@ class ExtractedDocument(BaseModel):
 
 class ExtractionMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    run: _RunMeta
+    run: RunMeta
     grobid_version: str
     total_pdfs: int
     extracted_count: int
