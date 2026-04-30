@@ -110,7 +110,38 @@ Per-user prerequisites:
 
 The job header requests `--partition=gpu --constraint=V100
 --gpus-per-node=1 --cpus-per-task=4 --mem=32G --time=02:00:00`. Edit
-the sbatch script for larger time budgets or H100 nodes.
+the sbatch script for H100 nodes; override the time budget on the
+command line with `sbatch --time=...` (see below).
+
+#### Production-run cheatsheet
+
+The sbatch header's 2 h is smoke-sized. For a real corpus run,
+override `N` and `--time`. `OLLAMA_NUM_PARALLEL=2` (and the derived
+`LLM_CONCURRENCY=4`) is the documented production default — see
+[docs/llm-concurrency.md](docs/llm-concurrency.md) for the
+benchmarking that landed there. Leave as-is unless your model's
+specific benchmark says otherwise.
+
+```bash
+sbatch \
+    --time=12:00:00 \
+    --export=ALL,QUERY="Lagrangian particle tracking",N=500 \
+    scripts/nesh-pipeline.sbatch
+```
+
+Notes:
+
+- `--time` is an sbatch flag, not an `--export` variable; pass it
+  separately on the `sbatch` line.
+- Stage 8 (extraction-codebook) is the throughput floor; budget
+  `--time` against it. Stages 7 and 8 do not yet honour
+  `LLM_CONCURRENCY` — they call Ollama sequentially.
+- Each stage's output is truncated at run start, so a wall-clock kill
+  mid-stage means re-running that stage from scratch on the next
+  submission. If you expect a tight budget, prefer running with
+  `STOP_AFTER_STAGE=6` first to land catalogue + retrieval +
+  extraction (which are cheap to redo with `--skip-existing`), then
+  submit a second job with stages 7..8.
 
 ### Reviewer exports
 
