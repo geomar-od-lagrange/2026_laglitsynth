@@ -45,30 +45,30 @@
 # Examples reproduced in docs/explorations/ollama-throughput.md:
 #
 #   # Single-GPU 4x4 sweep (V100 baseline, job 21963559)
-#   sbatch scripts/bench-ollama.sbatch
+#   sbatch docs/explorations/bench-ollama/bench-ollama.sbatch
 #
 #   # Single-GPU H100 baseline
-#   sbatch --constraint=H100 scripts/bench-ollama.sbatch
+#   sbatch --constraint=H100 docs/explorations/bench-ollama/bench-ollama.sbatch
 #
 #   # Single-GPU H100 + FlashAttention + q8_0 KV (job 21963713)
 #   sbatch --constraint=H100 \
 #       --export=ALL,OLLAMA_FLASH_ATTENTION=1,OLLAMA_KV_CACHE_TYPE=q8_0 \
-#       scripts/bench-ollama.sbatch
+#       docs/explorations/bench-ollama/bench-ollama.sbatch
 #
 #   # Multi-GPU V100 scaling (job 21963591)
 #   sbatch --gpus-per-node=4 \
 #       --export=ALL,GPUS="1 2 3 4",PARALLELS="1",THREADS="1 2 4 8",N_CALLS=60 \
-#       scripts/bench-ollama.sbatch
+#       docs/explorations/bench-ollama/bench-ollama.sbatch
 #
 #   # H100 real-TEI stage-8 bench (job 21963960)
 #   sbatch --constraint=H100 --time=01:00:00 \
 #       --export=ALL,MODEL=llama3.1:8b,PROMPT_KIND=tei,N_CALLS=8,PARALLELS="1 2 4",THREADS="1 2 4",OLLAMA_FLASH_ATTENTION=1,OLLAMA_KV_CACHE_TYPE=q8_0,OLLAMA_CONTEXT_LENGTH=32768 \
-#       scripts/bench-ollama.sbatch
+#       docs/explorations/bench-ollama/bench-ollama.sbatch
 #
 #   # V100 real-TEI stage-8 bench (job 21963961)
 #   sbatch --time=02:00:00 \
 #       --export=ALL,MODEL=llama3.1:8b,PROMPT_KIND=tei,N_CALLS=8,PARALLELS="1 2",THREADS="1 2 4",OLLAMA_CONTEXT_LENGTH=32768 \
-#       scripts/bench-ollama.sbatch
+#       docs/explorations/bench-ollama/bench-ollama.sbatch
 
 set -euo pipefail
 
@@ -191,7 +191,7 @@ for n_gpus in "${GPUS[@]}"; do
             if [[ "$PROMPT_KIND" == "tei" ]]; then
                 client_args+=(--tei-path "$TEI_PATH")
             fi
-            line=$(pixi run python scripts/bench-ollama-concurrency.py "${client_args[@]}")
+            line=$(pixi run python docs/explorations/bench-ollama/bench-ollama-concurrency.py "${client_args[@]}")
             wall=$(echo "$line" | awk '{print $3}')
             tp=$(echo "$line" | awk '{print $4}')
             echo -e "${n_gpus}\t${parallel}\t${threads}\t${N_CALLS}\t${wall}\t${tp}" \

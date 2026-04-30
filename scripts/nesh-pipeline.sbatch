@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=laglitsynth-test-run
+#SBATCH --job-name=laglitsynth-pipeline
 #SBATCH --partition=gpu
 #SBATCH --constraint=V100
 #SBATCH --gpus-per-node=1
@@ -8,15 +8,15 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --time=02:00:00
-#SBATCH --output=nesh-test-run-%j.out
-#SBATCH --error=nesh-test-run-%j.err
+#SBATCH --output=nesh-pipeline-%j.out
+#SBATCH --error=nesh-pipeline-%j.err
 #
-# Run scripts/test-run-all-stages.sh on one NESH V100 node. Ollama and
-# GROBID both run as background processes on the same compute node:
-# Ollama from a bundled install under $OLLAMA_DIR; GROBID from a
-# repo-local Singularity image pulled from Docker Hub on first use.
-# See docs/explorations/nesh-ollama.md for the Ollama install story
-# and the proxy rationale.
+# Run scripts/run-pipeline.sh on one NESH GPU node. Ollama and GROBID
+# both run as background processes on the same compute node: Ollama
+# from a bundled install under $OLLAMA_DIR; GROBID from a repo-local
+# Singularity image pulled from Docker Hub on first use. See
+# docs/explorations/nesh-ollama.md for the Ollama install story and
+# the proxy rationale.
 #
 # Prerequisites:
 #   - Repo cloned under $WORK (the fast per-user scratch; $HOME is small
@@ -31,8 +31,9 @@
 #
 # Usage:
 #   mkdir -p logs
-#   sbatch scripts/nesh-test-run.sbatch
-#   sbatch --export=ALL,QUERY="particle dispersion",N=20 scripts/nesh-test-run.sbatch
+#   sbatch scripts/nesh-pipeline.sbatch
+#   sbatch --export=ALL,QUERY="particle dispersion",N=20 scripts/nesh-pipeline.sbatch
+#   sbatch --export=ALL,STOP_AFTER_STAGE=3,N=200 scripts/nesh-pipeline.sbatch
 
 set -euo pipefail
 
@@ -95,10 +96,11 @@ singularity run --pwd /opt/grobid \
 GROBID_PID=$!
 
 # --- Ollama: Slurm has already set CUDA_VISIBLE_DEVICES; do not unset ---
-# OLLAMA_NUM_PARALLEL must match the client's --concurrency for real
-# parallelism. See docs/llm-concurrency.md. PoC default: 3.
-export OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-3}"
-export SCREENING_CONCURRENCY="${SCREENING_CONCURRENCY:-$OLLAMA_NUM_PARALLEL}"
+# OLLAMA_NUM_PARALLEL caps in-flight GPU work. Client overbooks by +2 to
+# mask per-request HTTP / JSON / pydantic overhead so the GPU never waits
+# on the next prompt. See docs/llm-concurrency.md.
+export OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-2}"
+export LLM_CONCURRENCY="${LLM_CONCURRENCY:-$((OLLAMA_NUM_PARALLEL + 2))}"
 export OLLAMA_HOST="127.0.0.1:11434"
 OLLAMA_LOG="logs/ollama-${SLURM_JOB_ID:-local}.log"
 "$OLLAMA_DIR/bin/ollama" serve >"$OLLAMA_LOG" 2>&1 &
@@ -139,6 +141,7 @@ done
 # Run the smoke-test end-to-end.
 export OLLAMA_BASE="http://127.0.0.1:11434"
 export GROBID_URL="http://localhost:8070"
-export SCREENING_MODEL ELIGIBILITY_MODEL EXTRACTION_MODEL SCREENING_CONCURRENCY
+export SCREENING_MODEL ELIGIBILITY_MODEL EXTRACTION_MODEL LLM_CONCURRENCY
+export STOP_AFTER_STAGE="${STOP_AFTER_STAGE:-8}"
 
-pixi run scripts/test-run-all-stages.sh "$QUERY" "$N"
+pixi run scripts/run-pipeline.sh "$QUERY" "$N"

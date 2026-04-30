@@ -6,10 +6,13 @@ data/**
 *.tei.xml
 
 # sbatch --output / --error files (default to submission cwd).
-nesh-test-run-*.out
-nesh-test-run-*.err
+nesh-pipeline-*.out
+nesh-pipeline-*.err
 bench-*.out
 bench-*.err
+
+# Per-run service logs (Ollama / GROBID / bench TSVs).
+logs/
 .claude/
 .env
 .pixi/

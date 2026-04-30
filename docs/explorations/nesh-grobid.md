@@ -2,7 +2,7 @@
 
 Compact record of the three gotchas that turned a 1-day "start GROBID
 in the sbatch" task into a multi-iteration debugging chain. The final
-working invocation lives in [scripts/nesh-test-run.sbatch](../../scripts/nesh-test-run.sbatch);
+working invocation lives in [scripts/nesh-pipeline.sbatch](../../scripts/nesh-pipeline.sbatch);
 this doc explains *why* each flag is needed. Pairs with
 [docs/explorations/nesh-ollama.md](nesh-ollama.md), which covers the
 Ollama half of the same sbatch.
@@ -88,7 +88,7 @@ is inspectable for diagnostics.
 sbatch's `--output=logs/...` fails silently if `logs/` doesn't exist
 in the submission cwd — the job never starts, no error anywhere
 except "job completed immediately". We moved sbatch's own
-stdout/stderr to the submission cwd (`--output=nesh-test-run-%j.out`,
+stdout/stderr to the submission cwd (`--output=nesh-pipeline-%j.out`,
 no subdir) to sidestep this, and `mkdir -p logs` inside the script
 for the Ollama / GROBID per-run logs.
 
@@ -96,7 +96,7 @@ Not GROBID-specific but bit us in the same debugging chain.
 
 ## Final working sbatch block
 
-Reference shape from [scripts/nesh-test-run.sbatch](../../scripts/nesh-test-run.sbatch):
+Reference shape from [scripts/nesh-pipeline.sbatch](../../scripts/nesh-pipeline.sbatch):
 
 ```bash
 module load gcc12-env/12.3.0

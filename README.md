@@ -52,13 +52,12 @@ Stages 1–8 are implemented. Each stage has its own doc under [`docs/`](docs/).
 Stage 9+ are specified in [`docs/pipeline.md`](docs/pipeline.md) but not
 yet implemented.
 
-### Smoke test
+### Running the pipeline
 
-[`scripts/test-run-all-stages.sh`](scripts/test-run-all-stages.sh) runs all
-eight implemented stages end-to-end on a small sample, writing outputs under
-`data/test-run/`. Start Ollama and GROBID first (see the
-[Ollama](#ollama-for-llm-stages) and [GROBID](#grobid-for-full-text-extraction)
-sections below for details):
+[`scripts/run-pipeline.sh`](scripts/run-pipeline.sh) runs stages 1..8
+end-to-end, writing outputs under `data/run/`. Start Ollama and GROBID
+first (see the [Ollama](#ollama-for-llm-stages) and
+[GROBID](#grobid-for-full-text-extraction) sections below for details):
 
 ```bash
 ollama serve                                                  # stages 3, 7, 8
@@ -68,9 +67,14 @@ docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0           # stage 6
 Then:
 
 ```bash
-scripts/test-run-all-stages.sh                            # defaults
-scripts/test-run-all-stages.sh "particle dispersion" 10   # custom query, N=10
+scripts/run-pipeline.sh                            # defaults (smoke-sized)
+scripts/run-pipeline.sh "particle dispersion" 10   # custom query, N=10
+STOP_AFTER_STAGE=3 scripts/run-pipeline.sh         # stages 1..3 only
 ```
+
+On NESH the same runner is wrapped by
+[`scripts/nesh-pipeline.sbatch`](scripts/nesh-pipeline.sbatch), which
+launches Ollama and GROBID locally on the GPU node before invoking it.
 
 ## OpenAlex API key
 

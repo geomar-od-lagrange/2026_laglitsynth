@@ -4,7 +4,7 @@ client-side thread count. Prints one whitespace-separated result line:
 
     <concurrency> <n_calls> <wall_s> <throughput_cps>
 
-Intended to be driven by scripts/bench-ollama-concurrency.sbatch across
+Intended to be driven by docs/explorations/bench-ollama/bench-ollama.sbatch across
 the (OLLAMA_NUM_PARALLEL, threads) grid.
 """
 

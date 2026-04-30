@@ -3,8 +3,8 @@
 Benchmark sweep comparing Ollama throughput across NESH GPU hardware
 (V100 × 4 nodes, H100 × 2 nodes) and prompt shapes (stage-3 screening,
 stage-8 extraction), to decide where to schedule which stage at scale.
-Run on 2026-04-18 via [scripts/bench-ollama-concurrency.py](../../scripts/bench-ollama-concurrency.py)
-driven by a family of sbatch wrappers. Raw TSVs live at
+Run on 2026-04-18 via [bench-ollama-concurrency.py](bench-ollama/bench-ollama-concurrency.py)
+driven by [bench-ollama.sbatch](bench-ollama/bench-ollama.sbatch). Raw TSVs live at
 `logs/bench-*-<jobid>.tsv` on the local machine; this doc captures the
 numbers that decisions depend on.
 
@@ -80,45 +80,10 @@ bandwidth-per-token.
 **Verdict for stage 3**: V100 peaks at ~2.37 cps, H100 at ~6.02 cps.
 H100 is ~2.5× faster per GPU.
 
-## Multi-GPU, short prompt
-
-One Ollama per GPU, client round-robins.
-
-### V100 × 4, `OLLAMA_NUM_PARALLEL=1` per server (job 21963591)
-
-`N_CALLS=60`.
-
-| GPUs \ threads | 1 | 2 | 4 | 8 |
-|---:|---:|---:|---:|---:|
-| 1 | 1.60 | 2.71 | 2.69 | 2.69 |
-| 2 | 1.62 | 3.11 | 5.11 | 5.06 |
-| 3 | 1.61 | 3.12 | 5.77 | 7.21 |
-| 4 | 1.60 | 3.11 | 5.95 | **8.56** |
-
-Near-linear scaling (3.16× from 4 GPUs, ~0.79× per-GPU efficiency).
-
-### H100 × 2, `OLLAMA_NUM_PARALLEL=2` per server (job 21963592)
-
-`N_CALLS=60`.
-
-| GPUs \ threads | 1 | 2 | 4 | 8 |
-|---:|---:|---:|---:|---:|
-| 1 | 2.40 | 3.62 | 6.05 | 5.84 |
-| 2 | 2.40 | 4.51 | 7.31 | **9.32** |
-
-Sub-linear: 1.54× from 2 GPUs at `parallel=2` (each GPU is already
-working harder, so the marginal GPU buys less).
-
-### Stage-3 per-node bottom line
-
-| Node | Peak cps | At |
-|---|---|---|
-| V100 × 4 | **8.56** | parallel=1, threads=8 |
-| H100 × 2 | **9.32** | parallel=2, threads=8 |
-
-Per-node **a wash** (~9% apart). Per-GPU H100 is ~2.2× faster, but
-V100 nodes have 2× the GPUs, so they converge. **Queue wait will
-dominate the choice.**
+Multi-GPU within one node was also measured but is parked in the
+[appendix](#appendix-multi-gpu-scale-up) — single-node single-GPU is
+the prod shape; multi-GPU only matters once that becomes the
+bottleneck.
 
 ## Single GPU, long prompt
 
@@ -186,42 +151,39 @@ GPU forward pass, prefill included. That's where the "5–10× on
 concurrent workloads" number from external benchmarks comes from,
 and it's exactly this regime.
 
-## Bottom-line numbers
+## Bottom-line numbers (single GPU)
 
-Peak throughput per node (single job), real data for stage 3,
-extrapolated for stage 8:
+Peak throughput per single GPU, real data for stage 3, extrapolated
+for stage 8:
 
-| Node | Stage 3 (measured) | Stage 8 (H100 measured, V100 extrapolated) |
+| GPU | Stage 3 (measured) | Stage 8 (H100 measured, V100 extrapolated) |
 |---|---|---|
-| 1 × V100 | 2.37 cps | 0.05 cps |
-| 1 × H100 | 6.02 cps | 0.10 cps |
-| V100 × 4 | **8.56** cps | ~0.20 cps |
-| H100 × 2 | **9.32** cps | ~0.20 cps |
+| V100 | 2.37 cps | 0.05 cps |
+| H100 | 6.02 cps | 0.10 cps |
 
-With 2 H100 + 4 V100 nodes assigned concurrently (Slurm-array shards,
-no cross-node coordination):
-
-- Stage 3: ~53 cps → 50 000 abstracts in ~16 min.
-- Stage 8: ~1.2 cps → 5 000 papers in ~1.2 h, 100 000 in ~24 h.
-
-For realistic pipeline sizes (stage 8 sees a fraction of the
-catalogue after screening + retrieval + eligibility), LLM inference
-is not the dominant wall-time cost. **Retrieval rate limits**
-(Unpaywall public API ≈100k/day) and **GROBID throughput** (scale-out
-on CPU is cheap: 50 instances × ~0.1 s/page = hours for 100k PDFs)
-are the real bottlenecks at 100k-scale.
+Multi-GPU and multi-node projections (Slurm-array shard scale-out)
+live in the [appendix](#appendix-multi-gpu-scale-up). At 100k-scale
+the dominant wall-time cost is not LLM inference but Unpaywall rate
+limits and GROBID throughput.
 
 ## Practical defaults
 
-- **Stage 3**: `OLLAMA_NUM_PARALLEL=3`, client `--concurrency` to
-  match, on a V100 or H100 node — either works. Pick by queue.
-- **Stage 8**: `OLLAMA_NUM_PARALLEL=4` makes the long-prompt curve
-  *just* above `parallel=1` on H100; on V100 it doesn't matter. No
-  Ollama knob will get you to vLLM's numbers.
+The prod runner sets `OLLAMA_NUM_PARALLEL=2` and derives client
+`--concurrency = N + 2 = 4` (see
+[../llm-concurrency.md](../llm-concurrency.md)). `parallel=2` is a
+defensible compromise: V100 is GPU-bound at any setting; H100 short
+prompts peak there; H100 long prompts are within ~10% of their
+plateau. Override `OLLAMA_NUM_PARALLEL` at submit time if a stage
+becomes the bottleneck — the client knob follows.
+
+- **Stage 8 ceiling**: `OLLAMA_NUM_PARALLEL=4` on H100 lifts the
+  long-prompt curve only marginally above `parallel=1`; on V100 it
+  doesn't matter. **No Ollama knob gets you to vLLM's numbers** —
+  prefill serialisation is the architectural ceiling.
 - **Scaling out**: prefer the Slurm-array shard shape — one Ollama
   per GPU, one shard per job — over a multi-endpoint client. Simpler
-  code, no cross-node HTTP, results in verdict JSONL files that merge
-  with `cat shard-*.jsonl`.
+  code, no cross-node HTTP, verdict JSONL files merge with
+  `cat shard-*.jsonl`.
 
 ## Things we did not measure
 
@@ -243,3 +205,59 @@ are the real bottlenecks at 100k-scale.
 - **H100 × 2 on stage 8.** The H100 TEI bench was single-GPU. Peak
   node projection (~0.2 cps) assumes multi-GPU scales the same way
   as for short prompts; we don't have direct confirmation.
+
+## Appendix: multi-GPU scale-up
+
+Kept here for the future day when one GPU stops being enough. Prod
+runs single-GPU (one Ollama, one shard per Slurm job).
+
+Setup: one Ollama per GPU on different ports, client round-robins
+across base URLs.
+
+### V100 × 4, `OLLAMA_NUM_PARALLEL=1` per server (job 21963591)
+
+`gemma3:4b` short prompt, `N_CALLS=60`.
+
+| GPUs \ threads | 1 | 2 | 4 | 8 |
+|---:|---:|---:|---:|---:|
+| 1 | 1.60 | 2.71 | 2.69 | 2.69 |
+| 2 | 1.62 | 3.11 | 5.11 | 5.06 |
+| 3 | 1.61 | 3.12 | 5.77 | 7.21 |
+| 4 | 1.60 | 3.11 | 5.95 | **8.56** |
+
+Near-linear scaling (3.16× from 4 GPUs, ~0.79× per-GPU efficiency).
+
+### H100 × 2, `OLLAMA_NUM_PARALLEL=2` per server (job 21963592)
+
+`gemma3:4b` short prompt, `N_CALLS=60`.
+
+| GPUs \ threads | 1 | 2 | 4 | 8 |
+|---:|---:|---:|---:|---:|
+| 1 | 2.40 | 3.62 | 6.05 | 5.84 |
+| 2 | 2.40 | 4.51 | 7.31 | **9.32** |
+
+Sub-linear: 1.54× from 2 GPUs at `parallel=2` (each GPU is already
+working harder, so the marginal GPU buys less).
+
+### Per-node bottom line
+
+| Node | Stage 3 peak cps | At |
+|---|---|---|
+| V100 × 4 | **8.56** | parallel=1, threads=8 |
+| H100 × 2 | **9.32** | parallel=2, threads=8 |
+
+Per-node a wash (~9% apart). Per-GPU H100 is ~2.2× faster, but V100
+nodes have 2× the GPUs, so they converge. **Queue wait will dominate
+the choice between V100 and H100 nodes.**
+
+With 2 H100 + 4 V100 nodes assigned concurrently (Slurm-array shards,
+no cross-node coordination):
+
+- Stage 3: ~53 cps → 50 000 abstracts in ~16 min.
+- Stage 8: ~1.2 cps → 5 000 papers in ~1.2 h, 100 000 in ~24 h.
+
+For realistic pipeline sizes (stage 8 sees a fraction of the
+catalogue after screening + retrieval + eligibility), LLM inference
+is not the dominant wall-time cost at 100k scale. **Unpaywall rate
+limits (~100k/day)** and **GROBID throughput** (CPU scale-out on a
+Slurm array) are the real bottlenecks.
