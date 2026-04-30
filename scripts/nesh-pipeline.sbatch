@@ -60,6 +60,9 @@ mkdir -p logs
     echo "Missing $REPO_DIR/.env (OPENALEX_API_KEY, UNPAYWALL_EMAIL)" >&2
     exit 2
 }
+set -a
+source .env
+set +a
 [[ -x "$OLLAMA_DIR/bin/ollama" ]] || {
     echo "Ollama not installed at $OLLAMA_DIR — see docs/explorations/nesh-ollama.md" >&2
     exit 3
@@ -113,24 +116,32 @@ cleanup() {
 trap cleanup EXIT
 
 # Wait for Ollama.
+t0=$SECONDS
 for _ in $(seq 1 30); do
     curl -fsS http://127.0.0.1:11434/ >/dev/null 2>&1 && break
     sleep 1
 done
-curl -fsS http://127.0.0.1:11434/ >/dev/null 2>&1 || {
-    echo "Ollama did not come up within 30s; see $OLLAMA_LOG" >&2
+elapsed=$((SECONDS - t0))
+if curl -fsS http://127.0.0.1:11434/ >/dev/null 2>&1; then
+    echo "==> Ollama up in ${elapsed}s"
+else
+    echo "Ollama did not come up within ${elapsed}s; see $OLLAMA_LOG" >&2
     exit 4
-}
+fi
 
 # Wait for GROBID (slower cold start — JVM + model loading).
+t0=$SECONDS
 for _ in $(seq 1 90); do
     curl -fsS http://localhost:8070/api/isalive >/dev/null 2>&1 && break
     sleep 2
 done
-curl -fsS http://localhost:8070/api/isalive >/dev/null 2>&1 || {
-    echo "GROBID did not come up within 180s; see $GROBID_LOG" >&2
+elapsed=$((SECONDS - t0))
+if curl -fsS http://localhost:8070/api/isalive >/dev/null 2>&1; then
+    echo "==> GROBID up in ${elapsed}s"
+else
+    echo "GROBID did not come up within ${elapsed}s; see $GROBID_LOG" >&2
     exit 5
-}
+fi
 
 # Pull LLM models via proxy.
 for m in "$SCREENING_MODEL" "$ELIGIBILITY_MODEL" "$EXTRACTION_MODEL"; do

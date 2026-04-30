@@ -28,6 +28,12 @@
 
 set -euo pipefail
 
+if [[ -f .env ]]; then
+    set -a
+    source .env
+    set +a
+fi
+
 QUERY="${1:-Lagrangian particle tracking}"
 N="${2:-5}"
 
@@ -40,10 +46,13 @@ EXTRACTION_MODEL="${EXTRACTION_MODEL:-llama3.1:8b}"
 LLM_CONCURRENCY="${LLM_CONCURRENCY:-1}"
 STOP_AFTER_STAGE="${STOP_AFTER_STAGE:-8}"
 
-[[ "$STOP_AFTER_STAGE" =~ ^[1-8]$ ]] || {
-    echo "STOP_AFTER_STAGE must be 1..8 (got $STOP_AFTER_STAGE)" >&2
+[[ "$STOP_AFTER_STAGE" =~ ^[0-9]+$ ]] || {
+    echo "STOP_AFTER_STAGE must be a positive integer (got $STOP_AFTER_STAGE)" >&2
     exit 2
 }
+
+: "${OPENALEX_API_KEY:?OPENALEX_API_KEY required — set in .env}"
+: "${UNPAYWALL_EMAIL:?UNPAYWALL_EMAIL required — set in .env}"
 
 mkdir -p "$ROOT"
 
@@ -58,7 +67,8 @@ run_stage() {
 run_stage 1 catalogue-fetch \
     laglitsynth catalogue-fetch "$QUERY" \
         --output "$ROOT/catalogue-fetch/catalogue.jsonl" \
-        --max-records "$N"
+        --max-records "$N" \
+        --api-key "$OPENALEX_API_KEY"
 
 run_stage 2 catalogue-dedup \
     laglitsynth catalogue-dedup \
@@ -83,7 +93,8 @@ run_stage 4 screening-adjudication \
 run_stage 5 fulltext-retrieval \
     laglitsynth fulltext-retrieval \
         --input "$ROOT/screening-adjudication/included.jsonl" \
-        --output-dir "$ROOT/fulltext-retrieval"
+        --output-dir "$ROOT/fulltext-retrieval" \
+        --email "$UNPAYWALL_EMAIL"
 
 run_stage 6 fulltext-extraction \
     laglitsynth fulltext-extraction \
