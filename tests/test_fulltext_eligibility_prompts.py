@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from laglitsynth.fulltext_eligibility.prompts import (
     build_user_message,
-    render_abstract,
     render_fulltext,
 )
 from laglitsynth.fulltext_extraction.tei import TeiDocument
@@ -68,11 +67,6 @@ class TestRenderFulltext:
         """)
         text = render_fulltext(TeiDocument.from_bytes(xml))
         assert text == "Only a paragraph."
-
-
-class TestRenderAbstract:
-    def test_passthrough(self) -> None:
-        assert render_abstract("An abstract.") == "An abstract."
 
 
 class TestBuildUserMessage:

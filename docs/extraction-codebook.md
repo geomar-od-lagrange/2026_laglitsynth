@@ -205,8 +205,11 @@ laglitsynth extraction-codebook \
   stored relative.
 - `--output-dir`: where to write `records.jsonl` and the meta file.
 - `--skip-existing`: load any prior `records.jsonl` and skip already-
-  extracted `work_id`s. New records are appended to the existing
-  sidecar.
+  extracted `work_id`s. New records are appended to the existing sidecar.
+  If `extraction-codebook-meta.json` already exists and its recorded
+  `prompt_sha256` differs from the hash the current invocation would produce,
+  the run aborts with an error — mixing records from different prompt versions
+  in one file would silently corrupt any downstream analysis.
 - `--max-records`: process only the first N works from the eligible
   catalogue.
 - `--dry-run`: print summaries to stderr without writing any output.
@@ -220,13 +223,7 @@ The CLI default is `gemma3:4b` for consistency with stages 3 and 7,
 but **gemma3:4b does not reliably handle stage 8's 30-field
 structured JSON on typical paper bodies** — in smoke runs it returned
 `{}` (empty object) on most full-text inputs. Pass a bigger model via
-`--model`. Confirmed-working in smoke tests:
-
-- `llama3.1:8b` — ~60s per paper, fills 7-10 of 16 value fields on
-  a typical full paper.
-- `qwen2.5:14b` — ~140s per paper, fills 10-12 of 16 value fields;
-  better on `sub_discipline`, `code_tracking_software`, and
-  `in_text_locations` than `llama3.1:8b`.
+`--model`.
 
 Pick the model once and carry `--model` through to all stage 8
 invocations; the `prompt_sha256` covers `num_ctx` + `CHAR_BUDGET` but

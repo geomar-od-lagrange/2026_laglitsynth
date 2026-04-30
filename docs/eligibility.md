@@ -186,7 +186,11 @@ laglitsynth fulltext-eligibility \
   meta file.
 - `--skip-existing`: load any prior `verdicts.jsonl` and skip already-
   assessed `work_id`s. The per-work verdict sidecar is appended to;
-  `eligible.jsonl` is regenerated from the union.
+  `eligible.jsonl` is regenerated from the union. If `eligibility-meta.json`
+  already exists and its recorded `prompt_sha256` differs from the hash the
+  current invocation would produce, the run aborts with an error — mixing
+  verdicts from different prompt versions in one file would silently corrupt
+  any downstream analysis.
 - `--max-records`: process only the first N works from the catalogue.
 - `--dry-run`: print verdicts to stderr without writing any output.
 - `--model`, `--base-url`: Ollama configuration. `--base-url` is checked

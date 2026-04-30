@@ -6,7 +6,6 @@ from laglitsynth.extraction_codebook.models import ExtractionRecord, _Extraction
 from laglitsynth.extraction_codebook.prompts import (
     SYSTEM_PROMPT,
     build_user_message,
-    render_abstract,
     render_fulltext,
 )
 from laglitsynth.fulltext_extraction.tei import TeiDocument
@@ -109,11 +108,6 @@ class TestRenderFulltext:
         )
         assert text == ""
         assert truncated is False
-
-
-class TestRenderAbstract:
-    def test_passthrough(self) -> None:
-        assert render_abstract("An abstract.") == "An abstract."
 
 
 class TestBuildUserMessage:

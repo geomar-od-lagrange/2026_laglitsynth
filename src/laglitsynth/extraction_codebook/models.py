@@ -259,56 +259,23 @@ class _ExtractionPayload(BaseModel):
         return coerced
 
 
-class ExtractionRecord(BaseModel):
-    """One codebook record per input work, successes and failures alike."""
+class ExtractionRecord(_ExtractionPayload):
+    """One codebook record per input work, successes and failures alike.
+
+    Subclasses ``_ExtractionPayload`` so the 28 content fields are
+    declared exactly once. This class adds only the identification and
+    run-metadata fields that the caller fills; the LLM fills the rest.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    # Identification.
+    # Identification block — filled by the caller, not the LLM.
     work_id: str
     source_basis: SourceBasis
     reason: str | None  # sentinel for skips; None for normal records
     seed: int | None
     truncated: bool
     raw_response: str | None = None  # LLM's raw message content; None when no call was made
-
-    # Tagging (free-text, consolidated later).
-    sub_discipline: str | None
-    sub_discipline_context: str | None
-
-    # RQ1.2 — numerical choices.
-    integration_scheme: str | None
-    integration_scheme_context: str | None
-    time_step_strategy: str | None
-    time_step_strategy_context: str | None
-    time_step_value: str | None
-    time_step_value_context: str | None
-    interpolation_spatial: str | None
-    interpolation_spatial_context: str | None
-    interpolation_temporal: str | None
-    interpolation_temporal_context: str | None
-    diffusion_scheme: str | None
-    diffusion_scheme_context: str | None
-    software: str | None
-    software_context: str | None
-    ocean_model: str | None
-    ocean_model_context: str | None
-
-    # RQ1.1 — reproducibility.
-    methods_detail: str | None
-    methods_detail_context: str | None
-    code_tracking_software: str | None
-    code_tracking_software_context: str | None
-    code_experiment_setup: str | None
-    code_experiment_setup_context: str | None
-    code_analysis: str | None
-    code_analysis_context: str | None
-    config_available: str | None
-    config_available_context: str | None
-
-    # Extraction metadata.
-    in_text_locations: str | None
-    extraction_notes: str | None
 
 
 class ExtractionCodebookMeta(BaseModel):

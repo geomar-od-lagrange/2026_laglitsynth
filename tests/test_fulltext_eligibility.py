@@ -643,6 +643,61 @@ class TestRun:
         assert meta["llm"]["temperature"] == 0.8
         assert len(meta["llm"]["prompt_sha256"]) == 64
 
+    def test_skip_existing_refuses_when_prompt_sha256_differs(
+        self, tmp_path: Path
+    ) -> None:
+        """--skip-existing must raise SystemExit when recorded prompt_sha256 differs."""
+        import json
+
+        catalogue = tmp_path / "catalogue.jsonl"
+        extractions_path = tmp_path / "extraction.jsonl"
+        _write_works_jsonl(catalogue, [_make_work("W1", abstract="first abstract")])
+        extractions_path.write_text("")
+
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+
+        # Write a meta file with a stale/wrong prompt_sha256.
+        stale_meta = {
+            "run": {
+                "tool": "laglitsynth.fulltext_eligibility.assess",
+                "run_at": "2026-01-01T00:00:00.000000+00:00",
+                "validation_skipped": 0,
+            },
+            "llm": {
+                "model": "gemma3:4b",
+                "temperature": 0.8,
+                "prompt_sha256": "0" * 64,  # deliberately wrong hash
+            },
+            "input_catalogue": str(catalogue),
+            "input_extractions": str(extractions_path),
+            "input_count": 1,
+            "eligible_count": 0,
+            "excluded_count": 1,
+            "no_source_count": 0,
+            "tei_parse_failure_count": 0,
+            "llm_parse_failure_count": 0,
+            "by_source_basis": {"abstract_only": 1},
+        }
+        (out_dir / "eligibility-meta.json").write_text(json.dumps(stale_meta))
+
+        args = _make_run_args(
+            tmp_path,
+            catalogue=catalogue,
+            extractions=extractions_path,
+            skip_existing=True,
+        )
+        args.output_dir = out_dir
+
+        with (
+            patch("laglitsynth.fulltext_eligibility.eligibility._preflight"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
+        ):
+            from laglitsynth.fulltext_eligibility.eligibility import run
+
+            with pytest.raises(SystemExit, match="prompt_sha256"):
+                run(args)
+
     def test_skip_existing_processes_only_delta(self, tmp_path: Path) -> None:
         catalogue = tmp_path / "catalogue.jsonl"
         extractions_path = tmp_path / "extraction.jsonl"

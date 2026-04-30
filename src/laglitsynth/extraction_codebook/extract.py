@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import logging
 import random
 import sys
@@ -29,7 +30,6 @@ from laglitsynth.extraction_codebook.prompts import (
     SYSTEM_PROMPT,
     USER_TEMPLATE,
     build_user_message,
-    render_abstract,
     render_fulltext,
 )
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
@@ -187,11 +187,10 @@ def _extract_one(
 
     # Step 2: fall back to abstract when available.
     if work.abstract:
-        rendered = render_abstract(work.abstract)
         return extract_codebook(
             work.id,
             "abstract_only",
-            rendered,
+            work.abstract,
             client=client,
             model=model,
             truncated=False,
@@ -300,6 +299,19 @@ def run(args: argparse.Namespace) -> None:
             + str(CHAR_BUDGET)
         ).encode("utf-8")
     ).hexdigest()
+
+    # Prompt-hash guard: refuse --skip-existing when the recorded hash differs.
+    if args.skip_existing and meta_path.exists():
+        try:
+            recorded_sha = json.loads(meta_path.read_text())["llm"]["prompt_sha256"]
+            if recorded_sha != prompt_sha256:
+                raise SystemExit(
+                    f"recorded prompt_sha256 in {meta_path} differs from current; "
+                    f"refusing --skip-existing to avoid mixing prompt versions in "
+                    f"{records_path}"
+                )
+        except (KeyError, json.JSONDecodeError):
+            pass  # malformed or missing key: let the run proceed
 
     stats = JsonlReadStats()
     extractions = _load_extractions(args.extractions, stats)

@@ -131,20 +131,25 @@ class TestSchemaRoundtrip:
         reparsed = ExtractionRecord.model_validate_json(record.model_dump_json())
         assert reparsed == record
 
-    def test_extra_fields_forbidden(self) -> None:
-        from pydantic import ValidationError as PydanticValidationError
-
+    def test_extra_fields_dropped_by_inherited_coercer(self) -> None:
+        # ExtractionRecord inherits _ExtractionPayload's mode="before" validator
+        # which drops unknown keys before pydantic sees them (LLM-tolerance design).
+        # Extras passed at construction time are silently dropped; the record is
+        # valid. This is the expected behaviour: extra="forbid" guards
+        # deserialization of stored records against schema drift, but construction
+        # from caller code goes through the coercer.
         payload = {name: None for name in _ExtractionPayload.model_fields}
-        with pytest.raises(PydanticValidationError):
-            ExtractionRecord(
-                work_id="W1",
-                source_basis="none",
-                reason=None,
-                seed=None,
-                truncated=False,
-                bonus="no",  # type: ignore[call-arg]
-                **payload,
-            )
+        record = ExtractionRecord(
+            work_id="W1",
+            source_basis="none",
+            reason=None,
+            seed=None,
+            truncated=False,
+            bonus="no",  # type: ignore[call-arg]
+            **payload,
+        )
+        assert record.work_id == "W1"
+        assert not hasattr(record, "bonus")
 
 
 # --- extract_codebook ---
@@ -765,6 +770,61 @@ class TestRun:
         assert meta["run"]["tool"] == "laglitsynth.extraction_codebook.extract"
         assert meta["llm"]["temperature"] == 0.8
         assert len(meta["llm"]["prompt_sha256"]) == 64
+
+    def test_skip_existing_refuses_when_prompt_sha256_differs(
+        self, tmp_path: Path
+    ) -> None:
+        """--skip-existing must raise SystemExit when recorded prompt_sha256 differs."""
+        import json
+
+        eligible = tmp_path / "eligible.jsonl"
+        extractions_path = tmp_path / "extraction.jsonl"
+        _write_works_jsonl(eligible, [_make_work("W1", abstract="first abstract")])
+        extractions_path.write_text("")
+
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+
+        # Write a meta file with a stale/wrong prompt_sha256.
+        stale_meta = {
+            "run": {
+                "tool": "laglitsynth.extraction_codebook.extract",
+                "run_at": "2026-01-01T00:00:00.000000+00:00",
+                "validation_skipped": 0,
+            },
+            "llm": {
+                "model": "gemma3:4b",
+                "temperature": 0.8,
+                "prompt_sha256": "0" * 64,  # deliberately wrong hash
+            },
+            "input_catalogue": str(eligible),
+            "input_extractions": str(extractions_path),
+            "input_count": 1,
+            "full_text_count": 0,
+            "abstract_only_count": 1,
+            "skipped_count": 0,
+            "llm_parse_failure_count": 0,
+            "truncated_count": 0,
+            "by_source_basis": {"abstract_only": 1},
+        }
+        (out_dir / "extraction-codebook-meta.json").write_text(json.dumps(stale_meta))
+
+        args = _make_run_args(
+            tmp_path,
+            eligible=eligible,
+            extractions=extractions_path,
+            skip_existing=True,
+        )
+        args.output_dir = out_dir
+
+        with (
+            patch("laglitsynth.extraction_codebook.extract._preflight"),
+            patch("laglitsynth.extraction_codebook.extract.OpenAI"),
+        ):
+            from laglitsynth.extraction_codebook.extract import run
+
+            with pytest.raises(SystemExit, match="prompt_sha256"):
+                run(args)
 
     def test_skip_existing_processes_only_delta(self, tmp_path: Path) -> None:
         eligible = tmp_path / "eligible.jsonl"

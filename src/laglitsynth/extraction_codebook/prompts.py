@@ -5,10 +5,9 @@ The system prompt expands its field list from
 validator stay in lockstep when fields are added or renamed.
 ``render_fulltext`` flattens a ``TeiDocument`` into a single string,
 truncating at ``CHAR_BUDGET`` on paragraph boundaries to keep the
-prompt within the LLM's context window. ``render_abstract`` is the
-thin fallback path for works without an ``ExtractedDocument``.
-``build_user_message`` wraps either rendered body with the
-``source_basis`` tag the system prompt references.
+prompt within the LLM's context window. ``build_user_message`` wraps
+the rendered body with the ``source_basis`` tag the system prompt
+references.
 
 Stage 7 has its own ``render_fulltext`` without truncation. The budget
 behaviour is stage-8-specific; per the plan this duplicates the stage 7
@@ -20,7 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 from laglitsynth.extraction_codebook.models import SourceBasis, _ExtractionPayload
-from laglitsynth.fulltext_extraction.tei import Section, TeiDocument
+from laglitsynth.fulltext_extraction.tei import TeiDocument, flatten_sections
 
 # Tuning placeholder — tune on first smoke run against real papers.
 # Roughly ~15k tokens on typical English prose; the principled fix is
@@ -66,20 +65,6 @@ Respond with a single JSON object containing exactly these keys."""
 USER_TEMPLATE = "{source_basis}:\n{text}"
 
 
-def _flatten_section(section: Section) -> list[str]:
-    """Depth-first flatten of a ``Section`` into title+paragraph blocks."""
-    blocks: list[str] = []
-    lines: list[str] = []
-    if section.title:
-        lines.append(section.title)
-    lines.extend(section.paragraphs)
-    if lines:
-        blocks.append("\n".join(lines))
-    for child in section.children:
-        blocks.extend(_flatten_section(child))
-    return blocks
-
-
 def _truncate_blocks(blocks: list[str], char_budget: int) -> tuple[list[str], bool]:
     """Drop trailing blocks that would push the join over ``char_budget``.
 
@@ -115,16 +100,8 @@ def render_fulltext(tei: TeiDocument, *, char_budget: int) -> tuple[str, bool]:
     Returns ``(text, truncated)``. Empty ``sections()`` returns
     ``("", False)``.
     """
-    blocks: list[str] = []
-    for top in tei.sections():
-        blocks.extend(_flatten_section(top))
-    kept, truncated = _truncate_blocks(blocks, char_budget)
+    kept, truncated = _truncate_blocks(flatten_sections(tei), char_budget)
     return "\n\n".join(kept), truncated
-
-
-def render_abstract(abstract: str) -> str:
-    """Return the abstract string unchanged; kept as a rendering seam."""
-    return abstract
 
 
 def build_user_message(source_basis: SourceBasis, text: str) -> str:
