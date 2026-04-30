@@ -16,6 +16,16 @@ structured assessment and synthesis.
   [`plans/`](plans/). Write the plan, get it reviewed, then implement.
   The plan is the spec — it records the design decisions and scope so
   they're visible in the repo, not buried in chat history.
+- **Plans are specs, not templates.** As short as the decisions they
+  record. Cut sections that carry no content: if non-goals fit in one
+  sentence, write a paragraph not a bullet list; collapse design
+  decisions into one paragraph, not a heading per item; implementation
+  is a numbered list of commits with tests named inline, not nested
+  sections with their own sub-lists. Prose over bullets when items
+  don't meaningfully diverge. No "Risks" entry that restates a
+  non-goal; no storage-layout code block for a single new file — name
+  the path inline. Section list and what each one is for:
+  [plans/README.md](plans/README.md).
 - **Use what exists.** Don't reimplement what a mature library already does.
   Prefer established packages over hand-rolled alternatives.
 - **Typed data, not dicts.** Pydantic models are the contract between
