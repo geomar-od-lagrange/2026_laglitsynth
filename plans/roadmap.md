@@ -59,6 +59,21 @@ Update this file when a plan is written, implemented, or archived.
   tune on the first smoke run. `ExtractedDocument.extraction_status`
   was not needed for stage 8 either — malformed TEI records a
   `tei-parse-failure` sentinel as in stage 7.
+- [Pre-prod cleanup](done/pre-prod-cleanup.md) — hold-the-prod and
+  high-leverage simplifications before the first NESH prod run.
+  Stage tools become flags-only (`--api-key` on catalogue-fetch,
+  `--email` on fulltext-retrieval); driver scripts source `.env` and
+  pass the flag. `--max-records` default cap dropped. Stages 7 and 8
+  refuse `--skip-existing` when the recorded `prompt_sha256` differs
+  from the current run's. `flatten_sections` lifts to
+  [`tei.py`](../src/laglitsynth/fulltext_extraction/tei.py); stages 7
+  and 8 share it. `ExtractionRecord` subclasses `_ExtractionPayload`
+  so the 28 codebook fields no longer drift between two declarations.
+  `screening-abstracts-export` collapses to one subcommand with
+  `--format csv|xlsx`. `_RunMeta`/`_LlmMeta` lose their leading
+  underscores. NESH sbatch wait loops emit real elapsed time. Test
+  helpers move to `tests/conftest.py`; mock-heavy seed/temperature
+  call-site assertions go. Production code: −114 lines net.
 
 ## In flight
 
@@ -66,7 +81,7 @@ Update this file when a plan is written, implemented, or archived.
 
 ## Queued — ready to plan
 
-- Commit `pixi.lock`. Remove from `.gitignore`, add to repo.
+- (None.)
 
 ## Deferred until pipeline is feature-complete
 
