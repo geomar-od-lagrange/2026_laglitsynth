@@ -18,41 +18,8 @@ from laglitsynth.fulltext_retrieval.retrieve import (
     run,
 )
 from laglitsynth.ids import work_id_to_filename
-from laglitsynth.catalogue_fetch.models import Work
 
-
-def _make_work(
-    work_id: str = "https://openalex.org/W1234567890",
-    doi: str | None = "https://doi.org/10.1234/test",
-    pdf_url: str | None = None,
-    oa_url: str | None = None,
-) -> Work:
-    primary_location = None
-    if pdf_url is not None:
-        primary_location = {"pdf_url": pdf_url}
-    open_access = None
-    if oa_url is not None:
-        open_access = {"oa_url": oa_url}
-    return Work(
-        id=work_id,
-        doi=doi,
-        title="Test Paper",
-        abstract="An abstract.",
-        authorships=[],
-        biblio={},
-        cited_by_count=0,
-        referenced_works=[],
-        keywords=[],
-        topics=[],
-        primary_location=primary_location,
-        open_access=open_access,
-    )
-
-
-def _write_works_jsonl(path: Path, works: list[Work]) -> None:
-    with open(path, "w") as f:
-        for w in works:
-            f.write(w.model_dump_json() + "\n")
+from conftest import _make_work, _write_works_jsonl
 
 
 def _pdf_content() -> bytes:

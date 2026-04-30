@@ -8,27 +8,8 @@ from unittest.mock import MagicMock
 
 from laglitsynth.catalogue_dedup.dedup import run
 from laglitsynth.catalogue_dedup.models import DeduplicationMeta
-from laglitsynth.catalogue_fetch.models import Work
 
-
-def _make_work(work_id: str = "https://openalex.org/W1") -> Work:
-    return Work(
-        id=work_id,
-        title="Test Paper",
-        abstract="An abstract.",
-        authorships=[],
-        biblio={},
-        cited_by_count=0,
-        referenced_works=[],
-        keywords=[],
-        topics=[],
-    )
-
-
-def _write_works_jsonl(path: Path, works: list[Work]) -> None:
-    with open(path, "w") as f:
-        for w in works:
-            f.write(w.model_dump_json() + "\n")
+from conftest import _make_work, _write_works_jsonl
 
 
 def test_pass_all_writes_all_works(tmp_path: Path) -> None:

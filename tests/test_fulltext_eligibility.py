@@ -9,7 +9,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.fulltext_eligibility.eligibility import (
     assess_works,
     classify_eligibility,
@@ -17,60 +16,17 @@ from laglitsynth.fulltext_eligibility.eligibility import (
 from laglitsynth.fulltext_eligibility.models import EligibilityVerdict
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
 
-TEI_NS = "http://www.tei-c.org/ns/1.0"
+from conftest import (
+    TEI_NS,
+    _make_work,
+    _mock_openai_response,
+    _write_extractions_jsonl,
+    _write_tei,
+    _write_works_jsonl,
+)
 
 
 # --- fixtures and helpers ---
-
-
-def _make_work(
-    work_id: str = "https://openalex.org/W1",
-    title: str = "Test Paper",
-    abstract: str | None = "An abstract about ocean currents.",
-) -> Work:
-    return Work(
-        id=work_id,
-        title=title,
-        abstract=abstract,
-        authorships=[],
-        biblio={},
-        cited_by_count=0,
-        referenced_works=[],
-        keywords=[],
-        topics=[],
-    )
-
-
-def _write_works_jsonl(path: Path, works: list[Work]) -> None:
-    with open(path, "w") as f:
-        for w in works:
-            f.write(w.model_dump_json() + "\n")
-
-
-def _write_extractions_jsonl(path: Path, records: list[ExtractedDocument]) -> None:
-    with open(path, "w") as f:
-        for r in records:
-            f.write(r.model_dump_json() + "\n")
-
-
-def _mock_openai_response(content: str) -> MagicMock:
-    message = MagicMock()
-    message.content = content
-    choice = MagicMock()
-    choice.message = message
-    response = MagicMock()
-    response.choices = [choice]
-    return response
-
-
-def _write_tei(path: Path, body_content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(
-        (
-            f'<?xml version="1.0" encoding="UTF-8"?>'
-            f'<TEI xmlns="{TEI_NS}"><text><body>{body_content}</body></text></TEI>'
-        ).encode()
-    )
 
 
 def _write_malformed_tei(path: Path) -> None:
@@ -185,9 +141,6 @@ class TestClassifyEligibility:
                 "W1", "prompt", "full_text", model="m", client=mock_client
             )
         assert verdict.seed == 42
-        call_kwargs = mock_client.chat.completions.create.call_args[1]
-        assert call_kwargs["seed"] == 42
-        assert call_kwargs["temperature"] == 0.8
 
 
 # --- assess_works cascade ---

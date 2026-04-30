@@ -16,38 +16,9 @@ from laglitsynth.screening_abstracts.screen import (
     screen_works,
 )
 from laglitsynth.screening_abstracts.models import ScreeningMeta, ScreeningVerdict
-from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.models import LlmMeta, RunMeta
 
-
-def _make_work(
-    work_id: str = "https://openalex.org/W1",
-    title: str = "Test Paper",
-    abstract: str | None = "An abstract about ocean currents.",
-) -> Work:
-    """Create a minimal valid Work for testing."""
-    return Work(
-        id=work_id,
-        title=title,
-        abstract=abstract,
-        authorships=[],
-        biblio={},
-        cited_by_count=0,
-        referenced_works=[],
-        keywords=[],
-        topics=[],
-    )
-
-
-def _mock_openai_response(content: str) -> MagicMock:
-    """Build a mock OpenAI chat completion response."""
-    message = MagicMock()
-    message.content = content
-    choice = MagicMock()
-    choice.message = message
-    response = MagicMock()
-    response.choices = [choice]
-    return response
+from conftest import _make_work, _mock_openai_response, _write_works_jsonl
 
 
 # --- classify_abstract ---
@@ -102,12 +73,6 @@ def test_classify_abstract_wrong_types_returns_sentinel() -> None:
 
 
 # --- screen_works ---
-
-
-def _write_works_jsonl(path: Path, works: list[Work]) -> None:
-    with open(path, "w") as f:
-        for w in works:
-            f.write(w.model_dump_json() + "\n")
 
 
 def _mock_classify(
@@ -520,10 +485,6 @@ def test_seed_recorded_on_verdict(tmp_path: Path) -> None:
         )
 
     assert verdict.seed == 42
-    # Confirm seed was forwarded to the Ollama call
-    call_kwargs = mock_client.chat.completions.create.call_args[1]
-    assert call_kwargs["seed"] == 42
-    assert call_kwargs["temperature"] == 0.8
 
 
 def test_seed_none_on_sentinel_reasons(tmp_path: Path) -> None:

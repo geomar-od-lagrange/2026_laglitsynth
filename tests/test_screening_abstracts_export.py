@@ -9,7 +9,6 @@ import pytest
 from openpyxl import load_workbook
 from pydantic import BaseModel
 
-from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.screening_abstracts.export import (
     COLUMNS,
     _unique_sheet_name,
@@ -21,27 +20,7 @@ from laglitsynth.screening_abstracts.export import (
 )
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
-
-def _make_work(
-    work_id: str = "https://openalex.org/W1",
-    title: str | None = "Test Paper",
-    abstract: str | None = "An abstract.",
-    doi: str | None = "10.1234/foo",
-    publication_year: int | None = 2024,
-) -> Work:
-    return Work(
-        id=work_id,
-        title=title,
-        abstract=abstract,
-        doi=doi,
-        publication_year=publication_year,
-        authorships=[],
-        biblio={},  # type: ignore[arg-type]
-        cited_by_count=0,
-        referenced_works=[],
-        keywords=[],
-        topics=[],
-    )
+from conftest import _make_work
 
 
 def _write_jsonl(path: Path, records: list[BaseModel]) -> None:

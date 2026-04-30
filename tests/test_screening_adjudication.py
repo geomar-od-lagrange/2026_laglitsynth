@@ -11,27 +11,8 @@ import pytest
 from laglitsynth.screening_adjudication.models import AdjudicationMeta, AdjudicationVerdict
 from laglitsynth.screening_adjudication.adjudicate import run
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
-from laglitsynth.catalogue_fetch.models import Work
 
-
-def _make_work(work_id: str = "https://openalex.org/W1") -> Work:
-    return Work(
-        id=work_id,
-        title="Test Paper",
-        abstract="An abstract.",
-        authorships=[],
-        biblio={},
-        cited_by_count=0,
-        referenced_works=[],
-        keywords=[],
-        topics=[],
-    )
-
-
-def _write_works_jsonl(path: Path, works: list[Work]) -> None:
-    with open(path, "w") as f:
-        for w in works:
-            f.write(w.model_dump_json() + "\n")
+from conftest import _make_work, _write_works_jsonl
 
 
 def _write_verdicts_jsonl(path: Path, verdicts: list[ScreeningVerdict]) -> None:
