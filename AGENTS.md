@@ -66,6 +66,16 @@ structured assessment and synthesis.
   legacy support. If a model or interface needs to change, change it everywhere
   in one go.
 
+## Tooling conventions for AI agents
+
+- **No `sed`.** Don't shell out to `sed` — not `sed -i`, not `sed -n`,
+  not `sed` in pipelines. Every invocation triggers a permission
+  dialog in the maintainer's setup. For viewing file slices use the
+  `Read` tool with `offset`/`limit`; for in-place edits use `Edit`;
+  for search use `grep` / `rg`. If you need a transformation that
+  feels sed-shaped, reach for `awk`, `cut`, `tr`, or restructure to
+  avoid the pipe.
+
 ## Environment
 
 pixi for environment and package management. Project metadata and dependencies
