@@ -102,13 +102,15 @@ run_stage 5 fulltext-retrieval \
     laglitsynth fulltext-retrieval \
         --input "$ROOT/screening-adjudication/included.jsonl" \
         --output-dir "$ROOT/fulltext-retrieval" \
-        --email "$UNPAYWALL_EMAIL"
+        --email "$UNPAYWALL_EMAIL" \
+        --skip-existing
 
 run_stage 6 fulltext-extraction \
     laglitsynth fulltext-extraction \
         --pdf-dir "$ROOT/fulltext-retrieval/pdfs" \
         --output-dir "$ROOT/fulltext-extraction" \
-        --grobid-url "$GROBID_URL"
+        --grobid-url "$GROBID_URL" \
+        --skip-existing
 
 # Stages 7 and 8 do not yet accept --concurrency; they run sequentially
 # regardless of LLM_CONCURRENCY. See docs/llm-concurrency.md for the
