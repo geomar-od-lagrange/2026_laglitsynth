@@ -426,6 +426,7 @@ def _make_run_args(
     run_id: str = "test-run-id",
     extraction_output_dir: Path | None = None,
     num_ctx: int = 32768,
+    concurrency: int = 1,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         catalogue=catalogue,
@@ -444,6 +445,7 @@ def _make_run_args(
         skip_existing=skip_existing,
         dry_run=dry_run,
         config=None,
+        concurrency=concurrency,
     )
 
 
@@ -979,3 +981,116 @@ def test_run_dir_printed_to_stderr_at_end(
     # The end-of-run line must appear at the end (last non-empty line).
     last_line = [line for line in err.splitlines() if line.strip()][-1]
     assert last_line == f"Run dir: {expected_dir}"
+
+
+# --- --concurrency ---
+
+
+def test_concurrency_default_is_one() -> None:
+    """Stage 8 --concurrency defaults to 1 (prefill-bound stage)."""
+    import argparse as _argparse
+
+    from laglitsynth.extraction_codebook.extract import build_subparser
+
+    p = _argparse.ArgumentParser()
+    subs = p.add_subparsers()
+    build_subparser(subs)
+    args = p.parse_args(
+        [
+            "extraction-codebook",
+            "--catalogue", "c.jsonl",
+            "--eligibility-verdicts", "v.jsonl",
+            "--extractions", "e.jsonl",
+        ]
+    )
+    assert args.concurrency == 1
+
+
+def test_concurrency_flag_threaded_to_extract_works(
+    tmp_path: Path, ctx: CodebookContext
+) -> None:
+    """--concurrency N is forwarded to extract_works as concurrency=N."""
+    catalogue = tmp_path / "catalogue.jsonl"
+    verdicts_path = tmp_path / "verdicts.jsonl"
+    extractions_path = tmp_path / "extraction.jsonl"
+    _write_works_jsonl(catalogue, [_make_work("W1", abstract="abs")])
+    _write_eligibility_verdicts_jsonl(
+        verdicts_path,
+        [EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only")],
+    )
+    extractions_path.write_text("")
+
+    args = _make_run_args(
+        tmp_path,
+        catalogue=catalogue,
+        eligibility_verdicts=verdicts_path,
+        extractions=extractions_path,
+        concurrency=3,
+    )
+
+    captured: dict[str, Any] = {}
+    original_extract = __import__(
+        "laglitsynth.extraction_codebook.extract", fromlist=["extract_works"]
+    ).extract_works
+
+    def spy_extract(*a: Any, **kw: Any) -> Any:
+        captured["concurrency"] = kw.get("concurrency")
+        return original_extract(*a, **kw)
+
+    mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
+    with (
+        patch("laglitsynth.extraction_codebook.extract.preflight"),
+        patch(
+            "laglitsynth.extraction_codebook.extract.OpenAI",
+            return_value=mock_client,
+        ),
+        patch(
+            "laglitsynth.extraction_codebook.extract.extract_works",
+            side_effect=spy_extract,
+        ),
+    ):
+        from laglitsynth.extraction_codebook.extract import run
+
+        run(args)
+
+    assert captured["concurrency"] == 3
+
+
+def test_concurrency_one_uses_sequential_path(
+    tmp_path: Path, ctx: CodebookContext
+) -> None:
+    """concurrency=1 does not create a ThreadPoolExecutor."""
+    from concurrent.futures import ThreadPoolExecutor as TPE
+
+    catalogue = tmp_path / "catalogue.jsonl"
+    verdicts_path = tmp_path / "verdicts.jsonl"
+    extractions_path = tmp_path / "extraction.jsonl"
+    _write_works_jsonl(catalogue, [_make_work("W1", abstract="abs")])
+    _write_eligibility_verdicts_jsonl(
+        verdicts_path,
+        [EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only")],
+    )
+    extractions_path.write_text("")
+
+    args = _make_run_args(
+        tmp_path,
+        catalogue=catalogue,
+        eligibility_verdicts=verdicts_path,
+        extractions=extractions_path,
+        concurrency=1,
+    )
+
+    mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
+    with (
+        patch("laglitsynth.extraction_codebook.extract.preflight"),
+        patch(
+            "laglitsynth.extraction_codebook.extract.OpenAI",
+            return_value=mock_client,
+        ),
+        patch("laglitsynth.concurrency.ThreadPoolExecutor", wraps=TPE) as mock_tpe,
+    ):
+        from laglitsynth.extraction_codebook.extract import run
+
+        run(args)
+
+    mock_tpe.assert_not_called()

@@ -590,6 +590,7 @@ def _make_run_args(
     run_id: str = "test-run-id",
     screening_threshold: float = 50.0,
     num_ctx: int = 32768,
+    concurrency: int = 1,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         catalogue=catalogue,
@@ -607,6 +608,7 @@ def _make_run_args(
         skip_existing=skip_existing,
         dry_run=dry_run,
         config=None,
+        concurrency=concurrency,
     )
 
 
@@ -1055,3 +1057,112 @@ def test_run_dir_printed_to_stderr_at_end(
     # The line must appear at the end (last non-empty line).
     last_line = [line for line in err.splitlines() if line.strip()][-1]
     assert last_line == f"Run dir: {expected_dir}"
+
+
+# --- --concurrency ---
+
+
+def test_concurrency_default_is_one() -> None:
+    """Stage 7 --concurrency defaults to 1."""
+    import argparse as _argparse
+
+    from laglitsynth.fulltext_eligibility.eligibility import build_subparser
+
+    p = _argparse.ArgumentParser()
+    subs = p.add_subparsers()
+    build_subparser(subs)
+    args = p.parse_args(
+        [
+            "fulltext-eligibility",
+            "--catalogue", "c.jsonl",
+            "--screening-verdicts", "v.jsonl",
+            "--extractions", "e.jsonl",
+        ]
+    )
+    assert args.concurrency == 1
+
+
+def test_concurrency_flag_threaded_to_assess_works(tmp_path: Path) -> None:
+    """--concurrency N is forwarded to assess_works as concurrency=N."""
+    catalogue = tmp_path / "catalogue.jsonl"
+    verdicts_path = tmp_path / "verdicts.jsonl"
+    extractions_path = tmp_path / "extraction.jsonl"
+    works = [_make_work("W1", abstract="abs")]
+    _write_works_jsonl(catalogue, works)
+    _write_verdicts_jsonl(
+        verdicts_path, [ScreeningVerdict(work_id="W1", relevance_score=80)]
+    )
+    extractions_path.write_text("")
+
+    args = _make_run_args(
+        tmp_path,
+        catalogue=catalogue,
+        screening_verdicts=verdicts_path,
+        extractions=extractions_path,
+        concurrency=3,
+    )
+
+    captured: dict[str, Any] = {}
+    original_assess = __import__(
+        "laglitsynth.fulltext_eligibility.eligibility", fromlist=["assess_works"]
+    ).assess_works
+
+    def spy_assess(*a: Any, **kw: Any) -> Any:
+        captured["concurrency"] = kw.get("concurrency")
+        return original_assess(*a, **kw)
+
+    with (
+        patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
+        patch(
+            "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
+            side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
+        ),
+        patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
+        patch(
+            "laglitsynth.fulltext_eligibility.eligibility.assess_works",
+            side_effect=spy_assess,
+        ),
+    ):
+        from laglitsynth.fulltext_eligibility.eligibility import run
+
+        run(args)
+
+    assert captured["concurrency"] == 3
+
+
+def test_concurrency_one_uses_sequential_path(tmp_path: Path) -> None:
+    """concurrency=1 does not create a ThreadPoolExecutor."""
+    from concurrent.futures import ThreadPoolExecutor as TPE
+
+    catalogue = tmp_path / "catalogue.jsonl"
+    verdicts_path = tmp_path / "verdicts.jsonl"
+    extractions_path = tmp_path / "extraction.jsonl"
+    works = [_make_work("W1", abstract="abs")]
+    _write_works_jsonl(catalogue, works)
+    _write_verdicts_jsonl(
+        verdicts_path, [ScreeningVerdict(work_id="W1", relevance_score=80)]
+    )
+    extractions_path.write_text("")
+
+    args = _make_run_args(
+        tmp_path,
+        catalogue=catalogue,
+        screening_verdicts=verdicts_path,
+        extractions=extractions_path,
+        concurrency=1,
+    )
+
+    with (
+        patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
+        patch(
+            "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
+            side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
+        ),
+        patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
+        patch("laglitsynth.concurrency.ThreadPoolExecutor", wraps=TPE) as mock_tpe,
+    ):
+        from laglitsynth.fulltext_eligibility.eligibility import run
+
+        run(args)
+
+    mock_tpe.assert_not_called()

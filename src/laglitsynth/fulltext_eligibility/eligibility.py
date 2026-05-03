@@ -18,6 +18,7 @@ from openai import APIConnectionError, APITimeoutError, OpenAI
 from pydantic import ValidationError
 
 from laglitsynth.catalogue_fetch.models import Work
+from laglitsynth.concurrency import map_concurrent
 from laglitsynth.config import register_config_arg, resolve_yaml_arg, save_resolved_config
 from laglitsynth.fulltext_eligibility.models import (
     TOOL_NAME,
@@ -166,18 +167,23 @@ def assess_works(
     max_records: int | None,
     system_prompt: str,
     skip_ids: set[str] | None = None,
+    concurrency: int = 1,
 ) -> Iterator[EligibilityVerdict]:
     skip_ids = skip_ids or set()
-    processed = 0
+    eligible: list[Work] = []
     for work in works:
         if work.id in skip_ids:
             continue
-        if max_records is not None and processed >= max_records:
-            return
-        processed += 1
-        yield _assess_one(
+        if max_records is not None and len(eligible) >= max_records:
+            break
+        eligible.append(work)
+
+    def _call_one(work: Work) -> EligibilityVerdict:
+        return _assess_one(
             work, extractions, extraction_output_dir, client, model, system_prompt, num_ctx
         )
+
+    yield from map_concurrent(_call_one, eligible, max_workers=concurrency)
 
 
 def _assess_one(
@@ -339,6 +345,17 @@ def build_subparser(
         action="store_true",
         help="Print verdicts to stderr without writing output",
     )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help=(
+            "In-flight LLM requests (default: 1). Stage 7 benefits more from "
+            "concurrency than stage 8 because its prompts are less prefill-heavy. "
+            "Must not exceed the Ollama server's OLLAMA_NUM_PARALLEL for actual "
+            "parallelism. See docs/llm-concurrency.md."
+        ),
+    )
     register_config_arg(parser)
     parser.set_defaults(run=run)
     return parser
@@ -441,6 +458,7 @@ def run(args: argparse.Namespace) -> None:
         max_records=args.max_records,
         system_prompt=system_prompt,
         skip_ids=skip_ids,
+        concurrency=args.concurrency,
     ):
         index += 1
         new_verdicts.append(verdict)

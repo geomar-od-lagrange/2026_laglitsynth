@@ -26,6 +26,7 @@ from openai import APIConnectionError, APITimeoutError, OpenAI
 from pydantic import BaseModel, ValidationError
 
 from laglitsynth.catalogue_fetch.models import Work
+from laglitsynth.concurrency import map_concurrent
 from laglitsynth.config import register_config_arg, resolve_yaml_arg, save_resolved_config
 from laglitsynth.extraction_codebook.codebook import (
     CodebookContext,
@@ -213,18 +214,23 @@ def extract_works(
     max_records: int | None,
     ctx: CodebookContext,
     skip_ids: set[str] | None = None,
+    concurrency: int = 1,
 ) -> Iterator[ExtractionRecordProto]:
     skip_ids = skip_ids or set()
-    processed = 0
+    eligible: list[Work] = []
     for work in works:
         if work.id in skip_ids:
             continue
-        if max_records is not None and processed >= max_records:
-            return
-        processed += 1
-        yield _extract_one(
+        if max_records is not None and len(eligible) >= max_records:
+            break
+        eligible.append(work)
+
+    def _call_one(work: Work) -> ExtractionRecordProto:
+        return _extract_one(
             work, extractions, extraction_output_dir, client, model, ctx, num_ctx
         )
+
+    yield from map_concurrent(_call_one, eligible, max_workers=concurrency)
 
 
 def _extract_one(
@@ -383,6 +389,17 @@ def build_subparser(
         action="store_true",
         help="Print summaries to stderr without writing output",
     )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help=(
+            "In-flight LLM requests (default: 1). Stage 8 is prefill-bound "
+            "(the TEI prompt dominates ~90%% of wall time) and Ollama serialises "
+            "prefill across requests, so the safe default is 1. Users with "
+            "vLLM or SGLang can override. See docs/llm-concurrency.md."
+        ),
+    )
     register_config_arg(parser)
     parser.set_defaults(run=run)
     return parser
@@ -488,6 +505,7 @@ def run(args: argparse.Namespace) -> None:
         max_records=args.max_records,
         ctx=ctx,
         skip_ids=skip_ids,
+        concurrency=args.concurrency,
     ):
         index += 1
         new_records.append(record)
