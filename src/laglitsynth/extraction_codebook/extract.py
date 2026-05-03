@@ -52,6 +52,7 @@ from laglitsynth.io import (
     write_meta,
 )
 from laglitsynth.models import LlmMeta, RunMeta
+from laglitsynth.ollama import preflight
 
 logger = logging.getLogger(__name__)
 
@@ -282,16 +283,6 @@ def _extract_one(
     )
 
 
-def _preflight(args: argparse.Namespace) -> None:
-    try:
-        client = OpenAI(base_url=f"{args.base_url}/v1", api_key="ollama")
-        client.models.retrieve(args.model)
-    except Exception:
-        raise SystemExit(
-            f"Cannot reach Ollama at {args.base_url}. Is `ollama serve` running?"
-        )
-
-
 def build_subparser(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> argparse.ArgumentParser:
@@ -383,7 +374,7 @@ def build_subparser(
 
 
 def run(args: argparse.Namespace) -> None:
-    _preflight(args)
+    preflight(base_url=args.base_url, model=args.model)
 
     if args.run_id is None:
         args.run_id = generate_run_id()

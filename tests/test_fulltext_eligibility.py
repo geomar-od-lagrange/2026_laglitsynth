@@ -535,27 +535,6 @@ class TestEligibilityVerdict:
             )
 
 
-# --- _preflight ---
-
-
-class TestPreflight:
-    def test_preflight_raises_on_connection_failure(self) -> None:
-        from laglitsynth.fulltext_eligibility.eligibility import _preflight
-
-        args = MagicMock()
-        args.base_url = "http://localhost:99999"
-        args.model = "nonexistent"
-
-        with patch(
-            "laglitsynth.fulltext_eligibility.eligibility.OpenAI"
-        ) as mock_cls:
-            mock_cls.return_value.models.retrieve.side_effect = Exception(
-                "connection refused"
-            )
-            with pytest.raises(SystemExit):
-                _preflight(args)
-
-
 # --- run() end-to-end ---
 
 
@@ -620,7 +599,7 @@ class TestRun:
         )
 
         with (
-            patch("laglitsynth.fulltext_eligibility.eligibility._preflight"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
             patch(
                 "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
                 side_effect=_mock_classify(
@@ -666,7 +645,7 @@ class TestRun:
         }
 
         with (
-            patch("laglitsynth.fulltext_eligibility.eligibility._preflight"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
             patch(
                 "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
                 side_effect=_mock_classify(classify_results),
@@ -764,7 +743,7 @@ class TestRun:
         )
 
         with (
-            patch("laglitsynth.fulltext_eligibility.eligibility._preflight"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
             patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
         ):
             from laglitsynth.fulltext_eligibility.eligibility import run
@@ -804,7 +783,7 @@ class TestRun:
         )
 
         with (
-            patch("laglitsynth.fulltext_eligibility.eligibility._preflight"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
             patch(
                 "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
                 side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
@@ -864,7 +843,7 @@ class TestRun:
 
         mock_classify = MagicMock(side_effect=_mock_classify(classify_results))
         with (
-            patch("laglitsynth.fulltext_eligibility.eligibility._preflight"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
             patch(
                 "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
                 mock_classify,
@@ -1024,7 +1003,7 @@ def test_run_dir_printed_to_stderr_at_end(
     expected_dir = tmp_path / "fulltext-eligibility" / "test-stderr-run"
 
     with (
-        patch("laglitsynth.fulltext_eligibility.eligibility._preflight"),
+        patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
         patch(
             "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
             side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),

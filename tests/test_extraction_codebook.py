@@ -359,25 +359,6 @@ class TestExtractWorksCascade:
         assert records[0].truncated is True  # type: ignore[attr-defined]
 
 
-# --- _preflight ---
-
-
-class TestPreflight:
-    def test_preflight_raises_on_connection_failure(self) -> None:
-        from laglitsynth.extraction_codebook.extract import _preflight
-
-        args = MagicMock()
-        args.base_url = "http://localhost:99999"
-        args.model = "nonexistent"
-
-        with patch("laglitsynth.extraction_codebook.extract.OpenAI") as mock_cls:
-            mock_cls.return_value.models.retrieve.side_effect = Exception(
-                "connection refused"
-            )
-            with pytest.raises(SystemExit):
-                _preflight(args)
-
-
 # --- run() end-to-end ---
 
 
@@ -450,7 +431,7 @@ class TestRun:
             _valid_payload_json(ctx.payload_field_names)
         )
         with (
-            patch("laglitsynth.extraction_codebook.extract._preflight"),
+            patch("laglitsynth.extraction_codebook.extract.preflight"),
             patch(
                 "laglitsynth.extraction_codebook.extract.OpenAI",
                 return_value=mock_client,
@@ -497,7 +478,7 @@ class TestRun:
             _valid_payload_json(ctx.payload_field_names)
         )
         with (
-            patch("laglitsynth.extraction_codebook.extract._preflight"),
+            patch("laglitsynth.extraction_codebook.extract.preflight"),
             patch(
                 "laglitsynth.extraction_codebook.extract.OpenAI",
                 return_value=mock_client,
@@ -556,7 +537,7 @@ class TestRun:
             _valid_payload_json(ctx.payload_field_names)
         )
         with (
-            patch("laglitsynth.extraction_codebook.extract._preflight"),
+            patch("laglitsynth.extraction_codebook.extract.preflight"),
             patch(
                 "laglitsynth.extraction_codebook.extract.OpenAI",
                 return_value=mock_client,
@@ -638,7 +619,7 @@ class TestRun:
         )
 
         with (
-            patch("laglitsynth.extraction_codebook.extract._preflight"),
+            patch("laglitsynth.extraction_codebook.extract.preflight"),
             patch("laglitsynth.extraction_codebook.extract.OpenAI"),
         ):
             from laglitsynth.extraction_codebook.extract import run
@@ -681,7 +662,7 @@ class TestRun:
 
         mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
         with (
-            patch("laglitsynth.extraction_codebook.extract._preflight"),
+            patch("laglitsynth.extraction_codebook.extract.preflight"),
             patch(
                 "laglitsynth.extraction_codebook.extract.OpenAI",
                 return_value=mock_client,
@@ -745,7 +726,7 @@ class TestRun:
             _valid_payload_json(ctx.payload_field_names)
         )
         with (
-            patch("laglitsynth.extraction_codebook.extract._preflight"),
+            patch("laglitsynth.extraction_codebook.extract.preflight"),
             patch(
                 "laglitsynth.extraction_codebook.extract.OpenAI",
                 return_value=mock_client,
@@ -910,7 +891,7 @@ def test_run_dir_printed_to_stderr_at_end(
 
     mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
     with (
-        patch("laglitsynth.extraction_codebook.extract._preflight"),
+        patch("laglitsynth.extraction_codebook.extract.preflight"),
         patch(
             "laglitsynth.extraction_codebook.extract.OpenAI",
             return_value=mock_client,
