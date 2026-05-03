@@ -11,11 +11,12 @@ dependencies = [
     "pyalex>=0.16",
     "pydantic>=2.0",
     "python-dotenv",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
 test = ["pytest", "pytest-cov"]
-typecheck = ["mypy"]
+typecheck = ["mypy", "types-PyYAML"]
 
 [project.scripts]
 laglitsynth = "laglitsynth.cli:main"

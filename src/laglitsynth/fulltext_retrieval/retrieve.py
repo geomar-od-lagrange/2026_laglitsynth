@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import re
 import shutil
 import sys
@@ -16,13 +15,12 @@ from pathlib import Path
 from urllib.parse import quote, urlparse
 
 import httpx
-from dotenv import load_dotenv
 
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.fulltext_retrieval.models import TOOL_NAME, RetrievalMeta, RetrievalRecord, RetrievalStatus
 from laglitsynth.ids import work_id_to_filename
-from laglitsynth.io import JsonlReadStats, append_jsonl, read_jsonl, read_works_jsonl, write_meta
-from laglitsynth.models import _RunMeta
+from laglitsynth.io import JsonlReadStats, append_jsonl, read_jsonl, write_meta
+from laglitsynth.models import RunMeta
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +30,6 @@ _DOI_PREFIX_RE = re.compile(r"^https?://(dx\.)?doi\.org/", re.IGNORECASE)
 _STATUS_LABELS: dict[RetrievalStatus, str] = {
     RetrievalStatus.retrieved_oa: "Retrieved (OA)",
     RetrievalStatus.retrieved_unpaywall: "Retrieved (Unpaywall)",
-    RetrievalStatus.retrieved_preprint: "Retrieved (preprint)",
     RetrievalStatus.retrieved_manual: "Retrieved (manual)",
     RetrievalStatus.abstract_only: "Abstract-only",
     RetrievalStatus.failed: "Failed",
@@ -281,17 +278,6 @@ def _retrieve_one(
     )
 
 
-def _load_existing(output_dir: Path) -> dict[str, RetrievalRecord]:
-    """Load existing records from retrieval.jsonl keyed by work_id."""
-    retrieval_path = output_dir / "retrieval.jsonl"
-    if not retrieval_path.exists():
-        return {}
-    records: dict[str, RetrievalRecord] = {}
-    for rec in read_jsonl(retrieval_path, RetrievalRecord):
-        records[rec.work_id] = rec
-    return records
-
-
 def _write_retrieval_jsonl(records: list[RetrievalRecord], path: Path) -> None:
     """Overwrite retrieval.jsonl with the given records."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -311,6 +297,11 @@ def build_subparser(
     parser.add_argument(
         "--output-dir", type=Path, required=True, help="Output directory"
     )
+    parser.add_argument(
+        "--email",
+        required=True,
+        help="Contact email for Unpaywall API requests (required)",
+    )
     parser.add_argument("--manual-dir", type=Path, default=None, help="Manual PDF dir")
     parser.add_argument(
         "--skip-existing",
@@ -327,12 +318,7 @@ def build_subparser(
 
 
 def run(args: argparse.Namespace) -> None:
-    load_dotenv()
-    email = os.environ.get("UNPAYWALL_EMAIL")
-    if not email:
-        raise SystemExit(
-            "UNPAYWALL_EMAIL is not set. Add it to your environment or .env."
-        )
+    email: str = args.email
 
     output_dir: Path = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -344,7 +330,11 @@ def run(args: argparse.Namespace) -> None:
 
     # Load all previously recorded records (regardless of --skip-existing, so
     # we can preserve rows for works not in this run's input).
-    existing: dict[str, RetrievalRecord] = _load_existing(output_dir)
+    retrieval_path = output_dir / "retrieval.jsonl"
+    existing: dict[str, RetrievalRecord] = {}
+    if retrieval_path.exists():
+        for rec in read_jsonl(retrieval_path, RetrievalRecord):
+            existing[rec.work_id] = rec
 
     # Works that already have a successful retrieval status are skipped under
     # --skip-existing.
@@ -361,8 +351,7 @@ def run(args: argparse.Namespace) -> None:
                 file=sys.stderr,
             )
 
-    retrieval_path = output_dir / "retrieval.jsonl"
-    works = list(read_works_jsonl(args.input, stats))
+    works = list(read_jsonl(args.input, Work, stats))
     total = len(works)
     works_by_id: dict[str, Work] = {w.id: w for w in works}
     input_ids = {w.id for w in works}
@@ -457,7 +446,7 @@ def run(args: argparse.Namespace) -> None:
         elif status == RetrievalStatus.failed:
             failed_count += 1
 
-    run_meta = _RunMeta(
+    run_meta = RunMeta(
         tool=TOOL_NAME,
         run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
         validation_skipped=stats.skipped,

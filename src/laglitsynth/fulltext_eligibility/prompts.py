@@ -1,52 +1,38 @@
 """Prompt construction for full-text eligibility assessment.
 
-The system prompt is the canonical text of the three-point eligibility
-criterion. ``render_fulltext`` flattens a ``TeiDocument`` into a single
-string the LLM can consume; ``render_abstract`` is the thin fallback path
-for works without an ``ExtractedDocument``. ``build_user_message`` wraps
-either rendered body with the ``source_basis`` tag the system prompt
-references.
+The system prompt is loaded from an external eligibility-criteria YAML
+at runtime so swapping topics is configuration work rather than a
+refactor. ``render_fulltext`` flattens a ``TeiDocument`` into a single
+string the LLM can consume. ``build_user_message`` wraps the rendered
+body with the ``source_basis`` tag the system prompt references.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
+from laglitsynth.config import resolve_yaml_arg
 from laglitsynth.fulltext_eligibility.models import SourceBasis
-from laglitsynth.fulltext_extraction.tei import Section, TeiDocument
-
-SYSTEM_PROMPT = """\
-You are assessing whether a scientific paper meets the inclusion criteria
-for a systematic review of numerical methods in Lagrangian oceanography.
-
-Criteria:
-1. The paper describes a computation that tracks particles, tracers, or
-   objects in an ocean flow field.
-2. The paper is primary research (not a review, editorial, or commentary).
-3. The paper contains at least some description of the numerical methods
-   used.
-
-Respond with JSON: {"eligible": true|false, "reason": "<one sentence>"}.
-Return ONLY the JSON object, nothing else."""
+from laglitsynth.fulltext_extraction.tei import TeiDocument, flatten_sections
 
 USER_TEMPLATE = "{source_basis}:\n{text}"
 
 
-def _flatten_section(section: Section) -> list[str]:
-    """Depth-first flatten of a ``Section`` into title+paragraph blocks.
+def load_system_prompt(spec: str | Path | dict[str, Any]) -> str:
+    """Return the eligibility-criteria system prompt from a YAML spec.
 
-    Each section contributes one block: the title (if any) on its first
-    line, followed by its paragraphs (one per line). Nested children
-    contribute their own blocks in document order.
+    ``spec`` may be a path to a YAML file or an already-loaded mapping
+    (the inlined-snapshot case). The mapping must carry a string-valued
+    ``system_prompt`` field.
     """
-    blocks: list[str] = []
-    lines: list[str] = []
-    if section.title:
-        lines.append(section.title)
-    lines.extend(section.paragraphs)
-    if lines:
-        blocks.append("\n".join(lines))
-    for child in section.children:
-        blocks.extend(_flatten_section(child))
-    return blocks
+    loaded = resolve_yaml_arg(spec)
+    prompt = loaded.get("system_prompt")
+    if not isinstance(prompt, str):
+        raise ValueError(
+            "eligibility-criteria spec must include a string 'system_prompt' field"
+        )
+    return prompt
 
 
 def render_fulltext(tei: TeiDocument) -> str:
@@ -57,15 +43,7 @@ def render_fulltext(tei: TeiDocument) -> str:
     Returns the empty string when ``sections()`` is empty so the caller
     can fall back to the abstract.
     """
-    blocks: list[str] = []
-    for top in tei.sections():
-        blocks.extend(_flatten_section(top))
-    return "\n\n".join(blocks)
-
-
-def render_abstract(abstract: str) -> str:
-    """Return the abstract string unchanged; kept as a rendering seam."""
-    return abstract
+    return "\n\n".join(flatten_sections(tei))
 
 
 def build_user_message(source_basis: SourceBasis, text: str) -> str:

@@ -72,7 +72,7 @@ output.
 
 | Path | Model | Description |
 |---|---|---|
-| `data/screening-adjudication/verdicts.jsonl` | [`AdjudicationVerdict`](../src/laglitsynth/screening_adjudication/models.py) | Per-work adjudication decision (accept/reject/skip) |
+| `data/screening-adjudication/verdicts.jsonl` | [`AdjudicationVerdict`](../src/laglitsynth/screening_adjudication/models.py) | Per-work adjudication decision (accept-only in MVP; reject/skip queued) |
 | `data/screening-adjudication/adjudication-meta.json` | [`AdjudicationMeta`](../src/laglitsynth/screening_adjudication/models.py) | Threshold applied, counts |
 | `data/screening-adjudication/included.jsonl` | [`Work`](../src/laglitsynth/catalogue_fetch/models.py) | Work records above threshold (convenience for stage 5) |
 
@@ -118,8 +118,9 @@ stage 4's [`included.jsonl`](screening-adjudication.md).
 
 | Path | Model | Description |
 |---|---|---|
-| `data/extraction-codebook/records.jsonl` | [`ExtractionRecord`](../src/laglitsynth/extraction_codebook/models.py) | One codebook record per input work (successes and sentinels) |
-| `data/extraction-codebook/extraction-codebook-meta.json` | [`ExtractionCodebookMeta`](../src/laglitsynth/extraction_codebook/models.py) | Per-branch counts, nested `run` + `llm` |
+| `<data-dir>/extraction-codebook/<run-id>/records.jsonl` | `ExtractionRecord` (built dynamically by [`build_record_model`](../src/laglitsynth/extraction_codebook/codebook.py)) | One codebook record per input work (successes and sentinels) |
+| `<data-dir>/extraction-codebook/<run-id>/extraction-codebook-meta.json` | [`ExtractionCodebookMeta`](../src/laglitsynth/extraction_codebook/models.py) | Per-branch counts, nested `run` + `llm` |
+| `<data-dir>/extraction-codebook/<run-id>/config.yaml` | resolved CLI+config (codebook inlined) | Self-contained run snapshot; see [configs.md](configs.md) |
 
 Every input work produces exactly one record; sentinel records carry
 `None` in all content fields and a `reason` from the vocabulary in
@@ -161,7 +162,7 @@ replacements. Downstream stages apply corrections at read time.
 
 ```sh
 # Stage 1 — catalogue-fetch
-laglitsynth catalogue-fetch QUERY \
+laglitsynth catalogue-fetch QUERY --api-key KEY \
     [-o OUTPUT] [--from-year YEAR] [--to-year YEAR] [--max-records N]
 
 # Stage 2 — catalogue-dedup
@@ -171,8 +172,16 @@ laglitsynth catalogue-dedup \
 
 # Stage 3 — screening-abstracts
 laglitsynth screening-abstracts INPUT PROMPT \
-    [--output-dir DIR] [--model MODEL] [--screening-threshold N] \
-    [--base-url URL] [--max-records N] [--dry-run]
+    [--data-dir DIR] [--run-id ID] [--config FILE] \
+    [--model MODEL] [--screening-threshold N] \
+    [--base-url URL] [--max-records N] [--concurrency N] [--dry-run]
+
+# Stage 3 — screening-abstracts-export (human review)
+laglitsynth screening-abstracts-export \
+    --format csv|xlsx \
+    --verdicts data/screening-abstracts/verdicts.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    [--output PATH] [--n-subset N] [--subset-seed N]
 
 # Stage 4 — screening-adjudication
 laglitsynth screening-adjudication \
@@ -200,24 +209,41 @@ laglitsynth fulltext-eligibility \
     --catalogue data/screening-adjudication/included.jsonl \
     --extractions data/fulltext-extraction/extraction.jsonl \
     [--extraction-output-dir data/fulltext-extraction/] \
-    [--output-dir data/fulltext-eligibility/] \
+    [--data-dir DIR] [--run-id ID] \
+    [--eligibility-criteria FILE] [--config FILE] \
     [--skip-existing] [--max-records N] [--dry-run] \
     [--model MODEL] [--base-url URL]
 
 # Stage 8 — extraction-codebook
 laglitsynth extraction-codebook \
-    --eligible data/fulltext-eligibility/eligible.jsonl \
+    --eligible data/fulltext-eligibility/<run-id>/eligible.jsonl \
     --extractions data/fulltext-extraction/extraction.jsonl \
     [--extraction-output-dir data/fulltext-extraction/] \
-    [--output-dir data/extraction-codebook/] \
+    [--data-dir DIR] [--run-id ID] \
+    [--codebook FILE] [--config FILE] \
     [--skip-existing] [--max-records N] [--dry-run] \
     [--model MODEL] [--base-url URL]
 ```
+
+Stages 3, 7 and 8 use the run-id directory model: outputs land at
+`<data-dir>/<stage-subdir>/<run-id>/`. See [configs.md](configs.md).
 
 Stages 1 and 3 use positional arguments. All other subcommands use
 `--input` / `--output-dir` keyword flags. Stages 1 and 3 should be
 harmonized to keyword flags when updated. No backwards compatibility
 constraints ([AGENTS.md](../AGENTS.md)).
+
+### Configuration: flags only, scripts source `.env`
+
+Every parameter is a CLI flag on the stage tool. Tools do not read
+`.env` or environment variables for run-affecting parameters
+(`--api-key`, `--email`, `--base-url`, `--grobid-url`, model names,
+thresholds). Driver scripts ([scripts/run-pipeline.sh](../scripts/run-pipeline.sh),
+[scripts/nesh-pipeline.sbatch](../scripts/nesh-pipeline.sbatch)) source
+`.env` (`set -a; source .env; set +a`) and pass the values as `--flag
+"$VAR"` to each tool. This keeps a human's flag-passed value
+authoritative — there is no env-var fallback path that could silently
+override what the user typed.
 
 ### Planned subcommands
 
@@ -251,8 +277,10 @@ A complete pipeline run with manual steps noted.
 ```sh
 # 1. Catalogue fetch (repeat for different keyword sets)
 laglitsynth catalogue-fetch "lagrangian particle tracking" \
+    --api-key "$OPENALEX_API_KEY" \
     -o data/catalogue-fetch/search_a.jsonl
 laglitsynth catalogue-fetch "ocean tracer simulation" \
+    --api-key "$OPENALEX_API_KEY" \
     -o data/catalogue-fetch/search_b.jsonl
 
 # Manual: concatenate search result records (not meta files)
@@ -263,12 +291,11 @@ laglitsynth catalogue-dedup \
     --input data/catalogue-fetch/combined.jsonl \
     --output-dir data/catalogue-dedup/
 
-# 3. Screening abstracts
+# 3. Screening abstracts (writes to data/screening-abstracts/<run-id>/)
 laglitsynth screening-abstracts \
     data/catalogue-dedup/deduplicated.jsonl \
     "Is this about computational Lagrangian methods in oceanography?" \
-    --screening-threshold 50 \
-    --output-dir data/screening-abstracts/
+    --screening-threshold 50
 
 # 4. Screening adjudication (pass-through in prototype)
 laglitsynth screening-adjudication \
@@ -295,19 +322,18 @@ laglitsynth fulltext-extraction \
     --output-dir data/fulltext-extraction/ \
     --grobid-url http://localhost:8070
 
-# 7. Fulltext eligibility
+# 7. Fulltext eligibility (writes to data/fulltext-eligibility/<run-id>/)
 laglitsynth fulltext-eligibility \
     --catalogue data/screening-adjudication/included.jsonl \
     --extractions data/fulltext-extraction/extraction.jsonl \
-    --extraction-output-dir data/fulltext-extraction/ \
-    --output-dir data/fulltext-eligibility/
+    --extraction-output-dir data/fulltext-extraction/
 
-# 8. Extraction codebook
+# 8. Extraction codebook (writes to data/extraction-codebook/<run-id>/)
+# Substitute <run-id> below with the run id printed by step 7.
 laglitsynth extraction-codebook \
-    --eligible data/fulltext-eligibility/eligible.jsonl \
+    --eligible data/fulltext-eligibility/<run-id>/eligible.jsonl \
     --extractions data/fulltext-extraction/extraction.jsonl \
-    --extraction-output-dir data/fulltext-extraction/ \
-    --output-dir data/extraction-codebook/
+    --extraction-output-dir data/fulltext-extraction/
 
 # 9. Extraction adjudication (pass-through in prototype)
 laglitsynth extraction-adjudication \
@@ -335,12 +361,12 @@ laglitsynth synthesis-narrative \
 
 Two shared Pydantic models live in [`src/laglitsynth/models.py`](../src/laglitsynth/models.py) and are nested inside every `*Meta` class.
 
-### `_RunMeta`
+### `RunMeta`
 
 Run-level provenance carried by every stage meta record.
 
 ```python
-class _RunMeta(BaseModel):
+class RunMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     tool: str          # module-level TOOL_NAME constant from each stage
     tool_version: str  # "alpha" placeholder until releases
@@ -348,13 +374,13 @@ class _RunMeta(BaseModel):
     validation_skipped: int  # records dropped by read_jsonl on ValidationError
 ```
 
-### `_LlmMeta`
+### `LlmMeta`
 
 LLM configuration carried by `ScreeningMeta`, `EligibilityMeta`, and
 `ExtractionCodebookMeta`. Enables reproducibility checks across runs.
 
 ```python
-class _LlmMeta(BaseModel):
+class LlmMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     model: str           # Ollama model tag
     temperature: float   # explicit value passed to the API (currently 0.8)
@@ -378,7 +404,7 @@ context-window change produces a different digest. Stage 8 also folds
 | Category | Policy | Models |
 |---|---|---|
 | OpenAlex-sourced | `extra="ignore"` — upstream may add fields | `Work`, `Author`, `Authorship`, `Institution`, `Source`, `Location`, `OpenAccess`, `Biblio`, `TopicHierarchy`, `Topic`, `Keyword` |
-| Internally owned | `extra="forbid"` — unexpected fields are bugs | All `*Meta`, `_RunMeta`, `_LlmMeta`, `ScreeningVerdict`, `AdjudicationVerdict`, `RetrievalRecord`, `RetrievalStatus`, `ExtractedDocument`, `Section`, `Figure`, `Citation`, `BibReference`, `EligibilityVerdict`, `ExtractionRecord` |
+| Internally owned | `extra="forbid"` — unexpected fields are bugs | All `*Meta`, `RunMeta`, `LlmMeta`, `ScreeningVerdict`, `AdjudicationVerdict`, `RetrievalRecord`, `RetrievalStatus`, `ExtractedDocument`, `Section`, `Figure`, `Citation`, `BibReference`, `EligibilityVerdict`, `ExtractionRecord` |
 
 ## Model dependency graph
 
@@ -386,8 +412,8 @@ context-window change produces a different digest. Stage 8 also folds
 
 | Model | Module | Used by stages |
 |---|---|---|
-| [`_RunMeta`](../src/laglitsynth/models.py) | `laglitsynth.models` | All `*Meta` |
-| [`_LlmMeta`](../src/laglitsynth/models.py) | `laglitsynth.models` | `ScreeningMeta` |
+| [`RunMeta`](../src/laglitsynth/models.py) | `laglitsynth.models` | All `*Meta` |
+| [`LlmMeta`](../src/laglitsynth/models.py) | `laglitsynth.models` | `ScreeningMeta`, `EligibilityMeta`, `ExtractionCodebookMeta` |
 | [`Work`](../src/laglitsynth/catalogue_fetch/models.py) | `laglitsynth.catalogue_fetch.models` | 1, 2, 3 |
 | [`FetchMeta`](../src/laglitsynth/catalogue_fetch/models.py) | `laglitsynth.catalogue_fetch.models` | 1 |
 | [`ScreeningVerdict`](../src/laglitsynth/screening_abstracts/models.py) | `laglitsynth.screening_abstracts.models` | 3 |
@@ -403,8 +429,9 @@ context-window change produces a different digest. Stage 8 also folds
 | [`Section`](../src/laglitsynth/fulltext_extraction/tei.py), [`Figure`](../src/laglitsynth/fulltext_extraction/tei.py), [`Citation`](../src/laglitsynth/fulltext_extraction/tei.py), [`BibReference`](../src/laglitsynth/fulltext_extraction/tei.py) | `laglitsynth.fulltext_extraction.tei` | 7, 8 (lazy views over TEI) |
 | [`EligibilityVerdict`](../src/laglitsynth/fulltext_eligibility/models.py) | `laglitsynth.fulltext_eligibility.models` | 7 |
 | [`EligibilityMeta`](../src/laglitsynth/fulltext_eligibility/models.py) | `laglitsynth.fulltext_eligibility.models` | 7 |
-| [`ExtractionRecord`](../src/laglitsynth/extraction_codebook/models.py) | `laglitsynth.extraction_codebook.models` | 8, 9, 10, 11 |
+| `ExtractionRecord` (dynamic; [`build_record_model`](../src/laglitsynth/extraction_codebook/codebook.py)) | `laglitsynth.extraction_codebook.codebook` | 8, 9, 10, 11 |
 | [`ExtractionCodebookMeta`](../src/laglitsynth/extraction_codebook/models.py) | `laglitsynth.extraction_codebook.models` | 8 |
+| [`CodebookSpec`](../src/laglitsynth/extraction_codebook/codebook.py) | `laglitsynth.extraction_codebook.codebook` | 8 (codebook YAML schema) |
 
 ### Models not yet defined
 

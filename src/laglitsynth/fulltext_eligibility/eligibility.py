@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import logging
 import random
 import sys
@@ -13,10 +14,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from lxml import etree
-from openai import OpenAI
+from openai import APIConnectionError, APITimeoutError, OpenAI
 from pydantic import ValidationError
 
 from laglitsynth.catalogue_fetch.models import Work
+from laglitsynth.config import register_config_arg, resolve_yaml_arg, save_resolved_config
 from laglitsynth.fulltext_eligibility.models import (
     TOOL_NAME,
     EligibilityMeta,
@@ -25,27 +27,33 @@ from laglitsynth.fulltext_eligibility.models import (
     _EligibilityPayload,
 )
 from laglitsynth.fulltext_eligibility.prompts import (
-    SYSTEM_PROMPT,
     USER_TEMPLATE,
     build_user_message,
-    render_abstract,
+    load_system_prompt,
     render_fulltext,
 )
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
+from laglitsynth.ids import generate_run_id
 from laglitsynth.io import (
     JsonlReadStats,
     append_jsonl,
     read_jsonl,
-    read_works_jsonl,
     write_jsonl,
     write_meta,
 )
-from laglitsynth.models import _LlmMeta, _RunMeta
+from laglitsynth.models import LlmMeta, RunMeta
 
 logger = logging.getLogger(__name__)
 
+STAGE_SUBDIR = "fulltext-eligibility"
+DEFAULT_ELIGIBILITY_CRITERIA = Path(
+    "examples/eligibility-criteria/lagrangian-oceanography.yaml"
+)
+
 _TEMPERATURE = 0.8
 _NUM_CTX = 32768
+_LLM_TIMEOUT_SECONDS = 300
+_LLM_MAX_RETRIES = 3
 
 
 def classify_eligibility(
@@ -55,6 +63,7 @@ def classify_eligibility(
     *,
     model: str,
     client: OpenAI,
+    system_prompt: str,
 ) -> EligibilityVerdict:
     """Call the LLM, validate the payload, compose the verdict.
 
@@ -64,17 +73,28 @@ def classify_eligibility(
     stage 8's ``extract_codebook`` shape and error handling.
     """
     seed = random.randint(0, 2**31 - 1)
-    response = client.chat.completions.create(
-        model=model,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-        temperature=_TEMPERATURE,
-        seed=seed,
-        extra_body={"options": {"num_ctx": _NUM_CTX}},
-    )
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=_TEMPERATURE,
+            seed=seed,
+            extra_body={"options": {"num_ctx": _NUM_CTX}},
+        )
+    except (APITimeoutError, APIConnectionError) as exc:
+        logger.warning("LLM timeout for %s: %s", work_id, exc)
+        return EligibilityVerdict(
+            work_id=work_id,
+            eligible=None,
+            source_basis=source_basis,
+            reason="llm-timeout",
+            seed=None,
+            raw_response=None,
+        )
     content = response.choices[0].message.content or "{}"
     try:
         payload = _EligibilityPayload.model_validate_json(content)
@@ -112,18 +132,21 @@ def assess_works(
     client: OpenAI,
     model: str,
     max_records: int | None,
+    system_prompt: str,
     skip_ids: set[str] | None = None,
     stats: JsonlReadStats | None = None,
 ) -> Iterator[EligibilityVerdict]:
     skip_ids = skip_ids or set()
     processed = 0
-    for work in read_works_jsonl(catalogue_path, stats):
+    for work in read_jsonl(catalogue_path, Work, stats):
         if work.id in skip_ids:
             continue
         if max_records is not None and processed >= max_records:
             return
         processed += 1
-        yield _assess_one(work, extractions, extraction_output_dir, client, model)
+        yield _assess_one(
+            work, extractions, extraction_output_dir, client, model, system_prompt
+        )
 
 
 def _assess_one(
@@ -132,6 +155,7 @@ def _assess_one(
     extraction_output_dir: Path,
     client: OpenAI,
     model: str,
+    system_prompt: str,
 ) -> EligibilityVerdict:
     # Step 1: prefer full text when an extraction exists.
     extracted = extractions.get(work.id)
@@ -153,16 +177,25 @@ def _assess_one(
         if rendered:
             prompt = build_user_message("full_text", rendered)
             return classify_eligibility(
-                work.id, prompt, "full_text", client=client, model=model
+                work.id,
+                prompt,
+                "full_text",
+                client=client,
+                model=model,
+                system_prompt=system_prompt,
             )
         # Empty body (valid XML, no content): fall through to abstract.
 
     # Step 2: fall back to abstract when available.
     if work.abstract:
-        rendered = render_abstract(work.abstract)
-        prompt = build_user_message("abstract_only", rendered)
+        prompt = build_user_message("abstract_only", work.abstract)
         return classify_eligibility(
-            work.id, prompt, "abstract_only", client=client, model=model
+            work.id,
+            prompt,
+            "abstract_only",
+            client=client,
+            model=model,
+            system_prompt=system_prompt,
         )
 
     # Step 3: no source at all.
@@ -215,10 +248,24 @@ def build_subparser(
         ),
     )
     parser.add_argument(
-        "--output-dir",
+        "--data-dir",
         type=Path,
-        default=Path("data/fulltext-eligibility"),
-        help="Output directory (default: data/fulltext-eligibility/)",
+        default=Path("data"),
+        help="Bucket root for stage outputs (default: data/)",
+    )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Run identifier; default = generate_run_id() (<iso>_<12hex>).",
+    )
+    parser.add_argument(
+        "--eligibility-criteria",
+        default=str(DEFAULT_ELIGIBILITY_CRITERIA),
+        help=(
+            f"Eligibility-criteria YAML — path to a spec on the CLI; on "
+            f"reload from a saved snapshot, the inlined mapping is "
+            f"consumed directly (default: {DEFAULT_ELIGIBILITY_CRITERIA})."
+        ),
     )
     parser.add_argument(
         "--model",
@@ -246,6 +293,7 @@ def build_subparser(
         action="store_true",
         help="Print verdicts to stderr without writing output",
     )
+    register_config_arg(parser)
     parser.set_defaults(run=run)
     return parser
 
@@ -253,25 +301,47 @@ def build_subparser(
 def run(args: argparse.Namespace) -> None:
     _preflight(args)
 
-    output_dir: Path = args.output_dir
+    if args.run_id is None:
+        args.run_id = generate_run_id()
+    output_dir: Path = Path(args.data_dir) / STAGE_SUBDIR / args.run_id
     verdicts_path = output_dir / "verdicts.jsonl"
     eligible_path = output_dir / "eligible.jsonl"
     meta_path = output_dir / "eligibility-meta.json"
 
     extraction_output_dir: Path = (
-        args.extraction_output_dir
+        Path(args.extraction_output_dir)
         if args.extraction_output_dir is not None
-        else args.extractions.parent
+        else Path(args.extractions).parent
     )
 
+    criteria_spec = resolve_yaml_arg(args.eligibility_criteria)
+    system_prompt = load_system_prompt(criteria_spec)
+
     prompt_sha256 = hashlib.sha256(
-        (SYSTEM_PROMPT + "\n" + USER_TEMPLATE + "\n" + str(_NUM_CTX)).encode("utf-8")
+        (system_prompt + "\n" + USER_TEMPLATE + "\n" + str(_NUM_CTX)).encode("utf-8")
     ).hexdigest()
+
+    # Prompt-hash guard: refuse --skip-existing when the recorded hash differs.
+    if args.skip_existing and meta_path.exists():
+        try:
+            recorded = json.loads(meta_path.read_text())
+        except json.JSONDecodeError as exc:
+            raise SystemExit(
+                f"failed to parse {meta_path} ({exc}); refusing --skip-existing "
+                f"on a corrupted meta file"
+            )
+        recorded_sha = recorded.get("llm", {}).get("prompt_sha256")
+        if recorded_sha is not None and recorded_sha != prompt_sha256:
+            raise SystemExit(
+                f"recorded prompt_sha256 in {meta_path} differs from current; "
+                f"refusing --skip-existing to avoid mixing prompt versions in "
+                f"{verdicts_path}"
+            )
 
     stats = JsonlReadStats()
     extractions = _load_extractions(args.extractions, stats)
 
-    total = sum(1 for _ in read_works_jsonl(args.catalogue, stats))
+    total = sum(1 for _ in read_jsonl(args.catalogue, Work, stats))
 
     skip_ids: set[str] = set()
     prior_verdicts: list[EligibilityVerdict] = []
@@ -289,11 +359,20 @@ def run(args: argparse.Namespace) -> None:
     if not args.dry_run:
         print(f"Output dir: {output_dir}", file=sys.stderr)
 
+    if not args.dry_run:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        save_resolved_config(args, output_dir, inlines=["eligibility_criteria"])
+
     # Start-of-run truncation: non-resuming runs rewrite verdicts.jsonl.
     if not args.dry_run and not args.skip_existing and verdicts_path.exists():
         verdicts_path.unlink()
 
-    client = OpenAI(base_url=f"{args.base_url}/v1", api_key="ollama")
+    client = OpenAI(
+        base_url=f"{args.base_url}/v1",
+        api_key="ollama",
+        timeout=_LLM_TIMEOUT_SECONDS,
+        max_retries=_LLM_MAX_RETRIES,
+    )
 
     t0 = time.monotonic()
     index = 0
@@ -306,6 +385,7 @@ def run(args: argparse.Namespace) -> None:
         client=client,
         model=args.model,
         max_records=args.max_records,
+        system_prompt=system_prompt,
         skip_ids=skip_ids,
         stats=stats,
     ):
@@ -346,17 +426,26 @@ def run(args: argparse.Namespace) -> None:
     llm_parse_failure_count = sum(
         1 for v in all_verdicts if v.reason == "llm-parse-failure"
     )
+    llm_timeout_count = sum(
+        1 for v in all_verdicts if v.reason == "llm-timeout"
+    )
 
     by_source_basis: dict[str, int] = {}
     for v in all_verdicts:
         by_source_basis[v.source_basis] = by_source_basis.get(v.source_basis, 0) + 1
 
-    skipped_total = no_source_count + tei_parse_failure_count + llm_parse_failure_count
+    skipped_total = (
+        no_source_count
+        + tei_parse_failure_count
+        + llm_parse_failure_count
+        + llm_timeout_count
+    )
     print(
         f"\nDone in {elapsed:.1f}s: {eligible_count} eligible, "
         f"{excluded_count} excluded, {skipped_total} skipped "
         f"({no_source_count} no-source, {tei_parse_failure_count} tei-parse-failure, "
-        f"{llm_parse_failure_count} llm-parse-failure).",
+        f"{llm_parse_failure_count} llm-parse-failure, "
+        f"{llm_timeout_count} llm-timeout).",
         file=sys.stderr,
     )
 
@@ -366,16 +455,16 @@ def run(args: argparse.Namespace) -> None:
     # Rebuild eligible.jsonl from the verdict sidecar + catalogue join.
     eligible_ids = {v.work_id for v in all_verdicts if v.eligible is True}
     eligible_works = [
-        w for w in read_works_jsonl(args.catalogue) if w.id in eligible_ids
+        w for w in read_jsonl(args.catalogue, Work) if w.id in eligible_ids
     ]
     write_jsonl(eligible_works, eligible_path)
 
-    run_meta = _RunMeta(
+    run_meta = RunMeta(
         tool=TOOL_NAME,
         run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
         validation_skipped=stats.skipped,
     )
-    llm_meta = _LlmMeta(
+    llm_meta = LlmMeta(
         model=args.model,
         temperature=_TEMPERATURE,
         prompt_sha256=prompt_sha256,
@@ -393,6 +482,7 @@ def run(args: argparse.Namespace) -> None:
             no_source_count=no_source_count,
             tei_parse_failure_count=tei_parse_failure_count,
             llm_parse_failure_count=llm_parse_failure_count,
+            llm_timeout_count=llm_timeout_count,
             by_source_basis=by_source_basis,
         ),
     )

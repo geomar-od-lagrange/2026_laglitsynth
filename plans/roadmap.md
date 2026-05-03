@@ -29,8 +29,8 @@ Update this file when a plan is written, implemented, or archived.
   synced; [README.md](../README.md) rewritten to list the real CLI.
 - [Reproducibility meta refactor](done/reproducibility-meta-refactor.md)
   — `_Base` deleted; OpenAlex models use `extra="ignore"`, internal
-  models use `extra="forbid"`. Shared `_RunMeta` and `_LlmMeta` live
-  in `src/laglitsynth/models.py`; every `*Meta` nests `run: _RunMeta`
+  models use `extra="forbid"`. Shared `RunMeta` and `LlmMeta` live
+  in `src/laglitsynth/models.py`; every `*Meta` nests `run: RunMeta`
   (`tool`, `tool_version`, `run_at`, `validation_skipped`). Stage 3
   passes `temperature=0.8` and a per-call `random.randint(...)` seed
   to Ollama; each `ScreeningVerdict` carries its seed;
@@ -41,14 +41,14 @@ Update this file when a plan is written, implemented, or archived.
   `sections()`, `figures()`, `citations()`, `bibliography()` over
   the TEI bytes we already keep on disk. Recursive `Section.children`
   resolves the flat-vs-recursive question.
-- [Stage 7 `fulltext-eligibility`](stage-7-fulltext-eligibility.md) —
+- [Stage 7 `fulltext-eligibility`](done/stage-7-fulltext-eligibility.md) —
   one LLM pass per included work deciding inclusion on the full text
   (or the abstract when no extraction is available). Tri-state
   `eligible: bool | None` with three sentinel reasons (`no-source`,
   `tei-parse-failure`, `llm-parse-failure`). `ExtractedDocument.extraction_status`
   was not needed: missing and empty `sections()` already trigger the
   right fallback.
-- [Stage 8 `extraction-codebook`](stage-8-extraction-codebook.md) —
+- [Stage 8 `extraction-codebook`](done/stage-8-extraction-codebook.md) —
   one LLM pass per eligible work filling a structured
   [`ExtractionRecord`](../src/laglitsynth/extraction_codebook/models.py)
   (every value paired with a verbatim `*_context`, every content field
@@ -59,6 +59,32 @@ Update this file when a plan is written, implemented, or archived.
   tune on the first smoke run. `ExtractedDocument.extraction_status`
   was not needed for stage 8 either — malformed TEI records a
   `tei-parse-failure` sentinel as in stage 7.
+- [Pre-prod cleanup](done/pre-prod-cleanup.md) — hold-the-prod and
+  high-leverage simplifications before the first NESH prod run.
+  Stage tools become flags-only (`--api-key` on catalogue-fetch,
+  `--email` on fulltext-retrieval); driver scripts source `.env` and
+  pass the flag. `--max-records` default cap dropped. Stages 7 and 8
+  refuse `--skip-existing` when the recorded `prompt_sha256` differs
+  from the current run's. `flatten_sections` lifts to
+  [`tei.py`](../src/laglitsynth/fulltext_extraction/tei.py); stages 7
+  and 8 share it. `ExtractionRecord` subclasses `_ExtractionPayload`
+  so the 28 codebook fields no longer drift between two declarations.
+  `screening-abstracts-export` collapses to one subcommand with
+  `--format csv|xlsx`. `_RunMeta`/`_LlmMeta` lose their leading
+  underscores. NESH sbatch wait loops emit real elapsed time. Test
+  helpers move to `tests/conftest.py`; mock-heavy seed/temperature
+  call-site assertions go. Production code: −114 lines net.
+
+- [LLM-stage timeouts and reviewer-xlsx restructure](done/llm-timeout-and-reviewer-xlsx.md)
+  — fixes the `openai.APITimeoutError` that killed
+  `nesh-pipeline-22047331` mid-stage 8 (timeout + retries on the OpenAI
+  client in stages 3/7/8, new `llm-timeout` sentinel); flips stage 4
+  to pass-through every null-score sentinel so `no-abstract` works
+  reach fulltext-retrieval; gives stage 3 the same title/authors/year/
+  abstract block the human reviewer sees so scoring is symmetric;
+  reworks the stage-3 reviewer xlsx with bibliographic header, verbatim
+  criterion, percent-formatted score, reviewer placeholders, LLM
+  verdict block collapsed by default.
 
 ## In flight
 
@@ -66,7 +92,7 @@ Update this file when a plan is written, implemented, or archived.
 
 ## Queued — ready to plan
 
-- Commit `pixi.lock`. Remove from `.gitignore`, add to repo.
+- (None.)
 
 ## Deferred until pipeline is feature-complete
 

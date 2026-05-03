@@ -9,10 +9,11 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.screening_adjudication.models import TOOL_NAME, AdjudicationMeta, AdjudicationVerdict
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
-from laglitsynth.io import JsonlReadStats, read_jsonl, read_works_jsonl, write_jsonl, write_meta
-from laglitsynth.models import _RunMeta
+from laglitsynth.io import JsonlReadStats, read_jsonl, write_jsonl, write_meta
+from laglitsynth.models import RunMeta
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ def run(args: argparse.Namespace) -> None:
 
     stats = JsonlReadStats()
     # Load catalogue into a lookup dict by work_id
-    works_by_id = {w.id: w for w in read_works_jsonl(args.catalogue, stats)}
+    works_by_id = {w.id: w for w in read_jsonl(args.catalogue, Work, stats)}
 
     # Load stage-3 verdicts
     verdicts = list(read_jsonl(args.input, ScreeningVerdict, stats))
@@ -72,9 +73,14 @@ def run(args: argparse.Namespace) -> None:
     adj_verdicts: list[AdjudicationVerdict] = []
     accepted_works = []
     missing_in_catalogue = 0
+    accepted_null_score_count = 0
 
     for verdict in verdicts:
-        if verdict.relevance_score is None or verdict.relevance_score < threshold:
+        # Null-score sentinels (no-abstract, llm-parse-failure, llm-timeout)
+        # ride through: a missing or unparseable abstract is not evidence
+        # of irrelevance. Only an explicit numeric score below threshold
+        # excludes.
+        if verdict.relevance_score is not None and verdict.relevance_score < threshold:
             continue
         work = works_by_id.get(verdict.work_id)
         if work is None:
@@ -84,13 +90,15 @@ def run(args: argparse.Namespace) -> None:
                 verdict.work_id,
             )
             continue
+        if verdict.relevance_score is None:
+            accepted_null_score_count += 1
         adj_verdicts.append(
             AdjudicationVerdict(
                 work_id=verdict.work_id,
                 decision="accept",
                 reviewer="pass-through",
                 adjudicated_at=now,
-                reason=None,
+                reason=verdict.reason if verdict.relevance_score is None else None,
             )
         )
         accepted_works.append(work)
@@ -100,7 +108,7 @@ def run(args: argparse.Namespace) -> None:
     write_jsonl(adj_verdicts, output_dir / "verdicts.jsonl")
     write_jsonl(accepted_works, output_dir / "included.jsonl")
 
-    run_meta = _RunMeta(
+    run_meta = RunMeta(
         tool=TOOL_NAME,
         run_at=now,
         validation_skipped=stats.skipped,
@@ -116,6 +124,7 @@ def run(args: argparse.Namespace) -> None:
             # adjudication will populate this.
             rejected_count=0,
             missing_in_catalogue=missing_in_catalogue,
+            accepted_null_score_count=accepted_null_score_count,
         ),
     )
 

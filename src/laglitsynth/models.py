@@ -1,7 +1,7 @@
 from pydantic import BaseModel, ConfigDict
 
 
-class _RunMeta(BaseModel):
+class RunMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     tool: str
     tool_version: str = "alpha"
@@ -9,7 +9,7 @@ class _RunMeta(BaseModel):
     validation_skipped: int  # records dropped by read_jsonl on ValidationError
 
 
-class _LlmMeta(BaseModel):
+class LlmMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     model: str
     temperature: float

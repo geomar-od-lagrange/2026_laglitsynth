@@ -209,6 +209,33 @@ class TeiDocument:
         return refs
 
 
+def flatten_sections(tei: TeiDocument) -> list[str]:
+    """Depth-first flatten of all top-level sections into title+paragraph blocks.
+
+    Each section contributes one block: the title (if any) on its first
+    line, followed by its paragraphs (one per line). Nested children
+    contribute their own blocks in document order. Returns a flat list of
+    block strings, one per section node encountered depth-first.
+    """
+
+    def _flatten_one(section: Section) -> list[str]:
+        blocks: list[str] = []
+        lines: list[str] = []
+        if section.title:
+            lines.append(section.title)
+        lines.extend(section.paragraphs)
+        if lines:
+            blocks.append("\n".join(lines))
+        for child in section.children:
+            blocks.extend(_flatten_one(child))
+        return blocks
+
+    result: list[str] = []
+    for top in tei.sections():
+        result.extend(_flatten_one(top))
+    return result
+
+
 def _build_bib_reference(bibl: etree._Element) -> BibReference:
     authors: list[str] = []
     for author in bibl.findall(f".//{TEI_NS}author"):

@@ -6,9 +6,9 @@ Each line is a validated [`Work`](data-model.md) record.
 ## Usage
 
 ```bash
-laglitsynth catalogue-fetch "lagrangian oceanography"
-laglitsynth catalogue-fetch "lagrangian oceanography" --from-year 2020 --to-year 2025
-laglitsynth catalogue-fetch "submesoscale dynamics" -o data/catalogue-fetch/custom.jsonl --max-records 500
+laglitsynth catalogue-fetch "lagrangian oceanography" --api-key $OPENALEX_API_KEY
+laglitsynth catalogue-fetch "lagrangian oceanography" --api-key $OPENALEX_API_KEY --from-year 2020 --to-year 2025
+laglitsynth catalogue-fetch "submesoscale dynamics" --api-key $OPENALEX_API_KEY -o data/catalogue-fetch/custom.jsonl --max-records 500
 ```
 
 ## CLI arguments
@@ -16,10 +16,11 @@ laglitsynth catalogue-fetch "submesoscale dynamics" -o data/catalogue-fetch/cust
 | Argument | Description |
 |---|---|
 | `QUERY` (positional) | Search query string (required). |
+| `--api-key` | OpenAlex API key (required). Pass `$OPENALEX_API_KEY` from your environment. |
 | `-o` / `--output` | Output JSONL path. Default: `data/catalogue-fetch/<slug>_<timestamp>.jsonl`. |
 | `--from-year` | Filter publications from this year onward. |
 | `--to-year` | Filter publications up to this year. |
-| `--max-records` | Cap on number of results. Defaults to 199 as a safety cap -- pass explicitly to fetch more. |
+| `--max-records` | Cap on number of results. Omit to fetch all matching works. |
 
 ## Output format
 
@@ -37,8 +38,8 @@ lowercased with non-alphanumeric runs replaced by underscores.
 ## Authentication
 
 OpenAlex requires a free API key. Register at
-<https://openalex.org/settings/api> and set the `OPENALEX_API_KEY` environment
-variable (or add it to a `.env` file in the project root).
+<https://openalex.org/settings/api>. Pass the key via `--api-key`; scripts
+should source `.env` and pass `--api-key "$OPENALEX_API_KEY"`.
 
 ## Abstract reconstruction
 
@@ -48,8 +49,9 @@ Downstream tools never see the inverted index format.
 
 ## Error handling
 
-- Missing API key fails fast with a link to the registration page.
+- `--api-key` is required; argparse exits immediately if it is absent.
 - Invalid records are logged and skipped (OpenAlex data quality issue
-  affecting a small fraction of records).
+  affecting a small fraction of records); the count is written to
+  `validation_skipped` in the meta sidecar.
 - Transient API errors (429, 5xx) are retried automatically (3 retries with
   backoff).

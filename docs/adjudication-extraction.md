@@ -25,11 +25,13 @@ The command copies the input to
 
 ### ExtractionAdjudicationMeta
 
+The sidecar follows the shared `RunMeta`-based shape used by all pipeline
+stages (see [`docs/data-model.md`](data-model.md)):
+
 ```python
-class ExtractionAdjudicationMeta(_Base):
-    tool: str = "laglitsynth.extraction_adjudication.extraction"
-    tool_version: str = "alpha"
-    adjudicated_at: str
+class ExtractionAdjudicationMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run: RunMeta   # tool, tool_version, run_at, validation_skipped
     mode: str = "pass_through"
     input_count: int
     output_count: int

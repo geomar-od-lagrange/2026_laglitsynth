@@ -1,6 +1,18 @@
 data/**
 !data/**/
 !data/**/.gitkeep
+
+# Bench-mode TEI files live at the repo root (rsync'd in). Copyright.
+*.tei.xml
+
+# sbatch --output / --error files (default to submission cwd).
+nesh-pipeline-*.out
+nesh-pipeline-*.err
+bench-*.out
+bench-*.err
+
+# Per-run service logs (Ollama / GROBID / bench TSVs).
+logs/
 .claude/
 .env
 .pixi/
@@ -8,7 +20,6 @@ __pycache__/
 *.egg-info/
 *.pyc
 dist/
-pixi.lock
 .coverage
 *.jsonl
 *.meta.json

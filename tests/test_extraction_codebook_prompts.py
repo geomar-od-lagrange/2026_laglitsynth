@@ -1,12 +1,16 @@
-"""Tests for ``laglitsynth.extraction_codebook.prompts``."""
+"""Tests for ``laglitsynth.extraction_codebook.prompts``.
+
+The system-prompt / field-list assembly tests live in
+``test_extraction_codebook_loader.py`` now that those concerns moved
+into the codebook module. This file only covers the user-message
+render path (TEI flattening + char-budget truncation) and the
+``source_basis`` framing tag.
+"""
 
 from __future__ import annotations
 
-from laglitsynth.extraction_codebook.models import ExtractionRecord, _ExtractionPayload
 from laglitsynth.extraction_codebook.prompts import (
-    SYSTEM_PROMPT,
     build_user_message,
-    render_abstract,
     render_fulltext,
 )
 from laglitsynth.fulltext_extraction.tei import TeiDocument
@@ -111,11 +115,6 @@ class TestRenderFulltext:
         assert truncated is False
 
 
-class TestRenderAbstract:
-    def test_passthrough(self) -> None:
-        assert render_abstract("An abstract.") == "An abstract."
-
-
 class TestBuildUserMessage:
     def test_full_text_tag(self) -> None:
         msg = build_user_message("full_text", "body text")
@@ -124,49 +123,3 @@ class TestBuildUserMessage:
     def test_abstract_only_tag(self) -> None:
         msg = build_user_message("abstract_only", "just the abstract")
         assert msg == "abstract_only:\njust the abstract"
-
-
-class TestSystemPromptCoversEveryField:
-    """Guard against prompt/model drift.
-
-    Every LLM-fillable field in ``_ExtractionPayload`` must appear in
-    the system prompt's field list. If a field is added to the payload
-    without regenerating the prompt, this test fails — which is the
-    whole point.
-    """
-
-    def test_every_payload_field_named_in_prompt(self) -> None:
-        missing = [
-            name for name in _ExtractionPayload.model_fields
-            if name not in SYSTEM_PROMPT
-        ]
-        assert missing == [], (
-            f"Fields absent from SYSTEM_PROMPT: {missing}. "
-            "Regenerate the field list from _ExtractionPayload."
-        )
-
-    def test_identification_fields_not_in_prompt(self) -> None:
-        # The identification block is filled by the caller, not the LLM.
-        # These keys should NOT be in the payload schema; this is a
-        # separate assertion in case someone leaks them in.
-        payload_fields = set(_ExtractionPayload.model_fields)
-        for ident in ("work_id", "source_basis", "reason", "seed", "truncated"):
-            assert ident not in payload_fields, (
-                f"Identification field {ident!r} leaked into _ExtractionPayload."
-            )
-
-    def test_content_fields_match_record_minus_identification(self) -> None:
-        # The payload covers exactly the non-identification fields of
-        # the full record — guarantees we can compose the record from
-        # (payload dump + identification kwargs) without missing a key.
-        record_fields = set(ExtractionRecord.model_fields)
-        payload_fields = set(_ExtractionPayload.model_fields)
-        identification = {
-            "work_id",
-            "source_basis",
-            "reason",
-            "seed",
-            "truncated",
-            "raw_response",
-        }
-        assert payload_fields == record_fields - identification

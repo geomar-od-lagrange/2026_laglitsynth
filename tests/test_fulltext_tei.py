@@ -14,6 +14,7 @@ from laglitsynth.fulltext_extraction.tei import (
     Figure,
     Section,
     TeiDocument,
+    flatten_sections,
 )
 
 TEI_NS = "http://www.tei-c.org/ns/1.0"
@@ -313,6 +314,45 @@ class TestTeiDocumentFailure:
             assert secs == []
         except etree.XMLSyntaxError:
             pass
+
+
+class TestFlattenSections:
+    def test_nested_sections_depth_first(self) -> None:
+        # Two top-level sections; the first has one nested child.
+        xml = _wrap_tei_body(f"""
+            <div xmlns="{TEI_NS}" xml:id="s1">
+              <head>Introduction</head>
+              <p>Intro text.</p>
+              <div xmlns="{TEI_NS}" xml:id="s1-1">
+                <head>Background</head>
+                <p>Background text.</p>
+              </div>
+            </div>
+            <div xmlns="{TEI_NS}" xml:id="s2">
+              <head>Methods</head>
+              <p>Methods text.</p>
+            </div>
+        """)
+        doc = TeiDocument.from_bytes(xml)
+        blocks = flatten_sections(doc)
+        # Depth-first order: Introduction block, Background block, Methods block.
+        assert len(blocks) == 3
+        assert blocks[0] == "Introduction\nIntro text."
+        assert blocks[1] == "Background\nBackground text."
+        assert blocks[2] == "Methods\nMethods text."
+
+    def test_empty_document_returns_empty_list(self) -> None:
+        xml = _wrap_tei_body("")
+        assert flatten_sections(TeiDocument.from_bytes(xml)) == []
+
+    def test_section_without_title(self) -> None:
+        xml = _wrap_tei_body(f"""
+            <div xmlns="{TEI_NS}">
+              <p>Only a paragraph, no heading.</p>
+            </div>
+        """)
+        blocks = flatten_sections(TeiDocument.from_bytes(xml))
+        assert blocks == ["Only a paragraph, no heading."]
 
 
 class TestContentSha256:

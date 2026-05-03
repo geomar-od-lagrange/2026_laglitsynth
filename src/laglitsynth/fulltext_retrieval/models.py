@@ -2,7 +2,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict
 
-from laglitsynth.models import _RunMeta
+from laglitsynth.models import RunMeta
 
 TOOL_NAME = "laglitsynth.fulltext_retrieval.retrieve"
 
@@ -10,7 +10,6 @@ TOOL_NAME = "laglitsynth.fulltext_retrieval.retrieve"
 class RetrievalStatus(str, Enum):
     retrieved_oa = "retrieved_oa"
     retrieved_unpaywall = "retrieved_unpaywall"
-    retrieved_preprint = "retrieved_preprint"
     retrieved_manual = "retrieved_manual"
     abstract_only = "abstract_only"
     failed = "failed"
@@ -28,7 +27,7 @@ class RetrievalRecord(BaseModel):
 
 class RetrievalMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    run: _RunMeta
+    run: RunMeta
     total_works: int
     retrieved_count: int
     abstract_only_count: int
