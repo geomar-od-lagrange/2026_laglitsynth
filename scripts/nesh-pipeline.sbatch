@@ -156,35 +156,36 @@ else
 fi
 
 # Pull upstream LLM models via proxy. Each is the FROM base for the
-# per-stage tag synthesised next.
-for m in "$SCREENING_MODEL" "$ELIGIBILITY_MODEL" "$EXTRACTION_MODEL"; do
+# per-stage tag synthesised next. sort -u so a shared base (e.g.
+# screening+eligibility on gemma3:4b) is only pulled once.
+for m in $(printf '%s\n' "$SCREENING_MODEL" "$ELIGIBILITY_MODEL" "$EXTRACTION_MODEL" | sort -u); do
     echo "==> ollama pull $m"
     "$OLLAMA_DIR/bin/ollama" pull "$m"
 done
 
 # Synthesise per-stage tags with PARAMETER num_ctx baked in. The
 # per-request num_ctx hint via OpenAI extra_body does not reliably
-# size the runner — only Modelfile-baked num_ctx does. Heredoc-from-
-# env keeps this sbatch the single source of truth (no checked-in
-# Modelfile) and makes a sweep over EXTRACTION_NUM_CTX a one-liner
-# at submit time. See plans/done/ollama-num-ctx-per-model.md.
-echo "==> ollama create laglit-screen (num_ctx=$SCREENING_NUM_CTX, FROM $SCREENING_MODEL)"
-"$OLLAMA_DIR/bin/ollama" create laglit-screen -f - <<EOF
-FROM ${SCREENING_MODEL}
-PARAMETER num_ctx ${SCREENING_NUM_CTX}
+# size the runner — only Modelfile-baked num_ctx does. Each Modelfile
+# is two lines, written to a tempfile because `ollama create -f -`
+# (stdin) is not supported by the Ollama version on NESH ("no
+# Modelfile or safetensors files found"). See
+# plans/done/ollama-num-ctx-per-model.md.
+create_tag() {
+    local tag="$1" base="$2" num_ctx="$3"
+    local mf
+    mf=$(mktemp)
+    cat >"$mf" <<EOF
+FROM $base
+PARAMETER num_ctx $num_ctx
 EOF
+    echo "==> ollama create $tag (num_ctx=$num_ctx, FROM $base)"
+    "$OLLAMA_DIR/bin/ollama" create "$tag" -f "$mf"
+    rm -f "$mf"
+}
 
-echo "==> ollama create laglit-eligibility (num_ctx=$ELIGIBILITY_NUM_CTX, FROM $ELIGIBILITY_MODEL)"
-"$OLLAMA_DIR/bin/ollama" create laglit-eligibility -f - <<EOF
-FROM ${ELIGIBILITY_MODEL}
-PARAMETER num_ctx ${ELIGIBILITY_NUM_CTX}
-EOF
-
-echo "==> ollama create laglit-extract (num_ctx=$EXTRACTION_NUM_CTX, FROM $EXTRACTION_MODEL)"
-"$OLLAMA_DIR/bin/ollama" create laglit-extract -f - <<EOF
-FROM ${EXTRACTION_MODEL}
-PARAMETER num_ctx ${EXTRACTION_NUM_CTX}
-EOF
+create_tag laglit-screen       "$SCREENING_MODEL"   "$SCREENING_NUM_CTX"
+create_tag laglit-eligibility  "$ELIGIBILITY_MODEL" "$ELIGIBILITY_NUM_CTX"
+create_tag laglit-extract      "$EXTRACTION_MODEL"  "$EXTRACTION_NUM_CTX"
 
 # Flip the *_MODEL exports from upstream tags (used by pull + create
 # above) to the local synthesised tags consumed by run-pipeline.sh.
