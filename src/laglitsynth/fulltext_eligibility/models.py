@@ -75,4 +75,5 @@ class EligibilityMeta(BaseModel):
     no_source_count: int
     tei_parse_failure_count: int
     llm_parse_failure_count: int
+    llm_timeout_count: int = 0
     by_source_basis: dict[str, int]

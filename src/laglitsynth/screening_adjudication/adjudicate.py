@@ -73,9 +73,14 @@ def run(args: argparse.Namespace) -> None:
     adj_verdicts: list[AdjudicationVerdict] = []
     accepted_works = []
     missing_in_catalogue = 0
+    accepted_null_score_count = 0
 
     for verdict in verdicts:
-        if verdict.relevance_score is None or verdict.relevance_score < threshold:
+        # Null-score sentinels (no-abstract, llm-parse-failure, llm-timeout)
+        # ride through: a missing or unparseable abstract is not evidence
+        # of irrelevance. Only an explicit numeric score below threshold
+        # excludes.
+        if verdict.relevance_score is not None and verdict.relevance_score < threshold:
             continue
         work = works_by_id.get(verdict.work_id)
         if work is None:
@@ -85,13 +90,15 @@ def run(args: argparse.Namespace) -> None:
                 verdict.work_id,
             )
             continue
+        if verdict.relevance_score is None:
+            accepted_null_score_count += 1
         adj_verdicts.append(
             AdjudicationVerdict(
                 work_id=verdict.work_id,
                 decision="accept",
                 reviewer="pass-through",
                 adjudicated_at=now,
-                reason=None,
+                reason=verdict.reason if verdict.relevance_score is None else None,
             )
         )
         accepted_works.append(work)
@@ -117,6 +124,7 @@ def run(args: argparse.Namespace) -> None:
             # adjudication will populate this.
             rejected_count=0,
             missing_in_catalogue=missing_in_catalogue,
+            accepted_null_score_count=accepted_null_score_count,
         ),
     )
 

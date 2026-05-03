@@ -89,6 +89,7 @@ class ExtractionCodebookMeta(BaseModel):
     abstract_only_count: int
     skipped_count: int          # no-source + tei-parse-failure
     llm_parse_failure_count: int
+    llm_timeout_count: int
     truncated_count: int
     by_source_basis: dict[str, int]
 ```
@@ -141,6 +142,7 @@ All sentinels set every content field `None` and `seed=None`.
 | `no-source` | `none` | No `ExtractedDocument`, empty TEI body, and no abstract. |
 | `tei-parse-failure` | `full_text` | `sections()` raises `lxml.etree.XMLSyntaxError`. No abstract fallback — a malformed TEI is an operator-visible bug. |
 | `llm-parse-failure` | whichever branch called the LLM | The LLM response did not validate against the payload schema. |
+| `llm-timeout` | whichever branch called the LLM | The OpenAI client raised `APITimeoutError` / `APIConnectionError` after all retries exhausted. The OpenAI client is constructed with `timeout=600s` and `max_retries=3` so a single hang in a long extraction does not kill the stage. |
 
 Empty-body TEI (valid XML, no content) returns `[]` from `sections()`
 and falls back to the abstract per step 2.

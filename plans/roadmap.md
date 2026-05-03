@@ -75,18 +75,20 @@ Update this file when a plan is written, implemented, or archived.
   helpers move to `tests/conftest.py`; mock-heavy seed/temperature
   call-site assertions go. Production code: −114 lines net.
 
-## In flight
-
-- [LLM-stage timeouts and reviewer-xlsx restructure](llm-timeout-and-reviewer-xlsx.md)
+- [LLM-stage timeouts and reviewer-xlsx restructure](done/llm-timeout-and-reviewer-xlsx.md)
   — fixes the `openai.APITimeoutError` that killed
   `nesh-pipeline-22047331` mid-stage 8 (timeout + retries on the OpenAI
   client in stages 3/7/8, new `llm-timeout` sentinel); flips stage 4
   to pass-through every null-score sentinel so `no-abstract` works
   reach fulltext-retrieval; gives stage 3 the same title/authors/year/
   abstract block the human reviewer sees so scoring is symmetric;
-  reworks the stage-3 reviewer xlsx per [remarks.md](../remarks.md)
-  with bibliographic header, verbatim criterion, percent-formatted
-  score, reviewer placeholders, LLM verdict block collapsed by default.
+  reworks the stage-3 reviewer xlsx with bibliographic header, verbatim
+  criterion, percent-formatted score, reviewer placeholders, LLM
+  verdict block collapsed by default.
+
+## In flight
+
+- (None.)
 
 ## Queued — ready to plan
 

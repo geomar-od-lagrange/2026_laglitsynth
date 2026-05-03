@@ -10,9 +10,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from openai import APIConnectionError, APITimeoutError
+
 from laglitsynth.screening_abstracts.screen import (
     SYSTEM_PROMPT,
     classify_abstract,
+    format_screening_input,
     screen_works,
 )
 from laglitsynth.screening_abstracts.models import ScreeningMeta, ScreeningVerdict
@@ -59,6 +62,62 @@ def test_classify_abstract_missing_fields_returns_sentinel() -> None:
     )
     assert verdict.reason == "llm-parse-failure"
     assert verdict.raw_response == '{"relevance_score": 50}'
+
+
+def test_classify_abstract_timeout_returns_sentinel() -> None:
+    """APITimeoutError after retries → reason='llm-timeout' sentinel."""
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.side_effect = APITimeoutError(
+        request=MagicMock()
+    )
+    verdict = classify_abstract(
+        "W1", "input block", "prompt", model="m", base_url="http://x", client=mock_client
+    )
+    assert verdict.reason == "llm-timeout"
+    assert verdict.relevance_score is None
+    assert verdict.seed is None
+    assert verdict.raw_response is None
+
+
+def test_classify_abstract_connection_error_returns_sentinel() -> None:
+    """APIConnectionError after retries → reason='llm-timeout' sentinel."""
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.side_effect = APIConnectionError(
+        request=MagicMock()
+    )
+    verdict = classify_abstract(
+        "W1", "input block", "prompt", model="m", base_url="http://x", client=mock_client
+    )
+    assert verdict.reason == "llm-timeout"
+    assert verdict.relevance_score is None
+    assert verdict.seed is None
+
+
+def test_format_screening_input_complete_work() -> None:
+    work = _make_work(
+        "W1",
+        title="A Real Title",
+        abstract="An abstract.",
+        publication_year=2023,
+    )
+    rendered = format_screening_input(work)
+    assert "Title: A Real Title" in rendered
+    assert "Abstract: An abstract." in rendered
+    assert "Year: 2023" in rendered
+    # No authorships fixture data → "<unknown>"
+    assert "Authors: <unknown>" in rendered
+
+
+def test_format_screening_input_missing_fields_render_unknown() -> None:
+    work = _make_work(
+        "W1",
+        title=None,
+        abstract="Has abstract.",
+        publication_year=None,
+    )
+    rendered = format_screening_input(work)
+    assert "Title: <unknown>" in rendered
+    assert "Year: <unknown>" in rendered
 
 
 def test_classify_abstract_wrong_types_returns_sentinel() -> None:
@@ -566,6 +625,7 @@ def test_prompt_sha256_matches(tmp_path: Path) -> None:
     meta = json.loads((out_dir / "screening-meta.json").read_text())
     assert meta["llm"]["prompt_sha256"] == expected_digest
     assert len(meta["llm"]["prompt_sha256"]) == 64  # full hex digest
+    assert meta["prompt"] == user_prompt
 
 
 # --- Concurrent screening ---

@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from lxml import etree
-from openai import OpenAI
+from openai import APIConnectionError, APITimeoutError, OpenAI
 from pydantic import ValidationError
 
 from laglitsynth.catalogue_fetch.models import Work
@@ -45,6 +45,8 @@ logger = logging.getLogger(__name__)
 
 _TEMPERATURE = 0.8
 _NUM_CTX = 32768
+_LLM_TIMEOUT_SECONDS = 300
+_LLM_MAX_RETRIES = 3
 
 
 def classify_eligibility(
@@ -63,17 +65,28 @@ def classify_eligibility(
     stage 8's ``extract_codebook`` shape and error handling.
     """
     seed = random.randint(0, 2**31 - 1)
-    response = client.chat.completions.create(
-        model=model,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-        temperature=_TEMPERATURE,
-        seed=seed,
-        extra_body={"options": {"num_ctx": _NUM_CTX}},
-    )
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=_TEMPERATURE,
+            seed=seed,
+            extra_body={"options": {"num_ctx": _NUM_CTX}},
+        )
+    except (APITimeoutError, APIConnectionError) as exc:
+        logger.warning("LLM timeout for %s: %s", work_id, exc)
+        return EligibilityVerdict(
+            work_id=work_id,
+            eligible=None,
+            source_basis=source_basis,
+            reason="llm-timeout",
+            seed=None,
+            raw_response=None,
+        )
     content = response.choices[0].message.content or "{}"
     try:
         payload = _EligibilityPayload.model_validate_json(content)
@@ -304,7 +317,12 @@ def run(args: argparse.Namespace) -> None:
     if not args.dry_run and not args.skip_existing and verdicts_path.exists():
         verdicts_path.unlink()
 
-    client = OpenAI(base_url=f"{args.base_url}/v1", api_key="ollama")
+    client = OpenAI(
+        base_url=f"{args.base_url}/v1",
+        api_key="ollama",
+        timeout=_LLM_TIMEOUT_SECONDS,
+        max_retries=_LLM_MAX_RETRIES,
+    )
 
     t0 = time.monotonic()
     index = 0
@@ -357,17 +375,26 @@ def run(args: argparse.Namespace) -> None:
     llm_parse_failure_count = sum(
         1 for v in all_verdicts if v.reason == "llm-parse-failure"
     )
+    llm_timeout_count = sum(
+        1 for v in all_verdicts if v.reason == "llm-timeout"
+    )
 
     by_source_basis: dict[str, int] = {}
     for v in all_verdicts:
         by_source_basis[v.source_basis] = by_source_basis.get(v.source_basis, 0) + 1
 
-    skipped_total = no_source_count + tei_parse_failure_count + llm_parse_failure_count
+    skipped_total = (
+        no_source_count
+        + tei_parse_failure_count
+        + llm_parse_failure_count
+        + llm_timeout_count
+    )
     print(
         f"\nDone in {elapsed:.1f}s: {eligible_count} eligible, "
         f"{excluded_count} excluded, {skipped_total} skipped "
         f"({no_source_count} no-source, {tei_parse_failure_count} tei-parse-failure, "
-        f"{llm_parse_failure_count} llm-parse-failure).",
+        f"{llm_parse_failure_count} llm-parse-failure, "
+        f"{llm_timeout_count} llm-timeout).",
         file=sys.stderr,
     )
 
@@ -404,6 +431,7 @@ def run(args: argparse.Namespace) -> None:
             no_source_count=no_source_count,
             tei_parse_failure_count=tei_parse_failure_count,
             llm_parse_failure_count=llm_parse_failure_count,
+            llm_timeout_count=llm_timeout_count,
             by_source_basis=by_source_basis,
         ),
     )

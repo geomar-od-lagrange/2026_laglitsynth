@@ -7,9 +7,12 @@ if needed.
 ## Prototype scope
 
 **Pass-through.** The prototype implementation accepts every work whose
-`relevance_score` meets `--screening-threshold` and records the decision
-as an `AdjudicationVerdict`. No human review, no threshold adjustment. The
-stage exists so that:
+`relevance_score` meets `--screening-threshold` *and* every work whose
+`relevance_score` is `None` (the screening sentinels: `no-abstract`,
+`llm-parse-failure`, `llm-timeout`). A null score is not evidence of
+irrelevance — a missing abstract or a wedged LLM call should not
+foreclose full-text retrieval. Only an explicit numeric score below
+threshold excludes. The stage exists so that:
 
 - The pipeline has the correct stage sequence and input/output contracts.
 - Downstream stages consume `included.jsonl`, not the screened verdicts
@@ -51,9 +54,13 @@ class AdjudicationVerdict(BaseModel):
 ```
 
 The pass-through MVP sets `decision="accept"` and `reviewer="pass-through"`
-for every work with `relevance_score >= screening-threshold`. Real human
-adjudication will populate `reviewer` with a user identifier and `reason`
-with a justification when overriding the LLM verdict.
+for every work with `relevance_score >= screening-threshold` and for
+every work with a null score (sentinel verdicts). For sentinels,
+`reason` carries the screening sentinel string (`no-abstract`,
+`llm-parse-failure`, `llm-timeout`) so an operator can see why the
+work rode through without a numeric score. Real human adjudication
+will populate `reviewer` with a user identifier and `reason` with a
+justification when overriding the LLM verdict.
 
 ### AdjudicationMeta
 
@@ -65,6 +72,8 @@ class AdjudicationMeta(BaseModel):
     input_count: int
     accepted_count: int
     rejected_count: int
+    missing_in_catalogue: int
+    accepted_null_score_count: int   # of accepted_count, how many were sentinels
 ```
 
 ## What the real implementation will add

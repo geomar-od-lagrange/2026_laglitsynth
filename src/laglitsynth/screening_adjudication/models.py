@@ -24,3 +24,4 @@ class AdjudicationMeta(BaseModel):
     accepted_count: int
     rejected_count: int
     missing_in_catalogue: int
+    accepted_null_score_count: int = 0

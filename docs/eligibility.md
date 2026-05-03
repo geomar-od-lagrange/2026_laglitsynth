@@ -103,9 +103,9 @@ carry `tool`, `tool_version`, `run_at`, `validation_skipped`, `model`,
 any prompt- or context-window change shifts the hash.
 
 Per-sentinel counts (`no_source_count`, `tei_parse_failure_count`,
-`llm_parse_failure_count`) let operators diagnose a run without
-re-reading `verdicts.jsonl`. The count symmetry with stage 8
-(`extraction-codebook`) is deliberate.
+`llm_parse_failure_count`, `llm_timeout_count`) let operators diagnose
+a run without re-reading `verdicts.jsonl`. The count symmetry with
+stage 8 (`extraction-codebook`) is deliberate.
 
 ## Storage layout
 
@@ -144,6 +144,7 @@ sentinels are excluded from it by construction.
 | `no-source` | `none` | No `ExtractedDocument`, empty TEI body, and no abstract. |
 | `tei-parse-failure` | `full_text` | `sections()` raises `lxml.etree.XMLSyntaxError`. No abstract fallback — a malformed TEI is an operator-visible bug. |
 | `llm-parse-failure` | whichever branch called the LLM | The LLM returned output that could not be parsed into `{"eligible": bool, "reason": str}`. |
+| `llm-timeout` | whichever branch called the LLM | The OpenAI client raised `APITimeoutError` / `APIConnectionError` after all retries exhausted. The OpenAI client is constructed with `timeout=300s` and `max_retries=3` so a single hang on a long full-text prompt does not kill the stage. |
 
 Empty-body TEI (valid XML, no content) returns `[]` from `sections()`
 and falls back to the abstract per step 2 — extraction succeeded, just

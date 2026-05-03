@@ -78,7 +78,7 @@ run_stage 2 catalogue-dedup \
 run_stage 3 screening-abstracts \
     laglitsynth screening-abstracts \
         "$ROOT/catalogue-dedup/deduplicated.jsonl" \
-        "Is this abstract about Lagrangian particle tracking in oceanography?" \
+        "On a scale from 0% (not relevant) to 100% (perfectly relevant), how relevant is this work to Lagrangian particle tracking in oceanography?" \
         --output-dir "$ROOT/screening-abstracts" \
         --model "$SCREENING_MODEL" \
         --base-url "$OLLAMA_BASE" \

@@ -14,7 +14,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 
-from openai import OpenAI
+from openai import APIConnectionError, APITimeoutError, OpenAI
 
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.io import (
@@ -38,11 +38,37 @@ You must return a JSON object with exactly two fields:
 Return ONLY the JSON object, nothing else."""
 
 _TEMPERATURE = 0.8
+_LLM_TIMEOUT_SECONDS = 60
+_LLM_MAX_RETRIES = 3
+
+
+def format_screening_input(work: Work) -> str:
+    """Render the title/authors/year/abstract block fed to the LLM.
+
+    Title and publication_year render as ``<unknown>`` when None;
+    an empty author list renders as ``<unknown>``. The abstract is
+    expected to be present — caller skips works with no abstract.
+    """
+    title = work.title if work.title is not None else "<unknown>"
+    year = (
+        str(work.publication_year)
+        if work.publication_year is not None
+        else "<unknown>"
+    )
+    authors_list = [a.author.display_name for a in work.authorships]
+    authors = ", ".join(authors_list) if authors_list else "<unknown>"
+    abstract = work.abstract if work.abstract is not None else ""
+    return (
+        f"Title: {title}\n"
+        f"Authors: {authors}\n"
+        f"Year: {year}\n"
+        f"Abstract: {abstract}"
+    )
 
 
 def classify_abstract(
     work_id: str,
-    abstract: str,
+    formatted_input: str,
     prompt: str,
     *,
     model: str,
@@ -53,22 +79,34 @@ def classify_abstract(
 
     On JSON parse error returns a ``reason="llm-parse-failure"``
     sentinel with ``seed=None`` and the raw response attached so an
-    operator can see what the LLM actually said.
+    operator can see what the LLM actually said. On
+    ``APITimeoutError`` / ``APIConnectionError`` after all retries
+    are exhausted returns a ``reason="llm-timeout"`` sentinel.
     """
     seed = random.randint(0, 2**31 - 1)
-    response = client.chat.completions.create(
-        model=model,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": f"Criterion: {prompt}\n\nAbstract: {abstract}",
-            },
-        ],
-        temperature=_TEMPERATURE,
-        seed=seed,
-    )
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": f"Criterion: {prompt}\n\n{formatted_input}",
+                },
+            ],
+            temperature=_TEMPERATURE,
+            seed=seed,
+        )
+    except (APITimeoutError, APIConnectionError) as exc:
+        logger.warning("LLM timeout for %s: %s", work_id, exc)
+        return ScreeningVerdict(
+            work_id=work_id,
+            relevance_score=None,
+            reason="llm-timeout",
+            seed=None,
+            raw_response=None,
+        )
     content = response.choices[0].message.content or "{}"
     try:
         parsed = json.loads(content)
@@ -119,7 +157,12 @@ def screen_works(
     The server's ``OLLAMA_NUM_PARALLEL`` must be at least ``concurrency``
     for actual parallelism.
     """
-    client = OpenAI(base_url=f"{base_url}/v1", api_key="ollama")
+    client = OpenAI(
+        base_url=f"{base_url}/v1",
+        api_key="ollama",
+        timeout=_LLM_TIMEOUT_SECONDS,
+        max_retries=_LLM_MAX_RETRIES,
+    )
 
     works: list[Work] = []
     for idx, work in enumerate(read_jsonl(input_path, Work)):
@@ -137,7 +180,7 @@ def screen_works(
             fut = pool.submit(
                 classify_abstract,
                 work.id,
-                work.abstract,
+                format_screening_input(work),
                 prompt,
                 model=model,
                 base_url=base_url,
@@ -246,6 +289,8 @@ def run(args: argparse.Namespace) -> None:
     above_threshold_count = 0
     below_threshold_count = 0
     skipped_count = 0
+    llm_parse_failure_count = 0
+    llm_timeout_count = 0
     index = 0
 
     for verdict in screen_works(
@@ -258,8 +303,12 @@ def run(args: argparse.Namespace) -> None:
     ):
         index += 1
 
-        if verdict.reason in ("no-abstract", "llm-parse-failure"):
+        if verdict.reason in ("no-abstract", "llm-parse-failure", "llm-timeout"):
             skipped_count += 1
+            if verdict.reason == "llm-parse-failure":
+                llm_parse_failure_count += 1
+            elif verdict.reason == "llm-timeout":
+                llm_timeout_count += 1
             print(
                 f"  [{index}/{total}] skipped ({verdict.reason})"
                 f" — {verdict.work_id[-12:]}",
@@ -315,5 +364,8 @@ def run(args: argparse.Namespace) -> None:
                 above_threshold_count=above_threshold_count,
                 below_threshold_count=below_threshold_count,
                 skipped_count=skipped_count,
+                llm_parse_failure_count=llm_parse_failure_count,
+                llm_timeout_count=llm_timeout_count,
+                prompt=user_prompt,
             ),
         )

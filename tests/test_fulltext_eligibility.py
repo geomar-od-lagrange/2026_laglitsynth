@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from openai import APIConnectionError, APITimeoutError
 
 from laglitsynth.fulltext_eligibility.eligibility import (
     assess_works,
@@ -128,6 +129,32 @@ class TestClassifyEligibility:
         )
         assert verdict.eligible is True
         assert verdict.reason == "ok"
+
+    def test_timeout_returns_sentinel(self) -> None:
+        """APITimeoutError after retries → reason='llm-timeout' sentinel."""
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = APITimeoutError(
+            request=MagicMock()
+        )
+        verdict = classify_eligibility(
+            "W1", "prompt", "full_text", model="m", client=mock_client
+        )
+        assert verdict.reason == "llm-timeout"
+        assert verdict.eligible is None
+        assert verdict.source_basis == "full_text"
+        assert verdict.seed is None
+        assert verdict.raw_response is None
+
+    def test_connection_error_returns_sentinel(self) -> None:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = APIConnectionError(
+            request=MagicMock()
+        )
+        verdict = classify_eligibility(
+            "W1", "prompt", "abstract_only", model="m", client=mock_client
+        )
+        assert verdict.reason == "llm-timeout"
+        assert verdict.source_basis == "abstract_only"
 
     def test_seed_forwarded_to_client(self) -> None:
         resp = _mock_openai_response('{"eligible": true, "reason": "ok"}')
@@ -403,6 +430,61 @@ class TestAssessWorksCascade:
         assert verdicts[0].eligible is None
         assert verdicts[0].source_basis == "abstract_only"
         assert verdicts[0].seed is None
+
+    def test_timeout_does_not_stop_loop(self, tmp_path: Path) -> None:
+        """A timeout on one work yields a sentinel; subsequent works still run."""
+        catalogue = tmp_path / "catalogue.jsonl"
+        output_dir = tmp_path / "ext_out"
+        works = [
+            _make_work("W1", abstract="first abs"),
+            _make_work("W2", abstract="second abs"),
+        ]
+        _write_works_jsonl(catalogue, works)
+
+        def side_effect(
+            work_id: str,
+            prompt: str,
+            source_basis: str,
+            *,
+            model: str,
+            client: Any,
+        ) -> EligibilityVerdict:
+            if work_id == "W1":
+                return EligibilityVerdict(
+                    work_id=work_id,
+                    eligible=None,
+                    source_basis=source_basis,
+                    reason="llm-timeout",
+                    seed=None,
+                    raw_response=None,
+                )
+            return EligibilityVerdict(
+                work_id=work_id,
+                eligible=True,
+                source_basis=source_basis,
+                reason="ok",
+                seed=42,
+            )
+
+        with patch(
+            "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
+            side_effect=side_effect,
+        ):
+            verdicts = list(
+                assess_works(
+                    catalogue,
+                    {},
+                    output_dir,
+                    client=MagicMock(),
+                    model="m",
+                    max_records=None,
+                )
+            )
+
+        assert len(verdicts) == 2
+        by_id = {v.work_id: v for v in verdicts}
+        assert by_id["W1"].reason == "llm-timeout"
+        assert by_id["W2"].reason == "ok"
 
     def test_seed_recorded_on_successful_verdict(self, tmp_path: Path) -> None:
         catalogue = tmp_path / "catalogue.jsonl"

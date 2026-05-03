@@ -244,15 +244,27 @@ def test_xlsx_export_full_set(tmp_path: Path) -> None:
     wb = load_workbook(output_path)
     assert wb.sheetnames == ["Index", "W1", "W2"]
     index = wb["Index"]
-    assert index["A1"].value == "work_id"
-    assert index["A2"].value == "https://openalex.org/W1"
-    assert index["A3"].value == "https://openalex.org/W2"
+    # Reviewer-identity rows above the table.
+    assert index["A1"].value == "reviewer_name"
+    assert index["A2"].value == "reviewer_email"
+    assert index["A3"].value == "review_date"
+    # Header row at row 5; data rows from row 6.
+    assert index["A5"].value == "work_id"
+    assert index["F5"].value == "llm_score"
+    assert index["H5"].value == "sheet"
+    assert index["A6"].value == "https://openalex.org/W1"
+    assert index["A7"].value == "https://openalex.org/W2"
     # Index hyperlink points at the per-work sheet via the canonical
     # in-workbook ``location`` form.
-    link = index["E2"]
+    link = index["H6"]
     assert link.value == "W1"
     assert link.hyperlink is not None
     assert link.hyperlink.location == "'W1'!A1"
+    # llm_score formatted as percent and stored as fraction.
+    assert index["F6"].value == 0.8
+    assert index["F6"].number_format == "0%"
+    # Sentinel verdict has blank score cell.
+    assert index["F7"].value is None
 
 
 def test_xlsx_export_subset_preserves_verdict_order(tmp_path: Path) -> None:
@@ -326,12 +338,110 @@ def test_xlsx_export_sentinel_relevance_score_is_none(tmp_path: Path) -> None:
 
     wb = load_workbook(output_path)
     work_sheet = wb["W1"]
-    # Row 8 is relevance_score per build_work_sheet layout.
-    assert work_sheet["A8"].value == "relevance_score"
-    assert work_sheet["B8"].value is None
-    # llm_reason keeps its sentinel string.
-    assert work_sheet["A9"].value == "llm_reason"
-    assert work_sheet["B9"].value == "no-abstract"
+    # llm_score (row 17) is blank for sentinel verdicts.
+    assert work_sheet["A17"].value == "llm_score"
+    assert work_sheet["B17"].value is None
+    # llm_reason carries the sentinel string.
+    assert work_sheet["A18"].value == "llm_reason"
+    assert work_sheet["B18"].value == "no-abstract"
+
+
+def test_xlsx_work_sheet_layout(tmp_path: Path) -> None:
+    """Per-work sheet has the new layout: biblio block, criterion, scoring,
+    collapsed LLM details with hyperlinks and percent format."""
+    work = _make_work(
+        "https://openalex.org/W1",
+        title="The Title",
+        abstract="An abstract.",
+        doi="10.1000/xyz",
+        publication_year=2024,
+    )
+    verdicts = [
+        ScreeningVerdict(
+            work_id="https://openalex.org/W1",
+            relevance_score=85,
+            reason="relevant",
+            seed=1,
+            raw_response='{"relevance_score": 85, "reason": "relevant"}',
+        )
+    ]
+    verdicts_path, catalogue_path, output_path = _write_inputs(
+        tmp_path, [work], verdicts, output_suffix="xlsx"
+    )
+
+    # Write a meta file so the criterion is embedded.
+    meta_path = tmp_path / "screening-meta.json"
+    meta_path.write_text(
+        '{"run": {"tool": "t", "tool_version": "alpha", "run_at": "2026-01-01T00:00:00.000000+00:00", "validation_skipped": 0},'
+        ' "llm": {"model": "gemma3:4b", "temperature": 0.8, "prompt_sha256": "' + ("a" * 64) + '"},'
+        ' "threshold": 50, "input_path": "x", "input_count": 1,'
+        ' "above_threshold_count": 1, "below_threshold_count": 0, "skipped_count": 0,'
+        ' "llm_parse_failure_count": 0, "llm_timeout_count": 0,'
+        ' "prompt": "On a scale from 0% to 100%, how relevant?"}'
+    )
+
+    export_review_xlsx(
+        verdicts_path,
+        catalogue_path,
+        output_path,
+        n_subset=None,
+        meta_path=meta_path,
+    )
+    wb = load_workbook(output_path)
+    ws = wb["W1"]
+
+    # Row 1: back-to-Index hyperlink.
+    assert ws["A1"].value == "← back to Index"
+    assert ws["A1"].hyperlink is not None
+    assert ws["A1"].hyperlink.location == "'Index'!A1"
+
+    # Bibliographic block (rows 3-9).
+    assert ws["A3"].value == "title"
+    assert ws["B3"].value == "The Title"
+    assert ws["A4"].value == "authors"
+    assert ws["A5"].value == "journal"
+    assert ws["A6"].value == "publication_year"
+    assert ws["B6"].value == 2024
+    assert ws["A7"].value == "doi"
+    assert ws["B7"].value == "10.1000/xyz"
+    # DOI is an external hyperlink.
+    assert ws["B7"].hyperlink is not None
+    assert ws["B7"].hyperlink.target == "https://doi.org/10.1000/xyz"
+    assert ws["A8"].value == "openalex"
+    # OpenAlex URL is an external hyperlink.
+    assert ws["B8"].hyperlink is not None
+    assert ws["B8"].hyperlink.target == "https://openalex.org/W1"
+    assert ws["A9"].value == "abstract"
+    assert ws["B9"].value == "An abstract."
+
+    # Criterion + scoring block.
+    assert ws["A11"].value == "criterion"
+    assert ws["B11"].value == "On a scale from 0% to 100%, how relevant?"
+    assert ws["A12"].value == "scoring_instructions"
+    assert ws["A13"].value == "reviewer_score"
+    assert "<insert relevance" in ws["B13"].value
+    assert ws["A14"].value == "reviewer_reason"
+
+    # LLM details header (row 16, visible).
+    assert ws["A16"].value == "LLM details (expand to peek)"
+    # Collapsed rows 17-22 with outline level 1.
+    for row_idx in range(17, 23):
+        assert ws.row_dimensions[row_idx].outline_level == 1
+        assert ws.row_dimensions[row_idx].hidden is True
+    # summaryBelow=False: button at the visible header row (16).
+    assert ws.sheet_properties.outlinePr.summaryBelow is False
+
+    # llm_score formatted as percent (0.85).
+    assert ws["A17"].value == "llm_score"
+    assert ws["B17"].value == 0.85
+    assert ws["B17"].number_format == "0%"
+    assert ws["A18"].value == "llm_reason"
+    assert ws["B18"].value == "relevant"
+    assert ws["A19"].value == "llm_model"
+    assert ws["B19"].value == "gemma3:4b"
+    assert ws["A20"].value == "llm_temperature"
+    assert ws["A21"].value == "llm_prompt_sha256"
+    assert ws["A22"].value == "llm_raw_response"
 
 
 def test_xlsx_export_raises_on_missing_work(tmp_path: Path) -> None:

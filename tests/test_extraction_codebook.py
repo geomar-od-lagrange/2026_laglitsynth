@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from openai import APIConnectionError, APITimeoutError
 
 from laglitsynth.extraction_codebook.extract import (
     extract_codebook,
@@ -163,6 +164,43 @@ class TestExtractCodebook:
                 truncated=False,
             )
         assert record.seed == 42
+
+    def test_timeout_yields_llm_timeout_sentinel(self) -> None:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = APITimeoutError(
+            request=MagicMock()
+        )
+        record = extract_codebook(
+            "W1",
+            "full_text",
+            "body",
+            client=mock_client,
+            model="m",
+            truncated=False,
+        )
+        assert record.reason == "llm-timeout"
+        assert record.source_basis == "full_text"
+        assert record.seed is None
+        assert record.truncated is False
+        assert record.raw_response is None
+        for name in _ExtractionPayload.model_fields:
+            assert getattr(record, name) is None
+
+    def test_connection_error_yields_llm_timeout_sentinel(self) -> None:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = APIConnectionError(
+            request=MagicMock()
+        )
+        record = extract_codebook(
+            "W1",
+            "abstract_only",
+            "abs",
+            client=mock_client,
+            model="m",
+            truncated=False,
+        )
+        assert record.reason == "llm-timeout"
+        assert record.source_basis == "abstract_only"
 
     def test_bad_json_yields_llm_parse_failure(self) -> None:
         resp = _mock_openai_response("not json at all")

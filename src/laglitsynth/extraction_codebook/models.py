@@ -289,5 +289,6 @@ class ExtractionCodebookMeta(BaseModel):
     abstract_only_count: int
     skipped_count: int  # no-source + tei-parse-failure
     llm_parse_failure_count: int
+    llm_timeout_count: int = 0
     truncated_count: int
     by_source_basis: dict[str, int]

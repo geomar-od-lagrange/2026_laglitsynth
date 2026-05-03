@@ -147,12 +147,41 @@ def test_empty_input(tmp_path: Path) -> None:
     assert meta_data["accepted_count"] == 0
 
 
-def test_skips_none_score_verdicts(tmp_path: Path) -> None:
-    """Verdicts with relevance_score=None (no-abstract, llm-parse-failure) are excluded."""
-    works = [_make_work("https://openalex.org/W1"), _make_work("https://openalex.org/W2")]
+def test_includes_null_score_sentinels(tmp_path: Path) -> None:
+    """Sentinels with relevance_score=None ride through to fulltext-retrieval.
+
+    no-abstract / llm-parse-failure / llm-timeout are not evidence of
+    irrelevance; only an explicit below-threshold numeric score excludes.
+    """
+    works = [
+        _make_work("https://openalex.org/W1"),
+        _make_work("https://openalex.org/W2"),
+        _make_work("https://openalex.org/W3"),
+        _make_work("https://openalex.org/W4"),
+        _make_work("https://openalex.org/W5"),
+    ]
     verdicts = [
-        ScreeningVerdict(work_id="https://openalex.org/W1", relevance_score=None, reason="no-abstract"),
-        ScreeningVerdict(work_id="https://openalex.org/W2", relevance_score=80, reason="yes"),
+        ScreeningVerdict(
+            work_id="https://openalex.org/W1",
+            relevance_score=None,
+            reason="no-abstract",
+        ),
+        ScreeningVerdict(
+            work_id="https://openalex.org/W2",
+            relevance_score=None,
+            reason="llm-parse-failure",
+        ),
+        ScreeningVerdict(
+            work_id="https://openalex.org/W3",
+            relevance_score=None,
+            reason="llm-timeout",
+        ),
+        ScreeningVerdict(
+            work_id="https://openalex.org/W4", relevance_score=80, reason="yes"
+        ),
+        ScreeningVerdict(
+            work_id="https://openalex.org/W5", relevance_score=10, reason="no"
+        ),
     ]
     catalogue_path = tmp_path / "catalogue.jsonl"
     verdicts_path = tmp_path / "verdicts.jsonl"
@@ -162,9 +191,23 @@ def test_skips_none_score_verdicts(tmp_path: Path) -> None:
     args = _make_args(tmp_path, verdicts_path, catalogue_path, threshold=50)
     run(args)
 
-    included_lines = (tmp_path / "out" / "included.jsonl").read_text().strip().splitlines()
-    assert len(included_lines) == 1
-    assert "W2" in included_lines[0]
+    included_lines = (
+        (tmp_path / "out" / "included.jsonl").read_text().strip().splitlines()
+    )
+    # W1, W2, W3 ride through; W4 above threshold; W5 below threshold excluded.
+    assert len(included_lines) == 4
+    ids = {json.loads(line)["id"] for line in included_lines}
+    assert ids == {
+        "https://openalex.org/W1",
+        "https://openalex.org/W2",
+        "https://openalex.org/W3",
+        "https://openalex.org/W4",
+    }
+
+    meta_data = json.loads((tmp_path / "out" / "adjudication-meta.json").read_text())
+    meta = AdjudicationMeta.model_validate(meta_data)
+    assert meta.accepted_count == 4
+    assert meta.accepted_null_score_count == 3
 
 
 def test_missing_in_catalogue_counted(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:

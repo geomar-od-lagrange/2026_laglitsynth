@@ -72,17 +72,38 @@ Each run produces two files in `--output-dir`:
 
 ### Sentinel reason values
 
-Two fixed strings mark non-LLM outcomes:
+Three fixed strings mark non-LLM outcomes:
 
 - `reason="no-abstract"` — the work had no abstract; the LLM was not
   called. `relevance_score=null`, `seed=null`, `raw_response=null`.
 - `reason="llm-parse-failure"` — the LLM returned a response that could
   not be parsed. `relevance_score=null`, `seed=null`, `raw_response`
   carries the raw message for audit.
+- `reason="llm-timeout"` — the OpenAI client raised `APITimeoutError` /
+  `APIConnectionError` after all retries were exhausted. The
+  per-work call site catches the exception so a single hang does not
+  kill the whole stage. `relevance_score=null`, `seed=null`,
+  `raw_response=null`.
 
 All other `reason` values are the LLM's free-text justification.
 `raw_response` is set on successful verdicts and on `llm-parse-failure`
-sentinels; it is `None` on `no-abstract` sentinels.
+sentinels; it is `None` on `no-abstract` and `llm-timeout` sentinels.
+
+### LLM input format
+
+The user message sent to the LLM contains the criterion plus a
+"standard literature listing" block — title, authors, year, abstract —
+so the human reviewer (who sees the same fields) and the LLM score
+against symmetric context. Missing title or year render as
+`<unknown>`; an empty author list renders as `<unknown>`. Works with
+no abstract get the `no-abstract` sentinel and skip the LLM call.
+
+### Timeouts and retries
+
+The OpenAI client is constructed with `timeout=60s` and
+`max_retries=3` (4 total attempts, exponential backoff). These are
+caps for "is the model wedged," not estimates of expected generation
+latency — adjust the constants in `screen.py` if a real run hits them.
 
 ### ScreeningMeta fields
 
@@ -162,9 +183,12 @@ edits to the other columns are ignored by design.
 ### XLSX format
 
 The XLSX format writes a workbook with one `Index` sheet plus one tab per
-included work. The per-work tab uses a vertical `Field | Value` layout so
-the abstract and `raw_response` wrap into tall cells without horizontal
-scrolling — better than the flat CSV for per-work deep review.
+included work. The per-work tab puts the bibliographic block (title,
+authors, journal, year, doi, openalex link, abstract) at the top, the
+screening criterion + reviewer-score cells in the middle, and the LLM
+verdict in a collapsed group at the bottom — so the reviewer scores
+without being primed by the LLM's number, with the LLM's verdict one
+click away for cross-check.
 
 ```bash
 laglitsynth screening-abstracts-export \
@@ -181,6 +205,10 @@ laglitsynth screening-abstracts-export \
 ```
 
 Default output: `<verdicts parent>/review.xlsx`. Override with `--output`.
+`--meta` defaults to `<verdicts parent>/screening-meta.json` and is read
+to embed the screening criterion (the user prompt) and the LLM
+fingerprint (`model`, `temperature`, `prompt_sha256`) into each per-work
+sheet.
 
 `--n-subset` and `--subset-seed` are valid only with `--format xlsx`; passing
 either with `--format csv` exits with an error.
@@ -194,16 +222,36 @@ emitted — the same command covers both "spot-check 30" and "all of them."
 
 #### Sheet layout
 
-| Sheet | Contents |
-|---|---|
-| `Index` | One row per included work: `work_id`, `title`, `relevance_score`, `llm_reason`, and a hyperlink into the per-work tab. Header row frozen. |
-| `W<id>` (one per work) | Two columns, `Field | Value`, field list top-down: `work_id`, `title`, `doi`, `publication_year`, `abstract`, `relevance_score`, `llm_reason`, `reviewer_decision` (empty), `reviewer_reason` (empty), `raw_response`. |
+The `Index` sheet has three reviewer-identity rows above the table —
+`reviewer_name`, `reviewer_email`, `review_date` — followed by the
+header row at row 5 and one data row per included work from row 6:
+`work_id`, `title`, `authors`, `journal`, `year`, `llm_score`
+(percent-formatted), `llm_reason`, `sheet` (hyperlink into the per-work
+tab). The Index keeps the score visible — it's the navigation surface,
+not the scoring surface.
 
-Sheet names are the trailing OpenAlex id (e.g. `W3213722062`); collisions
-are suffixed `_2`, `_3`, … Sentinel verdicts (`reason="no-abstract"` or
-`"llm-parse-failure"`) still get a per-work sheet — `relevance_score` is
-blank and `llm_reason` carries the sentinel string.
+Each per-work `W<id>` sheet uses a vertical `Field | Value` layout:
 
-Same read-only contract as the CSV: a stage-4 ingestor will read `work_id` /
-`reviewer_decision` / `reviewer_reason` from each per-work sheet; edits to
-other cells are ignored.
+- Row 1: `← back to Index` hyperlink.
+- Rows 3–9: `title`, `authors`, `journal`, `publication_year`, `doi`
+  (clickable), `openalex` (clickable), `abstract` (wrapped).
+- Row 11: `criterion` — the screening prompt verbatim from
+  `screening-meta.json`.
+- Row 12: `scoring_instructions` — `Score 0% (not relevant) to 100%
+  (perfectly relevant)`.
+- Rows 13–14: `reviewer_score` and `reviewer_reason`, pre-filled with
+  placeholder strings the reviewer overwrites.
+- Row 16: `LLM details (expand to peek)` — header for a collapsed
+  block that holds `llm_score` (percent), `llm_reason`, `llm_model`,
+  `llm_temperature`, `llm_prompt_sha256`, `llm_raw_response`. Excel,
+  LibreOffice and Numbers all honour openpyxl's row outlining; the
+  reviewer has to actively expand to see the LLM's verdict.
+
+Sheet names are the trailing OpenAlex id (e.g. `W3213722062`);
+collisions are suffixed `_2`, `_3`, …. Sentinel verdicts
+(`no-abstract`, `llm-parse-failure`, `llm-timeout`) still get a
+per-work sheet — `llm_score` is blank, `llm_reason` carries the
+sentinel string, and `llm_raw_response` is blank for `no-abstract` /
+`llm-timeout` and carries the malformed text for `llm-parse-failure`.
+
+The export is read-only: edits to LLM cells are ignored at ingest.

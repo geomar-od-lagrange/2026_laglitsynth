@@ -24,3 +24,6 @@ class ScreeningMeta(BaseModel):
     above_threshold_count: int
     below_threshold_count: int
     skipped_count: int
+    llm_parse_failure_count: int = 0
+    llm_timeout_count: int = 0
+    prompt: str = ""  # the user's screening prompt, recorded verbatim for reviewer export
