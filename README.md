@@ -49,6 +49,9 @@ implemented stage has its own doc under [`docs/`](docs/).
   eligibility verdicts, then extract structured codebook records (numerical
   choices, reproducibility indicators, sub-discipline tags) with a local
   LLM. See [`docs/extraction-codebook.md`](docs/extraction-codebook.md).
+- `laglitsynth bake-model` — bake an Ollama model tag with a hard-coded
+  `num_ctx` via Modelfile; more reliable than `extra_body` at request time.
+  See [`docs/bake-model.md`](docs/bake-model.md).
 
 ## Running the pipeline
 

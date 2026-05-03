@@ -222,6 +222,10 @@ The resolved output directory is `<data-dir>/fulltext-eligibility/<run-id>/`.
 - `--model`, `--base-url`: Ollama configuration. `--base-url` is checked
   at startup with the same preflight pattern as
   [`screening-abstracts`](screening-abstracts.md).
+- `--num-ctx`: context window size passed to the model via `extra_body`
+  (default: `32768`). For a guaranteed context window, bake the model
+  first with [`bake-model`](bake-model.md) and pass the baked tag via
+  `--model`.
 
 ## LLM prompt
 
