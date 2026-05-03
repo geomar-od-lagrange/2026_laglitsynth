@@ -7,18 +7,8 @@ of score.
 
 ## Prerequisites
 
-Ollama must be running locally (or reachable via SSH tunnel):
-
-```bash
-ollama serve                # start the server (default: localhost:11434)
-ollama pull gemma3:4b       # download the default model (~2.5 GB)
-```
-
-For a machine with a discrete GPU or more RAM, `gemma3:12b` or `llama3.2`
-are worth trying. Use the `--model` flag to override the default.
-
-If tunneling to a remote GPU machine, expose the port locally and pass
-`--base-url http://localhost:<port>`.
+See [external-services.md](external-services.md) for Ollama and GROBID setup.
+Quick start: `ollama pull gemma3:4b` (the default model, ~2.5 GB).
 
 ## Usage
 
@@ -150,6 +140,19 @@ laglitsynth screening-abstracts input.jsonl \
 Adjust the prompt wording and `--screening-threshold` until the
 above/below split looks right, then run without `--dry-run` for the full
 set.
+
+## Reproducibility
+
+Stage 3 runs at `temperature=0.8` with a per-call integer `seed` drawn
+independently for each work. The `seed` is recorded on the
+`ScreeningVerdict` so a reviewer can see what was passed, but replaying the
+same stage with the same prompt and model at `temperature > 0` will produce
+different scores — Ollama honours `seed` only as a starting point, not as
+a full deterministic replay guarantee. `prompt_sha256` does not cover the
+seed, so two runs that differ only in their per-call seeds produce the same
+hash. Use `prompt_sha256` to confirm prompt identity across runs; accept
+score variance as inherent to non-zero temperature. If full reproducibility
+is needed, set `temperature=0` and note that this changes the hash.
 
 ## Human review export
 

@@ -6,6 +6,10 @@ which uses only title and abstract. Reading the full text may reveal
 that a paper is not actually about computational Lagrangian methods, or
 that it is a review article rather than primary research.
 
+## Prerequisites
+
+See [external-services.md](external-services.md) for Ollama setup.
+
 ## Prototype scope
 
 A single LLM pass over the extracted text (or the abstract for
@@ -180,7 +184,8 @@ laglitsynth fulltext-eligibility \
     [--eligibility-criteria examples/eligibility-criteria/lagrangian-oceanography.yaml] \
     [--config <run-dir>/config.yaml] \
     [--skip-existing] [--max-records N] [--dry-run] \
-    [--model gemma3:4b] [--base-url http://localhost:11434]
+    [--model gemma3:4b] [--base-url http://localhost:11434] \
+    [--concurrency 1] [--num-ctx 32768]
 ```
 
 The resolved output directory is `<data-dir>/fulltext-eligibility/<run-id>/`.
@@ -225,7 +230,12 @@ The resolved output directory is `<data-dir>/fulltext-eligibility/<run-id>/`.
 - `--num-ctx`: context window size passed to the model via `extra_body`
   (default: `32768`). For a guaranteed context window, bake the model
   first with [`bake-model`](bake-model.md) and pass the baked tag via
-  `--model`.
+  `--model`. See [external-services.md](external-services.md) for the
+  bake-vs-flag tradeoff.
+- `--concurrency`: number of in-flight LLM requests (default: `1`).
+  Stage 7's prompts are less prefill-heavy than stage 8's, so it can
+  tolerate higher concurrency than stage 8 on the same GPU.
+  See [llm-concurrency.md](llm-concurrency.md).
 
 ## LLM prompt
 

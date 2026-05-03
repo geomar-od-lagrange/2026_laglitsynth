@@ -321,8 +321,16 @@ laglitsynth extraction-codebook \
     --extractions data/fulltext-extraction/extraction.jsonl \
     --run-id "$RUN_ID"
 
-# Stages 9–12 are not yet implemented. Stop here for now.
+```
 
+#### STOP HERE — stages 9–12 are not yet implemented
+
+Stages 9–12 (extraction adjudication, quantitative synthesis, thematic
+synthesis, narrative synthesis) are specified in
+[pipeline.md](pipeline.md) but not yet built. Users running an
+end-to-end pipeline stop after stage 8.
+
+```sh
 # 9. Extraction adjudication (pass-through in prototype)
 laglitsynth extraction-adjudication \
     --data-dir data/ \

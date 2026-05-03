@@ -13,6 +13,11 @@ schema populated by the LLM against real papers. Records feed stage 9
 (human adjudication) and stages 10–12 (synthesis). Schema churn is
 expected once phase 3 human review begins.
 
+## Prerequisites
+
+See [external-services.md](external-services.md) for Ollama setup. Pull
+the default model before the first run: `ollama pull llama3.1:8b` (~5 GB).
+
 ## Prototype scope
 
 A single LLM call per paper over the flattened body (or the abstract
@@ -209,7 +214,8 @@ laglitsynth extraction-codebook \
     [--codebook examples/codebooks/lagrangian-oceanography.yaml] \
     [--config <run-dir>/config.yaml] \
     [--skip-existing] [--max-records N] [--dry-run] \
-    [--model llama3.1:8b] [--base-url http://localhost:11434]
+    [--model llama3.1:8b] [--base-url http://localhost:11434] \
+    [--concurrency 1] [--num-ctx 32768]
 ```
 
 The resolved output directory is `<data-dir>/extraction-codebook/<run-id>/`.
@@ -260,7 +266,13 @@ The resolved output directory is `<data-dir>/extraction-codebook/<run-id>/`.
 - `--num-ctx`: context window size passed to the model via `extra_body`
   (default: `32768`). For a guaranteed context window, bake the model
   first with [`bake-model`](bake-model.md) and pass the baked tag via
-  `--model`.
+  `--model`. See [external-services.md](external-services.md) for the
+  bake-vs-flag tradeoff and [bake-model.md](bake-model.md) for the
+  bake recipe.
+- `--concurrency`: number of in-flight LLM requests (default: `1`).
+  The codebook payload is large, so keep concurrency low unless Ollama
+  is running on a dedicated multi-GPU host.
+  See [llm-concurrency.md](llm-concurrency.md).
 
 ### Model sizing
 
@@ -331,7 +343,10 @@ User: <source_basis>:
 
 `response_format={"type": "json_object"}`, `temperature=0.8`, per-call
 random seed recorded on the record. Same shape as
-[eligibility](eligibility.md).
+[eligibility](eligibility.md). The same temperature/seed variance that
+applies to stage 3 applies here — see
+[screening-abstracts.md § Reproducibility](screening-abstracts.md#reproducibility)
+for the full explanation.
 
 ## Changing the codebook
 
