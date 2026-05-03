@@ -15,10 +15,15 @@ from __future__ import annotations
 from laglitsynth.extraction_codebook.models import SourceBasis
 from laglitsynth.fulltext_extraction.tei import TeiDocument, flatten_sections
 
-# Tuning placeholder — tune on first smoke run against real papers.
-# Roughly ~15k tokens on typical English prose; the principled fix is
-# two-pass retrieval, not a larger number here.
-CHAR_BUDGET = 60_000
+# Sized to fit the run-time num_ctx (default EXTRACTION_NUM_CTX=32768
+# tokens) with comfortable headroom: ~25k tokens of body at ~4
+# chars/token, leaving ~7k for the system prompt + field list + JSON
+# response. Empirically (nesh-pipeline-22064514, N=57) the largest
+# paper rendered to 86,968 chars; 100k removes truncation on every
+# observed paper while keeping a safety margin against larger
+# outliers. The principled fix for very long papers remains two-pass
+# retrieval (docs/two-pass-extraction.md), not a still-larger number.
+CHAR_BUDGET = 100_000
 
 USER_TEMPLATE = "{source_basis}:\n{text}"
 
