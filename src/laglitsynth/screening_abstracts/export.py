@@ -117,6 +117,10 @@ _REVIEWER_SCORE_PLACEHOLDER = (
 _REVIEWER_REASON_PLACEHOLDER = (
     "<give short (max 3 sentences) reason for the relevance score>"
 )
+_REVIEWER_REMARKS_PLACEHOLDER = (
+    "<any general feedback on this record — paper quality, "
+    "metadata gaps, oddities — leave blank if none>"
+)
 _SCORING_INSTRUCTIONS = "Score 0% (not relevant) to 100% (perfectly relevant)"
 
 _HYPERLINK_FONT = Font(color="0563C1", underline="single")
@@ -230,8 +234,6 @@ def build_index_sheet(
         "authors",
         "journal",
         "year",
-        "llm_score",
-        "llm_reason",
         "sheet",
     )
     for col, header in enumerate(headers, start=1):
@@ -246,10 +248,7 @@ def build_index_sheet(
         ws.cell(row=row, column=3, value=_authors_string(work))
         ws.cell(row=row, column=4, value=_journal_name(work))
         ws.cell(row=row, column=5, value=work.publication_year)
-        score_cell = ws.cell(row=row, column=6, value=_percent_value(verdict.relevance_score))
-        score_cell.number_format = "0%"
-        ws.cell(row=row, column=7, value=verdict.reason or "")
-        link_cell = ws.cell(row=row, column=8, value=sheet_name)
+        link_cell = ws.cell(row=row, column=6, value=sheet_name)
         link_cell.hyperlink = Hyperlink(
             ref=link_cell.coordinate,
             location=f"'{sheet_name}'!A1",
@@ -264,9 +263,7 @@ def build_index_sheet(
     ws.column_dimensions["C"].width = 36
     ws.column_dimensions["D"].width = 28
     ws.column_dimensions["E"].width = 8
-    ws.column_dimensions["F"].width = 12
-    ws.column_dimensions["G"].width = 60
-    ws.column_dimensions["H"].width = 20
+    ws.column_dimensions["F"].width = 20
 
 
 def build_work_sheet(
@@ -365,52 +362,58 @@ def build_work_sheet(
     rr_value = ws.cell(row=14, column=2, value=_REVIEWER_REASON_PLACEHOLDER)
     rr_value.alignment = wrap_top_left
 
-    # Row 15: blank
+    rmk_label = ws.cell(row=15, column=1, value="reviewer_remarks")
+    rmk_label.font = _BOLD
+    rmk_label.alignment = top_aligned
+    rmk_value = ws.cell(row=15, column=2, value=_REVIEWER_REMARKS_PLACEHOLDER)
+    rmk_value.alignment = wrap_top_left
 
-    # LLM details — header on row 16 visible, rows 17-22 collapsed.
-    llm_header = ws.cell(row=16, column=1, value="LLM details (expand to peek)")
+    # Row 16: blank
+
+    # LLM details — header on row 17 visible, rows 18-23 collapsed.
+    llm_header = ws.cell(row=17, column=1, value="LLM details (expand to peek)")
     llm_header.font = _BOLD
     llm_header.alignment = top_aligned
 
-    llm_score_label = ws.cell(row=17, column=1, value="llm_score")
+    llm_score_label = ws.cell(row=18, column=1, value="llm_score")
     llm_score_label.font = _BOLD
     llm_score_label.alignment = top_aligned
     llm_score_value = ws.cell(
-        row=17, column=2, value=_percent_value(verdict.relevance_score)
+        row=18, column=2, value=_percent_value(verdict.relevance_score)
     )
     llm_score_value.number_format = "0%"
     llm_score_value.alignment = wrap_top_left
 
-    llm_reason_label = ws.cell(row=18, column=1, value="llm_reason")
+    llm_reason_label = ws.cell(row=19, column=1, value="llm_reason")
     llm_reason_label.font = _BOLD
     llm_reason_label.alignment = top_aligned
-    llm_reason_value = ws.cell(row=18, column=2, value=verdict.reason or "")
+    llm_reason_value = ws.cell(row=19, column=2, value=verdict.reason or "")
     llm_reason_value.alignment = wrap_top_left
 
-    llm_model_label = ws.cell(row=19, column=1, value="llm_model")
+    llm_model_label = ws.cell(row=20, column=1, value="llm_model")
     llm_model_label.font = _BOLD
     llm_model_label.alignment = top_aligned
-    ws.cell(row=19, column=2, value=str(llm_meta.get("model", "")))
+    ws.cell(row=20, column=2, value=str(llm_meta.get("model", "")))
 
-    llm_temp_label = ws.cell(row=20, column=1, value="llm_temperature")
+    llm_temp_label = ws.cell(row=21, column=1, value="llm_temperature")
     llm_temp_label.font = _BOLD
     llm_temp_label.alignment = top_aligned
-    ws.cell(row=20, column=2, value=llm_meta.get("temperature"))
+    ws.cell(row=21, column=2, value=llm_meta.get("temperature"))
 
-    llm_sha_label = ws.cell(row=21, column=1, value="llm_prompt_sha256")
+    llm_sha_label = ws.cell(row=22, column=1, value="llm_prompt_sha256")
     llm_sha_label.font = _BOLD
     llm_sha_label.alignment = top_aligned
-    ws.cell(row=21, column=2, value=str(llm_meta.get("prompt_sha256", "")))
+    ws.cell(row=22, column=2, value=str(llm_meta.get("prompt_sha256", "")))
 
-    llm_raw_label = ws.cell(row=22, column=1, value="llm_raw_response")
+    llm_raw_label = ws.cell(row=23, column=1, value="llm_raw_response")
     llm_raw_label.font = _BOLD
     llm_raw_label.alignment = top_aligned
-    llm_raw_value = ws.cell(row=22, column=2, value=verdict.raw_response or "")
+    llm_raw_value = ws.cell(row=23, column=2, value=verdict.raw_response or "")
     llm_raw_value.alignment = wrap_top_left
 
-    # Collapse rows 17-22; +/- button next to row 16 (the visible header).
+    # Collapse the LLM rows; +/- button next to the visible header row.
     ws.sheet_properties.outlinePr.summaryBelow = False
-    for row_idx in range(17, 23):
+    for row_idx in range(18, 24):
         ws.row_dimensions[row_idx].outline_level = 1
         ws.row_dimensions[row_idx].hidden = True
 

@@ -228,10 +228,10 @@ emitted — the same command covers both "spot-check 30" and "all of them."
 The `Index` sheet has three reviewer-identity rows above the table —
 `reviewer_name`, `reviewer_email`, `review_date` — followed by the
 header row at row 5 and one data row per included work from row 6:
-`work_id`, `title`, `authors`, `journal`, `year`, `llm_score`
-(percent-formatted), `llm_reason`, `sheet` (hyperlink into the per-work
-tab). The Index keeps the score visible — it's the navigation surface,
-not the scoring surface.
+`work_id`, `title`, `authors`, `journal`, `year`, `sheet` (hyperlink
+into the per-work tab). The Index carries no LLM-derived columns:
+the reviewer triages by bibliography only and forms an opinion before
+seeing what the LLM said.
 
 Each per-work `W<id>` sheet uses a vertical `Field | Value` layout:
 
@@ -242,9 +242,10 @@ Each per-work `W<id>` sheet uses a vertical `Field | Value` layout:
   `screening-meta.json`.
 - Row 12: `scoring_instructions` — `Score 0% (not relevant) to 100%
   (perfectly relevant)`.
-- Rows 13–14: `reviewer_score` and `reviewer_reason`, pre-filled with
+- Rows 13–15: `reviewer_score`, `reviewer_reason`, `reviewer_remarks`
+  (free-form general feedback on the record), pre-filled with
   placeholder strings the reviewer overwrites.
-- Row 16: `LLM details (expand to peek)` — header for a collapsed
+- Row 17: `LLM details (expand to peek)` — header for a collapsed
   block that holds `llm_score` (percent), `llm_reason`, `llm_model`,
   `llm_temperature`, `llm_prompt_sha256`, `llm_raw_response`. Excel,
   LibreOffice and Numbers all honour openpyxl's row outlining; the

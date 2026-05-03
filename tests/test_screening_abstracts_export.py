@@ -273,23 +273,22 @@ def test_xlsx_export_filters_no_abstract(tmp_path: Path) -> None:
     assert index["A3"].value == "review_date"
     # Header row at row 5; data rows from row 6.
     assert index["A5"].value == "work_id"
-    assert index["F5"].value == "llm_score"
-    assert index["H5"].value == "sheet"
+    assert index["B5"].value == "title"
+    assert index["C5"].value == "authors"
+    assert index["D5"].value == "journal"
+    assert index["E5"].value == "year"
+    assert index["F5"].value == "sheet"
+    # No LLM columns on the index — the reviewer scores blind.
+    assert index["G5"].value is None
     assert index["A6"].value == "https://openalex.org/W1"
     assert index["A7"].value == "https://openalex.org/W3"
     assert index["A8"].value == "https://openalex.org/W4"
     # Index hyperlink points at the per-work sheet via the canonical
     # in-workbook ``location`` form.
-    link = index["H6"]
+    link = index["F6"]
     assert link.value == "W1"
     assert link.hyperlink is not None
     assert link.hyperlink.location == "'W1'!A1"
-    # llm_score formatted as percent and stored as fraction.
-    assert index["F6"].value == 0.8
-    assert index["F6"].number_format == "0%"
-    # Sentinel verdict (llm-parse-failure / llm-timeout) has blank score cell.
-    assert index["F7"].value is None
-    assert index["F8"].value is None
 
 
 def test_xlsx_export_subset_preserves_verdict_order(tmp_path: Path) -> None:
@@ -369,12 +368,12 @@ def test_xlsx_export_llm_failure_sentinels_keep_sheet(tmp_path: Path) -> None:
 
     wb = load_workbook(output_path)
     work_sheet = wb["W1"]
-    # llm_score (row 17) is blank for sentinel verdicts.
-    assert work_sheet["A17"].value == "llm_score"
-    assert work_sheet["B17"].value is None
+    # llm_score is blank for sentinel verdicts.
+    assert work_sheet["A18"].value == "llm_score"
+    assert work_sheet["B18"].value is None
     # llm_reason carries the sentinel string.
-    assert work_sheet["A18"].value == "llm_reason"
-    assert work_sheet["B18"].value == "llm-timeout"
+    assert work_sheet["A19"].value == "llm_reason"
+    assert work_sheet["B19"].value == "llm-timeout"
 
 
 def test_xlsx_work_sheet_layout(tmp_path: Path) -> None:
@@ -445,34 +444,36 @@ def test_xlsx_work_sheet_layout(tmp_path: Path) -> None:
     assert ws["A9"].value == "abstract"
     assert ws["B9"].value == "An abstract."
 
-    # Criterion + scoring block.
+    # Criterion + scoring + remarks block.
     assert ws["A11"].value == "criterion"
     assert ws["B11"].value == "On a scale from 0% to 100%, how relevant?"
     assert ws["A12"].value == "scoring_instructions"
     assert ws["A13"].value == "reviewer_score"
     assert "<insert relevance" in ws["B13"].value
     assert ws["A14"].value == "reviewer_reason"
+    assert ws["A15"].value == "reviewer_remarks"
+    assert "<any general feedback" in ws["B15"].value
 
-    # LLM details header (row 16, visible).
-    assert ws["A16"].value == "LLM details (expand to peek)"
-    # Collapsed rows 17-22 with outline level 1.
-    for row_idx in range(17, 23):
+    # LLM details header (row 17, visible).
+    assert ws["A17"].value == "LLM details (expand to peek)"
+    # Collapsed LLM rows with outline level 1.
+    for row_idx in range(18, 24):
         assert ws.row_dimensions[row_idx].outline_level == 1
         assert ws.row_dimensions[row_idx].hidden is True
-    # summaryBelow=False: button at the visible header row (16).
+    # summaryBelow=False: button at the visible header row.
     assert ws.sheet_properties.outlinePr.summaryBelow is False
 
     # llm_score formatted as percent (0.85).
-    assert ws["A17"].value == "llm_score"
-    assert ws["B17"].value == 0.85
-    assert ws["B17"].number_format == "0%"
-    assert ws["A18"].value == "llm_reason"
-    assert ws["B18"].value == "relevant"
-    assert ws["A19"].value == "llm_model"
-    assert ws["B19"].value == "gemma3:4b"
-    assert ws["A20"].value == "llm_temperature"
-    assert ws["A21"].value == "llm_prompt_sha256"
-    assert ws["A22"].value == "llm_raw_response"
+    assert ws["A18"].value == "llm_score"
+    assert ws["B18"].value == 0.85
+    assert ws["B18"].number_format == "0%"
+    assert ws["A19"].value == "llm_reason"
+    assert ws["B19"].value == "relevant"
+    assert ws["A20"].value == "llm_model"
+    assert ws["B20"].value == "gemma3:4b"
+    assert ws["A21"].value == "llm_temperature"
+    assert ws["A22"].value == "llm_prompt_sha256"
+    assert ws["A23"].value == "llm_raw_response"
 
 
 def test_xlsx_export_raises_on_missing_work(tmp_path: Path) -> None:
