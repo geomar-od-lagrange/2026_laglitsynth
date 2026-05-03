@@ -5,9 +5,9 @@ from __future__ import annotations
 import argparse
 import glob
 import re
-import string
 import sys
 import time
+import unicodedata
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,16 +30,22 @@ def _normalise_doi(doi: str | None) -> str | None:
     return normalised if normalised else None
 
 
-_PUNCTUATION_TABLE = str.maketrans("", "", string.punctuation)
-
-
 def _normalise_title(title: str | None) -> str | None:
-    """Lowercase, strip punctuation, collapse whitespace."""
+    """Lowercase, replace all Unicode punctuation with spaces, collapse whitespace.
+
+    Uses ``unicodedata.category`` to identify punctuation characters
+    (category starting with "P") so that Unicode dashes (—, –) and
+    curly quotes (" " ' ') are handled alongside ASCII punctuation.
+    Punctuation is replaced with a space rather than deleted so that
+    "Sea—Level" becomes "sea level" rather than "sealevel".
+    """
     if title is None:
         return None
     lowered = title.lower()
-    stripped = lowered.translate(_PUNCTUATION_TABLE)
-    collapsed = " ".join(stripped.split())
+    spaced = "".join(
+        " " if unicodedata.category(c).startswith("P") else c for c in lowered
+    )
+    collapsed = " ".join(spaced.split())
     return collapsed if collapsed else None
 
 
@@ -51,8 +57,11 @@ def _first_author_lower(work: Work) -> str | None:
 
 
 def _completeness_key(work: Work) -> tuple[int, int]:
-    """Higher is more complete: (has_doi, authorship_count)."""
-    return (1 if work.doi else 0, len(work.authorships))
+    """Higher is more complete: (has_doi, authorship_count).
+
+    A whitespace-only DOI string is treated as absent.
+    """
+    return (1 if work.doi and work.doi.strip() else 0, len(work.authorships))
 
 
 def _iter_inputs(patterns: list[str]) -> Iterator[Path]:
@@ -86,30 +95,46 @@ def deduplicate(
     survivors: dict[str, Work] = {}  # work_id → Work (surviving records in order)
     dropped: list[DroppedRecord] = []
 
+    def _title_author_year_key(
+        w: Work,
+    ) -> tuple[str, str, int] | None:
+        title_norm = _normalise_title(w.title)
+        author = _first_author_lower(w)
+        if title_norm is None or author is None or w.publication_year is None:
+            return None
+        return (title_norm, author, w.publication_year)
+
+    def _evict(existing_id: str, winning_id: str, rule: str) -> None:
+        """Remove *existing_id* from all indexes and record it as dropped."""
+        existing = survivors.pop(existing_id)
+        by_id.pop(existing.id, None)
+        existing_doi_norm = _normalise_doi(existing.doi)
+        if existing_doi_norm:
+            by_doi.pop(existing_doi_norm, None)
+        existing_title_key = _title_author_year_key(existing)
+        if existing_title_key:
+            by_title.pop(existing_title_key, None)
+        dropped.append(
+            DroppedRecord(
+                dropped_work_id=existing.id,
+                survived_work_id=winning_id,
+                rule=rule,
+            )
+        )
+
     def _replace_if_better(existing_id: str, challenger: Work, rule: str) -> None:
-        """Compare challenger against existing survivor; swap if challenger is better."""
-        nonlocal survivors, dropped
+        """Compare challenger against existing survivor; swap if challenger is better.
+
+        When the challenger wins, it is evicted-then-re-inserted via
+        ``_insert``, which re-runs the full match cascade to catch any
+        secondary collisions the challenger's DOI or title might create
+        against *other* already-registered survivors.
+        """
         existing = survivors[existing_id]
         if _completeness_key(challenger) > _completeness_key(existing):
-            # Challenger wins: drop the existing survivor, keep challenger.
-            dropped.append(
-                DroppedRecord(
-                    dropped_work_id=existing.id,
-                    survived_work_id=challenger.id,
-                    rule=rule,
-                )
-            )
-            # Remove existing from all index maps and survivors dict.
-            survivors.pop(existing.id)
-            by_id.pop(existing.id, None)
-            existing_doi_norm = _normalise_doi(existing.doi)
-            if existing_doi_norm:
-                by_doi.pop(existing_doi_norm, None)
-            existing_title_key = _title_author_year_key(existing)
-            if existing_title_key:
-                by_title.pop(existing_title_key, None)
-            # Register challenger as survivor.
-            _register(challenger, rule)
+            # Challenger wins: evict existing, then insert challenger properly.
+            _evict(existing_id, challenger.id, rule)
+            _insert(challenger)
         else:
             # Existing wins: challenger is dropped.
             dropped.append(
@@ -120,22 +145,35 @@ def deduplicate(
                 )
             )
 
-    def _title_author_year_key(
-        w: Work,
-    ) -> tuple[str, str, int] | None:
-        title_norm = _normalise_title(w.title)
-        author = _first_author_lower(w)
-        if title_norm is None or author is None or w.publication_year is None:
-            return None
-        return (title_norm, author, w.publication_year)
+    def _insert(w: Work) -> None:
+        """Register *w* as a survivor, resolving any secondary collisions first.
 
-    def _register(w: Work, _rule: str) -> None:
+        After a swap-survivor eviction, the challenger's DOI or title may
+        collide with a *different* existing survivor.  We re-run rules 2 and 3
+        here so those collisions are resolved correctly rather than silently
+        overwriting index pointers.
+
+        Rule 1 (same OpenAlex id) is deliberately skipped: the caller already
+        verified no other survivor shares *w*'s id, or has evicted the one
+        that did.
+        """
+        # Rule 2: DOI collision with a *different* survivor?
+        doi_norm = _normalise_doi(w.doi)
+        if doi_norm and doi_norm in by_doi and by_doi[doi_norm] != w.id:
+            _replace_if_better(by_doi[doi_norm], w, "doi")
+            return
+
+        # Rule 3: title-key collision with a *different* survivor?
+        title_key = _title_author_year_key(w)
+        if title_key and title_key in by_title and by_title[title_key] != w.id:
+            _replace_if_better(by_title[title_key], w, "title_author_year")
+            return
+
+        # No collisions: register directly.
         survivors[w.id] = w
         by_id[w.id] = w.id
-        doi_norm = _normalise_doi(w.doi)
         if doi_norm:
             by_doi[doi_norm] = w.id
-        title_key = _title_author_year_key(w)
         if title_key:
             by_title[title_key] = w.id
 
@@ -158,7 +196,7 @@ def deduplicate(
             continue
 
         # No duplicate found: register as new survivor.
-        _register(work, "")
+        _insert(work)
 
     return list(survivors.values()), dropped
 

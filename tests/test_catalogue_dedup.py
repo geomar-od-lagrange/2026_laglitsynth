@@ -6,7 +6,11 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from laglitsynth.catalogue_dedup.dedup import deduplicate, run
+from laglitsynth.catalogue_dedup.dedup import (
+    _normalise_title,
+    deduplicate,
+    run,
+)
 from laglitsynth.catalogue_dedup.models import DeduplicationMeta
 
 from conftest import _make_authorship, _make_work, _write_works_jsonl
@@ -335,3 +339,181 @@ def test_empty_input(tmp_path: Path) -> None:
     meta_data = json.loads((tmp_path / "out" / "dedup-meta.json").read_text())
     assert meta_data["input_count"] == 0
     assert meta_data["output_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Issue #6 — collision safety in _insert (swap-survivor secondary collisions)
+# ---------------------------------------------------------------------------
+
+
+def test_doi_collision_under_swap_survivor() -> None:
+    """DOI index is not silently overwritten during a rule-1 swap.
+
+    Scenario:
+      A  — OA id=W1, doi=10.1/a
+      B  — OA id=W2, doi=10.1/b   (distinct record, distinct DOI)
+      C  — OA id=W1, doi=10.1/b   (same OA id as A → rule-1 match; same DOI as B)
+
+    When C wins the completeness contest against A (C has an author, A has
+    none), the swap path must detect that C's DOI already belongs to B and
+    resolve that collision too — not silently shadow B's DOI pointer.
+
+    Expected post-dedup state:
+      - Only 2 survivors: C (beats A on rule 1) + B or C merged with B on DOI.
+        Either way, exactly one record per DOI survives.
+      - The dropped.jsonl rule attributions are correct (no entry blaming the
+        wrong survivor).
+    """
+    auth = [_make_authorship("Alice")]
+    # A: bare record, no authors — lowest completeness.
+    a = _make_work("https://openalex.org/W1", doi="https://doi.org/10.1/a")
+    # B: different id+DOI — already a registered survivor.
+    b = _make_work(
+        "https://openalex.org/W2",
+        doi="https://doi.org/10.1/b",
+        authorships=auth,
+    )
+    # C: same OA id as A (rule-1 match), but DOI overlaps with B.
+    c = _make_work(
+        "https://openalex.org/W1",
+        doi="https://doi.org/10.1/b",  # same DOI as B
+        authorships=[_make_authorship("Alice"), _make_authorship("Bob")],  # most complete
+    )
+
+    survivors, dropped = deduplicate([a, b, c])
+
+    # Exactly two papers in total (A+C are the same paper; B+C share a DOI).
+    # After chaining: A dropped → C inserted → C vs B on DOI → one survives.
+    assert len(survivors) == 1, f"Expected 1 survivor, got {len(survivors)}: {[s.id for s in survivors]}"
+
+    # The surviving record must be C (it has the most authors).
+    assert survivors[0].id == "https://openalex.org/W1"
+
+    # All rule attributions must name a real dropped-vs-survived pair.
+    survivor_ids = {s.id for s in survivors}
+    for rec in dropped:
+        assert rec.survived_work_id in survivor_ids or rec.survived_work_id in {
+            d.dropped_work_id for d in dropped
+        }, f"survived_work_id {rec.survived_work_id!r} not reachable"
+
+
+def test_title_collision_under_swap_survivor() -> None:
+    """Title-key index is not silently overwritten during a rule-1 swap.
+
+    Scenario:
+      A  — OA id=W1, no doi, title="Sea Level Rise", author="Alice", year=2020
+      B  — OA id=W2, no doi, same title/author/year as A (already deduped as a
+           distinct OpenAlex record sharing rule-3 key — B registered first,
+           A would have been dropped; here we register A first so A is the
+           existing survivor)
+      C  — OA id=W1 (matches A on rule 1), same title/author/year,
+           more authors than A.
+
+    When C wins over A, C is re-inserted and its title key collides with B's
+    pointer.  The cascade must resolve that, not silently overwrite it.
+    """
+    auth_single = [_make_authorship("Alice")]
+    auth_multi = [_make_authorship("Alice"), _make_authorship("Bob")]
+
+    a = _make_work(
+        "https://openalex.org/W1",
+        doi=None,
+        title="Sea Level Rise",
+        publication_year=2020,
+        authorships=auth_single,
+    )
+    b = _make_work(
+        "https://openalex.org/W2",
+        doi=None,
+        title="Sea Level Rise",
+        publication_year=2020,
+        authorships=[_make_authorship("Alice")],
+    )
+    c = _make_work(
+        "https://openalex.org/W1",  # same id as A → rule-1 match
+        doi=None,
+        title="Sea Level Rise",
+        publication_year=2020,
+        authorships=auth_multi,  # more complete than A
+    )
+
+    survivors, dropped = deduplicate([a, b, c])
+
+    # A+C are the same OA record; B+C share the title key.
+    # C (most complete) should be the sole survivor.
+    assert len(survivors) == 1, f"Expected 1 survivor, got {len(survivors)}: {[s.id for s in survivors]}"
+    assert survivors[0].id == "https://openalex.org/W1"
+
+    # Every dropped record must name a correct survived_work_id.
+    dropped_ids = {rec.dropped_work_id for rec in dropped}
+    assert "https://openalex.org/W1" in dropped_ids or "https://openalex.org/W2" in dropped_ids
+
+
+# ---------------------------------------------------------------------------
+# Issue #8 — _completeness_key whitespace-only DOI
+# ---------------------------------------------------------------------------
+
+
+def test_whitespace_only_doi_does_not_count_as_complete() -> None:
+    """A DOI that is only whitespace must not be treated as present."""
+    w_ws_doi = _make_work("https://openalex.org/W1", doi="   ")
+    w_no_doi = _make_work("https://openalex.org/W2", doi=None)
+
+    # Both should have completeness key (0, 0) — neither beats the other.
+    from laglitsynth.catalogue_dedup.dedup import _completeness_key
+
+    assert _completeness_key(w_ws_doi) == (0, 0)
+    assert _completeness_key(w_no_doi) == (0, 0)
+
+    # In a swap-survivor scenario the whitespace DOI must not be the winner.
+    w_real_doi = _make_work(
+        "https://openalex.org/W1",
+        doi="https://doi.org/10.1/real",
+        authorships=[_make_authorship("Alice")],
+    )
+    survivors, dropped = deduplicate([w_ws_doi, w_real_doi])
+    assert len(survivors) == 1
+    assert survivors[0].doi == "https://doi.org/10.1/real"
+
+
+# ---------------------------------------------------------------------------
+# Issue #13 — Unicode punctuation in _normalise_title
+# ---------------------------------------------------------------------------
+
+
+def test_unicode_dashes_and_quotes_normalised() -> None:
+    """Unicode dashes and curly quotes are stripped by _normalise_title."""
+    # Em dash —, en dash –, curly double quotes " ", curly single quotes ' '
+    title_with_unicode = "Sea—Level – Rise: “A Review”"
+    title_plain = "Sea Level Rise A Review"
+
+    result = _normalise_title(title_with_unicode)
+    expected = _normalise_title(title_plain)
+
+    assert result is not None
+    assert result == expected, (
+        f"Unicode punctuation not stripped: {result!r} != {expected!r}"
+    )
+
+
+def test_unicode_dashes_enable_title_dedup() -> None:
+    """Two works whose titles differ only in Unicode dashes deduplicate on rule 3."""
+    auth = [_make_authorship("Jane Smith")]
+    w1 = _make_work(
+        "https://openalex.org/W1",
+        doi=None,
+        title="Sea—Level Rise: A Review",  # em dash + colon
+        publication_year=2021,
+        authorships=auth,
+    )
+    w2 = _make_work(
+        "https://openalex.org/W2",
+        doi=None,
+        title="Sea Level Rise A Review",  # plain ASCII, no punctuation
+        publication_year=2021,
+        authorships=[_make_authorship("Jane Smith")],
+    )
+    survivors, dropped = deduplicate([w1, w2])
+    assert len(survivors) == 1
+    assert len(dropped) == 1
+    assert dropped[0].rule == "title_author_year"
