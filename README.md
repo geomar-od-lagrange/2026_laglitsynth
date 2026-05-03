@@ -98,7 +98,25 @@ mkdir -p logs
 sbatch scripts/nesh-pipeline.sbatch                                                     # smoke, N=10
 sbatch --export=ALL,QUERY="particle dispersion",N=200 scripts/nesh-pipeline.sbatch
 sbatch --export=ALL,STOP_AFTER_STAGE=3,N=500 scripts/nesh-pipeline.sbatch
+sbatch --export=ALL,EXTRACTION_NUM_CTX=16384 scripts/nesh-pipeline.sbatch                # smaller stage-8 KV cache
 ```
+
+Each LLM stage gets its own Ollama tag (`laglit-screen`,
+`laglit-eligibility`, `laglit-extract`) synthesised on the compute
+node from the upstream model with `PARAMETER num_ctx` baked in via a
+Modelfile heredoc — the per-request `num_ctx` hint via the OpenAI
+extra_body does not reliably size the runner. Override the model and
+its context window per stage with these env vars:
+
+| Stage | Model | num_ctx |
+|---|---|---|
+| 3 (screening-abstracts) | `SCREENING_MODEL` (default `gemma3:4b`) | `SCREENING_NUM_CTX` (default `8192`) |
+| 7 (fulltext-eligibility) | `ELIGIBILITY_MODEL` (default `gemma3:4b`) | `ELIGIBILITY_NUM_CTX` (default `32768`) |
+| 8 (extraction-codebook) | `EXTRACTION_MODEL` (default `llama3.1:8b`) | `EXTRACTION_NUM_CTX` (default `32768`) |
+
+A num_ctx that doesn't fit the KV cache alongside the model weights
+forces Ollama to spill layers to CPU; check
+`logs/ollama-*.log` for `offloaded N/N layers to GPU` after a run.
 
 Per-user prerequisites:
 

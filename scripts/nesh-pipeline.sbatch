@@ -34,6 +34,15 @@
 #   sbatch scripts/nesh-pipeline.sbatch
 #   sbatch --export=ALL,QUERY="particle dispersion",N=20 scripts/nesh-pipeline.sbatch
 #   sbatch --export=ALL,STOP_AFTER_STAGE=3,N=200 scripts/nesh-pipeline.sbatch
+#
+# Per-stage Ollama runner sizing — see plans/done/ollama-num-ctx-per-model.md.
+# Each LLM stage gets its own synthesised Ollama tag (laglit-screen,
+# laglit-eligibility, laglit-extract) created from the upstream model
+# with PARAMETER num_ctx baked in via Modelfile heredoc. Override the
+# model and the context window per stage:
+#   sbatch --export=ALL,EXTRACTION_NUM_CTX=16384 scripts/nesh-pipeline.sbatch
+#   sbatch --export=ALL,EXTRACTION_MODEL=qwen2.5:14b,EXTRACTION_NUM_CTX=24576 \
+#       scripts/nesh-pipeline.sbatch
 
 set -euo pipefail
 
@@ -50,8 +59,11 @@ GROBID_IMAGE="${GROBID_IMAGE:-docker://lfoppiano/grobid:0.8.0}"
 QUERY="${QUERY:-Lagrangian particle tracking}"
 N="${N:-10}"
 SCREENING_MODEL="${SCREENING_MODEL:-gemma3:4b}"
+SCREENING_NUM_CTX="${SCREENING_NUM_CTX:-8192}"
 ELIGIBILITY_MODEL="${ELIGIBILITY_MODEL:-gemma3:4b}"
+ELIGIBILITY_NUM_CTX="${ELIGIBILITY_NUM_CTX:-32768}"
 EXTRACTION_MODEL="${EXTRACTION_MODEL:-llama3.1:8b}"
+EXTRACTION_NUM_CTX="${EXTRACTION_NUM_CTX:-32768}"
 
 cd "$REPO_DIR"
 mkdir -p logs
@@ -143,11 +155,42 @@ else
     exit 5
 fi
 
-# Pull LLM models via proxy.
+# Pull upstream LLM models via proxy. Each is the FROM base for the
+# per-stage tag synthesised next.
 for m in "$SCREENING_MODEL" "$ELIGIBILITY_MODEL" "$EXTRACTION_MODEL"; do
     echo "==> ollama pull $m"
     "$OLLAMA_DIR/bin/ollama" pull "$m"
 done
+
+# Synthesise per-stage tags with PARAMETER num_ctx baked in. The
+# per-request num_ctx hint via OpenAI extra_body does not reliably
+# size the runner — only Modelfile-baked num_ctx does. Heredoc-from-
+# env keeps this sbatch the single source of truth (no checked-in
+# Modelfile) and makes a sweep over EXTRACTION_NUM_CTX a one-liner
+# at submit time. See plans/done/ollama-num-ctx-per-model.md.
+echo "==> ollama create laglit-screen (num_ctx=$SCREENING_NUM_CTX, FROM $SCREENING_MODEL)"
+"$OLLAMA_DIR/bin/ollama" create laglit-screen -f - <<EOF
+FROM ${SCREENING_MODEL}
+PARAMETER num_ctx ${SCREENING_NUM_CTX}
+EOF
+
+echo "==> ollama create laglit-eligibility (num_ctx=$ELIGIBILITY_NUM_CTX, FROM $ELIGIBILITY_MODEL)"
+"$OLLAMA_DIR/bin/ollama" create laglit-eligibility -f - <<EOF
+FROM ${ELIGIBILITY_MODEL}
+PARAMETER num_ctx ${ELIGIBILITY_NUM_CTX}
+EOF
+
+echo "==> ollama create laglit-extract (num_ctx=$EXTRACTION_NUM_CTX, FROM $EXTRACTION_MODEL)"
+"$OLLAMA_DIR/bin/ollama" create laglit-extract -f - <<EOF
+FROM ${EXTRACTION_MODEL}
+PARAMETER num_ctx ${EXTRACTION_NUM_CTX}
+EOF
+
+# Flip the *_MODEL exports from upstream tags (used by pull + create
+# above) to the local synthesised tags consumed by run-pipeline.sh.
+SCREENING_MODEL=laglit-screen
+ELIGIBILITY_MODEL=laglit-eligibility
+EXTRACTION_MODEL=laglit-extract
 
 # Run the smoke-test end-to-end.
 export OLLAMA_BASE="http://127.0.0.1:11434"
