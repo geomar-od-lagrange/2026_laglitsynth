@@ -65,3 +65,12 @@ class TestGenerateRunId:
         run_id = generate_run_id(moment)
         assert run_id.startswith("2026-05-03T12-30-00_")
         assert RUN_ID_RE.match(run_id)
+
+
+class TestGenerateRunIdCli:
+    def test_subcommand_prints_valid_id(self, capsys: object) -> None:
+        from laglitsynth.cli import main
+
+        main(["generate-run-id"])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert RUN_ID_RE.match(captured.out.strip())

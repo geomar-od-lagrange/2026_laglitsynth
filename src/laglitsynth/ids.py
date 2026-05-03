@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import re
 import uuid
 from datetime import UTC, datetime
@@ -36,3 +37,18 @@ def generate_run_id(now: datetime | None = None) -> str:
         moment.replace(tzinfo=None).isoformat(timespec="seconds").replace(":", "-")
     )
     return f"{stamp}_{uuid.uuid4().hex[:12]}"
+
+
+def build_subparser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> argparse.ArgumentParser:
+    parser = subparsers.add_parser(
+        "generate-run-id",
+        help="Print a fresh run identifier to stdout (UTC ISO + 12-hex uuid).",
+    )
+    parser.set_defaults(run=_run_cli)
+    return parser
+
+
+def _run_cli(_args: argparse.Namespace) -> None:
+    print(generate_run_id())

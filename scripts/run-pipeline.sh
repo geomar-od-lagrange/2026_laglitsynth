@@ -24,7 +24,9 @@
 # Override models / endpoints via env vars:
 #   OUTPUT_ROOT, OLLAMA_BASE, GROBID_URL,
 #   SCREENING_MODEL, ELIGIBILITY_MODEL, EXTRACTION_MODEL,
-#   LLM_CONCURRENCY (forwarded to every LLM-driven stage that accepts it).
+#   LLM_CONCURRENCY (forwarded to every LLM-driven stage that accepts it),
+#   RUN_ID (LLM-stage leaf under <data-dir>/<stage-subdir>/<run-id>/;
+#           a fresh ISO+hex id is generated when unset).
 
 set -euo pipefail
 
@@ -45,6 +47,11 @@ ELIGIBILITY_MODEL="${ELIGIBILITY_MODEL:-gemma3:4b}"
 EXTRACTION_MODEL="${EXTRACTION_MODEL:-llama3.1:8b}"
 LLM_CONCURRENCY="${LLM_CONCURRENCY:-1}"
 STOP_AFTER_STAGE="${STOP_AFTER_STAGE:-8}"
+
+# Single run-id threaded through stages 3, 7, 8 so downstream inputs
+# (stage 4's --input, stage 8's --eligible) land at predictable
+# <stage>/<RUN_ID>/ paths within $ROOT.
+RUN_ID="${RUN_ID:-$(laglitsynth generate-run-id)}"
 
 [[ "$STOP_AFTER_STAGE" =~ ^[0-9]+$ ]] || {
     echo "STOP_AFTER_STAGE must be a positive integer (got $STOP_AFTER_STAGE)" >&2
@@ -79,14 +86,15 @@ run_stage 3 screening-abstracts \
     laglitsynth screening-abstracts \
         "$ROOT/catalogue-dedup/deduplicated.jsonl" \
         "On a scale from 0% (not relevant) to 100% (perfectly relevant), how relevant is this work to Lagrangian particle tracking in oceanography?" \
-        --output-dir "$ROOT/screening-abstracts" \
+        --data-dir "$ROOT" \
+        --run-id "$RUN_ID" \
         --model "$SCREENING_MODEL" \
         --base-url "$OLLAMA_BASE" \
         --concurrency "$LLM_CONCURRENCY"
 
 run_stage 4 screening-adjudication \
     laglitsynth screening-adjudication \
-        --input "$ROOT/screening-abstracts/verdicts.jsonl" \
+        --input "$ROOT/screening-abstracts/$RUN_ID/verdicts.jsonl" \
         --catalogue "$ROOT/catalogue-dedup/deduplicated.jsonl" \
         --output-dir "$ROOT/screening-adjudication"
 
@@ -109,17 +117,20 @@ run_stage 7 fulltext-eligibility \
     laglitsynth fulltext-eligibility \
         --catalogue "$ROOT/screening-adjudication/included.jsonl" \
         --extractions "$ROOT/fulltext-extraction/extraction.jsonl" \
-        --output-dir "$ROOT/fulltext-eligibility" \
+        --data-dir "$ROOT" \
+        --run-id "$RUN_ID" \
         --model "$ELIGIBILITY_MODEL" \
         --base-url "$OLLAMA_BASE"
 
 run_stage 8 extraction-codebook \
     laglitsynth extraction-codebook \
-        --eligible "$ROOT/fulltext-eligibility/eligible.jsonl" \
+        --eligible "$ROOT/fulltext-eligibility/$RUN_ID/eligible.jsonl" \
         --extractions "$ROOT/fulltext-extraction/extraction.jsonl" \
-        --output-dir "$ROOT/extraction-codebook" \
+        --data-dir "$ROOT" \
+        --run-id "$RUN_ID" \
         --model "$EXTRACTION_MODEL" \
         --base-url "$OLLAMA_BASE"
 
 echo
 echo "Pipeline complete (stages 1..$STOP_AFTER_STAGE). Outputs under: $ROOT/"
+echo "LLM-stage leaf for this run: $RUN_ID"

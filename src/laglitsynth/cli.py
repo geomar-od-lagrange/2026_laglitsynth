@@ -13,6 +13,7 @@ from laglitsynth.extraction_codebook.extract import build_subparser as build_ext
 from laglitsynth.fulltext_eligibility.eligibility import build_subparser as build_eligibility_subparser
 from laglitsynth.fulltext_extraction.extract import build_subparser as build_extraction_subparser
 from laglitsynth.fulltext_retrieval.retrieve import build_subparser as build_retrieval_subparser
+from laglitsynth.ids import build_subparser as build_run_id_subparser
 from laglitsynth.screening_abstracts.export import build_subparser as build_screening_export_subparser
 from laglitsynth.screening_abstracts.screen import build_subparser as build_screening_subparser
 from laglitsynth.screening_adjudication.adjudicate import build_subparser as build_adjudication_subparser
@@ -27,6 +28,7 @@ _BUILDERS = (
     build_extraction_subparser,
     build_eligibility_subparser,
     build_extraction_codebook_subparser,
+    build_run_id_subparser,
 )
 
 
