@@ -52,7 +52,7 @@ DEFAULT_ELIGIBILITY_CRITERIA = Path(
 )
 
 _TEMPERATURE = 0.8
-_NUM_CTX = 32768
+_DEFAULT_NUM_CTX = 32768
 _LLM_TIMEOUT_SECONDS = 300
 _LLM_MAX_RETRIES = 3
 
@@ -94,6 +94,7 @@ def classify_eligibility(
     model: str,
     client: OpenAI,
     system_prompt: str,
+    num_ctx: int = _DEFAULT_NUM_CTX,
 ) -> EligibilityVerdict:
     """Call the LLM, validate the payload, compose the verdict.
 
@@ -113,7 +114,7 @@ def classify_eligibility(
             ],
             temperature=_TEMPERATURE,
             seed=seed,
-            extra_body={"options": {"num_ctx": _NUM_CTX}},
+            extra_body={"options": {"num_ctx": num_ctx}},
         )
     except (APITimeoutError, APIConnectionError) as exc:
         logger.warning("LLM timeout for %s: %s", work_id, exc)
@@ -161,6 +162,7 @@ def assess_works(
     *,
     client: OpenAI,
     model: str,
+    num_ctx: int = _DEFAULT_NUM_CTX,
     max_records: int | None,
     system_prompt: str,
     skip_ids: set[str] | None = None,
@@ -174,7 +176,7 @@ def assess_works(
             return
         processed += 1
         yield _assess_one(
-            work, extractions, extraction_output_dir, client, model, system_prompt
+            work, extractions, extraction_output_dir, client, model, system_prompt, num_ctx
         )
 
 
@@ -185,6 +187,7 @@ def _assess_one(
     client: OpenAI,
     model: str,
     system_prompt: str,
+    num_ctx: int = _DEFAULT_NUM_CTX,
 ) -> EligibilityVerdict:
     # Step 1: prefer full text when an extraction exists.
     extracted = extractions.get(work.id)
@@ -212,6 +215,7 @@ def _assess_one(
                 client=client,
                 model=model,
                 system_prompt=system_prompt,
+                num_ctx=num_ctx,
             )
         # Empty body (valid XML, no content): fall through to abstract.
 
@@ -225,6 +229,7 @@ def _assess_one(
             client=client,
             model=model,
             system_prompt=system_prompt,
+            num_ctx=num_ctx,
         )
 
     # Step 3: no source at all.
@@ -309,6 +314,16 @@ def build_subparser(
         help="Ollama API base URL (default: http://localhost:11434)",
     )
     parser.add_argument(
+        "--num-ctx",
+        type=int,
+        default=_DEFAULT_NUM_CTX,
+        dest="num_ctx",
+        help=(
+            "Ollama context-window hint passed via extra_body (default: 32768). "
+            "Only fully reliable when the model is Modelfile-baked with the same value."
+        ),
+    )
+    parser.add_argument(
         "--max-records",
         type=int,
         default=None,
@@ -348,7 +363,7 @@ def run(args: argparse.Namespace) -> None:
     system_prompt = load_system_prompt(criteria_spec)
 
     prompt_sha256 = hashlib.sha256(
-        (system_prompt + "\n" + USER_TEMPLATE + "\n" + str(_NUM_CTX)).encode("utf-8")
+        (system_prompt + "\n" + USER_TEMPLATE + "\n" + str(args.num_ctx)).encode("utf-8")
     ).hexdigest()
 
     # Prompt-hash guard: refuse --skip-existing when the recorded hash differs.
@@ -422,6 +437,7 @@ def run(args: argparse.Namespace) -> None:
         extraction_output_dir,
         client=client,
         model=args.model,
+        num_ctx=args.num_ctx,
         max_records=args.max_records,
         system_prompt=system_prompt,
         skip_ids=skip_ids,

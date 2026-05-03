@@ -24,6 +24,8 @@
 # Override models / endpoints via env vars:
 #   OUTPUT_ROOT, OLLAMA_BASE, GROBID_URL,
 #   SCREENING_MODEL, ELIGIBILITY_MODEL, EXTRACTION_MODEL,
+#   ELIGIBILITY_NUM_CTX (--num-ctx for stage 7; default 32768),
+#   EXTRACTION_NUM_CTX  (--num-ctx for stage 8; default 32768),
 #   LLM_CONCURRENCY (forwarded to every LLM-driven stage that accepts it),
 #   RUN_ID (LLM-stage leaf under <data-dir>/<stage-subdir>/<run-id>/;
 #           a fresh ISO+hex id is generated when unset).
@@ -45,6 +47,8 @@ GROBID_URL="${GROBID_URL:-http://localhost:8070}"
 SCREENING_MODEL="${SCREENING_MODEL:-gemma3:4b}"
 ELIGIBILITY_MODEL="${ELIGIBILITY_MODEL:-gemma3:4b}"
 EXTRACTION_MODEL="${EXTRACTION_MODEL:-llama3.1:8b}"
+ELIGIBILITY_NUM_CTX="${ELIGIBILITY_NUM_CTX:-32768}"
+EXTRACTION_NUM_CTX="${EXTRACTION_NUM_CTX:-32768}"
 LLM_CONCURRENCY="${LLM_CONCURRENCY:-1}"
 STOP_AFTER_STAGE="${STOP_AFTER_STAGE:-8}"
 
@@ -119,7 +123,8 @@ run_stage 7 fulltext-eligibility \
         --data-dir "$ROOT" \
         --run-id "$RUN_ID" \
         --model "$ELIGIBILITY_MODEL" \
-        --base-url "$OLLAMA_BASE"
+        --base-url "$OLLAMA_BASE" \
+        --num-ctx "$ELIGIBILITY_NUM_CTX"
 
 run_stage 8 extraction-codebook \
     laglitsynth extraction-codebook \
@@ -129,7 +134,8 @@ run_stage 8 extraction-codebook \
         --data-dir "$ROOT" \
         --run-id "$RUN_ID" \
         --model "$EXTRACTION_MODEL" \
-        --base-url "$OLLAMA_BASE"
+        --base-url "$OLLAMA_BASE" \
+        --num-ctx "$EXTRACTION_NUM_CTX"
 
 echo
 echo "Pipeline complete (stages 1..$STOP_AFTER_STAGE). Outputs under: $ROOT/"

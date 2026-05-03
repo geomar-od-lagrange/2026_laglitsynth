@@ -60,7 +60,7 @@ STAGE_SUBDIR = "extraction-codebook"
 DEFAULT_CODEBOOK = Path("examples/codebooks/lagrangian-oceanography.yaml")
 
 _TEMPERATURE = 0.8
-_NUM_CTX = 32768
+_DEFAULT_NUM_CTX = 32768
 _LLM_TIMEOUT_SECONDS = 600
 _LLM_MAX_RETRIES = 3
 
@@ -102,6 +102,7 @@ def extract_codebook(
     model: str,
     truncated: bool,
     ctx: CodebookContext,
+    num_ctx: int = _DEFAULT_NUM_CTX,
 ) -> ExtractionRecordProto:
     """Call the LLM, validate the payload, compose the full record.
 
@@ -122,7 +123,7 @@ def extract_codebook(
             ],
             temperature=_TEMPERATURE,
             seed=seed,
-            extra_body={"options": {"num_ctx": _NUM_CTX}},
+            extra_body={"options": {"num_ctx": num_ctx}},
         )
     except (APITimeoutError, APIConnectionError) as exc:
         logger.warning("LLM timeout for %s: %s", work_id, exc)
@@ -208,6 +209,7 @@ def extract_works(
     *,
     client: OpenAI,
     model: str,
+    num_ctx: int = _DEFAULT_NUM_CTX,
     max_records: int | None,
     ctx: CodebookContext,
     skip_ids: set[str] | None = None,
@@ -221,7 +223,7 @@ def extract_works(
             return
         processed += 1
         yield _extract_one(
-            work, extractions, extraction_output_dir, client, model, ctx
+            work, extractions, extraction_output_dir, client, model, ctx, num_ctx
         )
 
 
@@ -232,6 +234,7 @@ def _extract_one(
     client: OpenAI,
     model: str,
     ctx: CodebookContext,
+    num_ctx: int = _DEFAULT_NUM_CTX,
 ) -> ExtractionRecordProto:
     # Step 1: prefer full text when an extraction exists.
     extracted = extractions.get(work.id)
@@ -258,6 +261,7 @@ def _extract_one(
                 model=model,
                 truncated=truncated,
                 ctx=ctx,
+                num_ctx=num_ctx,
             )
         # Empty body (valid XML, no content): fall through to abstract.
 
@@ -271,6 +275,7 @@ def _extract_one(
             model=model,
             truncated=False,
             ctx=ctx,
+            num_ctx=num_ctx,
         )
 
     # Step 3: no source at all.
@@ -353,6 +358,16 @@ def build_subparser(
         help="Ollama API base URL (default: http://localhost:11434)",
     )
     parser.add_argument(
+        "--num-ctx",
+        type=int,
+        default=_DEFAULT_NUM_CTX,
+        dest="num_ctx",
+        help=(
+            "Ollama context-window hint passed via extra_body (default: 32768). "
+            "Only fully reliable when the model is Modelfile-baked with the same value."
+        ),
+    )
+    parser.add_argument(
         "--max-records",
         type=int,
         default=None,
@@ -396,7 +411,7 @@ def run(args: argparse.Namespace) -> None:
             + "\n"
             + USER_TEMPLATE
             + "\n"
-            + str(_NUM_CTX)
+            + str(args.num_ctx)
             + "\n"
             + str(CHAR_BUDGET)
         ).encode("utf-8")
@@ -469,6 +484,7 @@ def run(args: argparse.Namespace) -> None:
         extraction_output_dir,
         client=client,
         model=args.model,
+        num_ctx=args.num_ctx,
         max_records=args.max_records,
         ctx=ctx,
         skip_ids=skip_ids,

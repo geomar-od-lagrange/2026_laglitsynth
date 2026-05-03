@@ -11,6 +11,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from openai import APIConnectionError, APITimeoutError
 
+import hashlib
+
 from laglitsynth.fulltext_eligibility.eligibility import (
     _active_works,
     assess_works,
@@ -179,6 +181,36 @@ class TestClassifyEligibility:
         assert verdict.seed == 42
 
 
+# --- num_ctx threading ---
+
+
+def test_num_ctx_flag_threads_to_options() -> None:
+    """--num-ctx value reaches extra_body["options"]["num_ctx"] in the Ollama call."""
+    resp = _mock_openai_response('{"eligible": true, "reason": "ok"}')
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = resp
+    classify_eligibility(
+        "W1", "prompt", "full_text", model="m", client=mock_client, system_prompt="SP",
+        num_ctx=16384,
+    )
+    call_kwargs = mock_client.chat.completions.create.call_args[1]
+    assert call_kwargs["extra_body"]["options"]["num_ctx"] == 16384
+
+
+def test_num_ctx_changes_prompt_hash() -> None:
+    """Different --num-ctx values produce different prompt_sha256 hashes."""
+    from laglitsynth.fulltext_eligibility.prompts import USER_TEMPLATE
+
+    system_prompt = "You are a test classifier."
+    hash_a = hashlib.sha256(
+        (system_prompt + "\n" + USER_TEMPLATE + "\n" + str(32768)).encode("utf-8")
+    ).hexdigest()
+    hash_b = hashlib.sha256(
+        (system_prompt + "\n" + USER_TEMPLATE + "\n" + str(16384)).encode("utf-8")
+    ).hexdigest()
+    assert hash_a != hash_b
+
+
 # --- assess_works cascade ---
 
 
@@ -193,6 +225,7 @@ def _mock_classify(
         model: str,
         client: Any,
         system_prompt: str,
+        num_ctx: int = 32768,
     ) -> EligibilityVerdict:
         entry = results[work_id]
         if entry == "error":
@@ -451,6 +484,7 @@ class TestAssessWorksCascade:
             model: str,
             client: Any,
             system_prompt: str,
+            num_ctx: int = 32768,
         ) -> EligibilityVerdict:
             if work_id == "W1":
                 return EligibilityVerdict(
@@ -555,6 +589,7 @@ def _make_run_args(
     max_records: int | None = None,
     run_id: str = "test-run-id",
     screening_threshold: float = 50.0,
+    num_ctx: int = 32768,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         catalogue=catalogue,
@@ -567,6 +602,7 @@ def _make_run_args(
         eligibility_criteria=_TEST_CRITERIA_SPEC,
         model="m",
         base_url="http://x",
+        num_ctx=num_ctx,
         max_records=max_records,
         skip_existing=skip_existing,
         dry_run=dry_run,

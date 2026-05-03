@@ -9,6 +9,7 @@ and the end-to-end ``run()`` wiring (run dirs, config.yaml, meta).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -213,6 +214,57 @@ class TestExtractCodebook:
         assert record.raw_response == content  # type: ignore[attr-defined]
 
 
+# --- num_ctx threading ---
+
+
+def test_num_ctx_flag_threads_to_options(ctx: CodebookContext) -> None:
+    """--num-ctx value reaches extra_body["options"]["num_ctx"] in the Ollama call."""
+    resp = _mock_openai_response(_valid_payload_json(ctx.payload_field_names))
+    client = MagicMock()
+    client.chat.completions.create.return_value = resp
+    extract_codebook(
+        "W1",
+        "full_text",
+        "body text",
+        client=client,
+        model="m",
+        truncated=False,
+        ctx=ctx,
+        num_ctx=16384,
+    )
+    call_kwargs = client.chat.completions.create.call_args[1]
+    assert call_kwargs["extra_body"]["options"]["num_ctx"] == 16384
+
+
+def test_num_ctx_changes_prompt_hash(ctx: CodebookContext) -> None:
+    """Different --num-ctx values produce different prompt_sha256 hashes."""
+    from laglitsynth.extraction_codebook.prompts import CHAR_BUDGET, USER_TEMPLATE
+
+    hash_a = hashlib.sha256(
+        (
+            ctx.system_prompt
+            + "\n"
+            + USER_TEMPLATE
+            + "\n"
+            + str(32768)
+            + "\n"
+            + str(CHAR_BUDGET)
+        ).encode("utf-8")
+    ).hexdigest()
+    hash_b = hashlib.sha256(
+        (
+            ctx.system_prompt
+            + "\n"
+            + USER_TEMPLATE
+            + "\n"
+            + str(16384)
+            + "\n"
+            + str(CHAR_BUDGET)
+        ).encode("utf-8")
+    ).hexdigest()
+    assert hash_a != hash_b
+
+
 # --- extract_works cascade ---
 
 
@@ -373,6 +425,7 @@ def _make_run_args(
     max_records: int | None = None,
     run_id: str = "test-run-id",
     extraction_output_dir: Path | None = None,
+    num_ctx: int = 32768,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         catalogue=catalogue,
@@ -386,6 +439,7 @@ def _make_run_args(
         codebook=DEFAULT_CODEBOOK_PATH,
         model="m",
         base_url="http://x",
+        num_ctx=num_ctx,
         max_records=max_records,
         skip_existing=skip_existing,
         dry_run=dry_run,
