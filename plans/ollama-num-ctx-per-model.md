@@ -115,13 +115,33 @@ create` so the original upstream values stay readable for the `pull`
 and `create` steps — don't reuse the same names for both roles.)
 
 `run-pipeline.sh` already takes the model names as env vars and
-passes them through `--model`; no edit needed there.
+passes them through `--model`; once the run-id flag migration below
+lands, no further edit is needed there.
 
 The per-request `extra_body={"options": {"num_ctx": ...}}` in
 [`extract.py`](../src/laglitsynth/extraction_codebook/extract.py) and
 [`eligibility.py`](../src/laglitsynth/fulltext_eligibility/eligibility.py)
 is left in place — harmless, and matches what the Modelfile bakes in
 when the env defaults are used.
+
+### Prerequisite: run-pipeline.sh flag migration
+
+The recent sweep-architecture commits replaced `--output-dir` on
+stages 3/7/8 with `--data-dir` + `--run-id` (see
+[configs.md](../docs/configs.md)). [`scripts/run-pipeline.sh`](../scripts/run-pipeline.sh)
+still passes `--output-dir` for those stages and will error out
+against the current code. Before this num_ctx fix can be smoke-tested
+on NESH, that script needs:
+
+- Stages 3, 7, 8: `--output-dir "$ROOT/<stage>"` →
+  `--data-dir "$ROOT" --run-id "$RUN_ID"` (where `RUN_ID` is exported
+  once at the top of the script so all three stages land under the
+  same leaf, and downstream `--eligible` / inputs use the run-id'd
+  path: `$ROOT/fulltext-eligibility/$RUN_ID/eligible.jsonl`).
+- Other stages keep `--output-dir` (unchanged).
+
+This migration is a prerequisite, not part of this plan — listing it
+here only so the smoke-test step below has somewhere to land.
 
 ## Design decisions
 
@@ -131,6 +151,15 @@ trivial to deserve a tracked file, and an on-disk file freezes the
 values in two places. With heredoc-from-env, the sbatch is the
 single source of truth and a sweep over `EXTRACTION_NUM_CTX=16384
 24576 32768` is a one-liner at submit time.
+
+Sweep axis split between sbatch and `--config`. Model and `num_ctx`
+are runner-level — they size the Ollama runner, so they live in
+sbatch env vars that drive `ollama create`. Codebook and
+eligibility-criteria YAMLs are stage-level — they're consumed by the
+Python stage at invocation time and are reachable via `--config` /
+`--codebook` / `--eligibility-criteria`. The two axes compose: a
+matrix sweep over (model × num_ctx × codebook) is sbatch env-vars on
+two axes and `--config` files on the third.
 
 Three tags rather than two. We do want the per-stage axis explicit,
 even if eligibility and extraction happen to share `num_ctx=32768`
@@ -158,11 +187,12 @@ correctly."
    sweep knobs (`SCREENING_NUM_CTX`, `ELIGIBILITY_NUM_CTX`,
    `EXTRACTION_NUM_CTX`) and show one `sbatch --export=...` example
    that varies a `num_ctx`.
-3. Smoke-test on NESH with the same `QUERY` / `N` as the failed run.
-   Confirm `data/run/extraction-codebook/records.jsonl` grows and
-   that `logs/ollama-*.log` shows `offloaded 33/33 layers to GPU`
-   for the `laglit-extract` runner. Capture per-record latency for
-   comparison with the failed run.
+3. Smoke-test on NESH with the same `QUERY` / `N` as the failed run
+   (with the run-pipeline.sh flag migration above already merged).
+   Confirm `data/run/extraction-codebook/$RUN_ID/records.jsonl` grows
+   and that `logs/ollama-*.log` shows
+   `offloaded 33/33 layers to GPU` for the `laglit-extract` runner.
+   Capture per-record latency for comparison with the failed run.
 
 ## Follow-ups
 
@@ -187,9 +217,12 @@ in the preceding loop. The smoke test catches any wiring slip.
 ## Critical files
 
 - [scripts/nesh-pipeline.sbatch](../scripts/nesh-pipeline.sbatch)
-- [scripts/run-pipeline.sh](../scripts/run-pipeline.sh)
+- [scripts/run-pipeline.sh](../scripts/run-pipeline.sh) — needs the
+  `--output-dir` → `--data-dir`/`--run-id` migration before this
+  fix can be smoke-tested.
 - [src/laglitsynth/extraction_codebook/extract.py](../src/laglitsynth/extraction_codebook/extract.py)
 - [src/laglitsynth/fulltext_eligibility/eligibility.py](../src/laglitsynth/fulltext_eligibility/eligibility.py)
 - [src/laglitsynth/screening_abstracts/screen.py](../src/laglitsynth/screening_abstracts/screen.py)
+- [docs/configs.md](../docs/configs.md) — run-id directory model.
 - [docs/llm-concurrency.md](../docs/llm-concurrency.md)
 - [docs/explorations/bench-ollama/bench-ollama.sbatch](../docs/explorations/bench-ollama/bench-ollama.sbatch)
