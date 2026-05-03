@@ -12,11 +12,13 @@ import pytest
 from openai import APIConnectionError, APITimeoutError
 
 from laglitsynth.fulltext_eligibility.eligibility import (
+    _active_works,
     assess_works,
     classify_eligibility,
 )
 from laglitsynth.fulltext_eligibility.models import EligibilityVerdict
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
+from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
 from conftest import (
     TEI_NS,
@@ -29,6 +31,12 @@ from conftest import (
 
 
 # --- fixtures and helpers ---
+
+
+def _write_verdicts_jsonl(path: Path, verdicts: list[ScreeningVerdict]) -> None:
+    with open(path, "w") as f:
+        for v in verdicts:
+            f.write(v.model_dump_json() + "\n")
 
 
 def _write_malformed_tei(path: Path) -> None:
@@ -210,12 +218,10 @@ def _mock_classify(
 
 class TestAssessWorksCascade:
     def test_full_text_branch(self, tmp_path: Path) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
         extractions_path = tmp_path / "extraction.jsonl"
         output_dir = tmp_path / "ext_out"
 
         work = _make_work("W1", abstract="The abstract.")
-        _write_works_jsonl(catalogue, [work])
 
         tei_path = "tei/W1.tei.xml"
         _write_tei(
@@ -243,7 +249,7 @@ class TestAssessWorksCascade:
         ):
             verdicts = list(
                 assess_works(
-                    catalogue,
+                    [work],
                     extractions,
                     output_dir,
                     client=MagicMock(),
@@ -268,10 +274,8 @@ class TestAssessWorksCascade:
     def test_abstract_only_branch_when_extraction_missing(
         self, tmp_path: Path
     ) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
         output_dir = tmp_path / "ext_out"
         work = _make_work("W1", abstract="Paper abstract text.")
-        _write_works_jsonl(catalogue, [work])
 
         mock_classify = MagicMock(
             side_effect=_mock_classify(
@@ -284,7 +288,7 @@ class TestAssessWorksCascade:
         ):
             verdicts = list(
                 assess_works(
-                    catalogue,
+                    [work],
                     {},
                     output_dir,
                     client=MagicMock(),
@@ -303,17 +307,15 @@ class TestAssessWorksCascade:
         assert "Paper abstract text." in prompt
 
     def test_no_source_sentinel(self, tmp_path: Path) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
         output_dir = tmp_path / "ext_out"
         work = _make_work("W1", abstract=None)
-        _write_works_jsonl(catalogue, [work])
 
         with patch(
             "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility"
         ) as mock_classify:
             verdicts = list(
                 assess_works(
-                    catalogue,
+                    [work],
                     {},
                     output_dir,
                     client=MagicMock(),
@@ -331,10 +333,8 @@ class TestAssessWorksCascade:
         mock_classify.assert_not_called()
 
     def test_malformed_tei_no_abstract_fallback(self, tmp_path: Path) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
         output_dir = tmp_path / "ext_out"
         work = _make_work("W1", abstract="Paper abstract.")
-        _write_works_jsonl(catalogue, [work])
 
         tei_path = "tei/W1.tei.xml"
         _write_malformed_tei(output_dir / tei_path)
@@ -352,7 +352,7 @@ class TestAssessWorksCascade:
         ) as mock_classify:
             verdicts = list(
                 assess_works(
-                    catalogue,
+                    [work],
                     extractions,
                     output_dir,
                     client=MagicMock(),
@@ -371,10 +371,8 @@ class TestAssessWorksCascade:
         mock_classify.assert_not_called()
 
     def test_empty_body_falls_back_to_abstract(self, tmp_path: Path) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
         output_dir = tmp_path / "ext_out"
         work = _make_work("W1", abstract="Paper abstract.")
-        _write_works_jsonl(catalogue, [work])
 
         tei_path = "tei/W1.tei.xml"
         _write_empty_body_tei(output_dir / tei_path)
@@ -398,7 +396,7 @@ class TestAssessWorksCascade:
         ):
             verdicts = list(
                 assess_works(
-                    catalogue,
+                    [work],
                     extractions,
                     output_dir,
                     client=MagicMock(),
@@ -412,10 +410,8 @@ class TestAssessWorksCascade:
         assert verdicts[0].source_basis == "abstract_only"
 
     def test_llm_parse_failure_recorded(self, tmp_path: Path) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
         output_dir = tmp_path / "ext_out"
         work = _make_work("W1", abstract="Paper abstract.")
-        _write_works_jsonl(catalogue, [work])
 
         with patch(
             "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
@@ -423,7 +419,7 @@ class TestAssessWorksCascade:
         ):
             verdicts = list(
                 assess_works(
-                    catalogue,
+                    [work],
                     {},
                     output_dir,
                     client=MagicMock(),
@@ -441,13 +437,11 @@ class TestAssessWorksCascade:
 
     def test_timeout_does_not_stop_loop(self, tmp_path: Path) -> None:
         """A timeout on one work yields a sentinel; subsequent works still run."""
-        catalogue = tmp_path / "catalogue.jsonl"
         output_dir = tmp_path / "ext_out"
         works = [
             _make_work("W1", abstract="first abs"),
             _make_work("W2", abstract="second abs"),
         ]
-        _write_works_jsonl(catalogue, works)
 
         def side_effect(
             work_id: str,
@@ -481,7 +475,7 @@ class TestAssessWorksCascade:
         ):
             verdicts = list(
                 assess_works(
-                    catalogue,
+                    works,
                     {},
                     output_dir,
                     client=MagicMock(),
@@ -497,10 +491,8 @@ class TestAssessWorksCascade:
         assert by_id["W2"].reason == "ok"
 
     def test_seed_recorded_on_successful_verdict(self, tmp_path: Path) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
         output_dir = tmp_path / "ext_out"
         work = _make_work("W1", abstract="Abstract text.")
-        _write_works_jsonl(catalogue, [work])
 
         with patch(
             "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
@@ -510,7 +502,7 @@ class TestAssessWorksCascade:
         ):
             verdicts = list(
                 assess_works(
-                    catalogue,
+                    [work],
                     {},
                     output_dir,
                     client=MagicMock(),
@@ -577,14 +569,18 @@ def _make_run_args(
     tmp_path: Path,
     *,
     catalogue: Path,
+    screening_verdicts: Path,
     extractions: Path,
     dry_run: bool = False,
     skip_existing: bool = False,
     max_records: int | None = None,
     run_id: str = "test-run-id",
+    screening_threshold: float = 50.0,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         catalogue=catalogue,
+        screening_verdicts=screening_verdicts,
+        screening_threshold=screening_threshold,
         extractions=extractions,
         extraction_output_dir=extractions.parent,
         data_dir=tmp_path,
@@ -606,13 +602,19 @@ def _resolved_out_dir(args: argparse.Namespace) -> Path:
 class TestRun:
     def test_dry_run_writes_nothing(self, tmp_path: Path) -> None:
         catalogue = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
         extractions_path = tmp_path / "extraction.jsonl"
         _write_works_jsonl(catalogue, [_make_work("W1", abstract="abs")])
+        _write_verdicts_jsonl(
+            verdicts_path,
+            [ScreeningVerdict(work_id="W1", relevance_score=80)],
+        )
         extractions_path.write_text("")
 
         args = _make_run_args(
             tmp_path,
             catalogue=catalogue,
+            screening_verdicts=verdicts_path,
             extractions=extractions_path,
             dry_run=True,
         )
@@ -636,6 +638,7 @@ class TestRun:
 
     def test_writes_expected_files(self, tmp_path: Path) -> None:
         catalogue = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
         extractions_path = tmp_path / "extraction.jsonl"
 
         works = [
@@ -644,11 +647,16 @@ class TestRun:
             _make_work("W3", abstract=None),
         ]
         _write_works_jsonl(catalogue, works)
+        _write_verdicts_jsonl(
+            verdicts_path,
+            [ScreeningVerdict(work_id=w.id, relevance_score=80) for w in works],
+        )
         extractions_path.write_text("")
 
         args = _make_run_args(
             tmp_path,
             catalogue=catalogue,
+            screening_verdicts=verdicts_path,
             extractions=extractions_path,
         )
 
@@ -710,8 +718,13 @@ class TestRun:
         import json
 
         catalogue = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
         extractions_path = tmp_path / "extraction.jsonl"
         _write_works_jsonl(catalogue, [_make_work("W1", abstract="first abstract")])
+        _write_verdicts_jsonl(
+            verdicts_path,
+            [ScreeningVerdict(work_id="W1", relevance_score=80)],
+        )
         extractions_path.write_text("")
 
         run_id = "stale-run"
@@ -745,6 +758,7 @@ class TestRun:
         args = _make_run_args(
             tmp_path,
             catalogue=catalogue,
+            screening_verdicts=verdicts_path,
             extractions=extractions_path,
             skip_existing=True,
             run_id=run_id,
@@ -761,12 +775,17 @@ class TestRun:
 
     def test_skip_existing_processes_only_delta(self, tmp_path: Path) -> None:
         catalogue = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
         extractions_path = tmp_path / "extraction.jsonl"
         works = [
             _make_work("W1", abstract="first abstract"),
             _make_work("W2", abstract="second abstract"),
         ]
         _write_works_jsonl(catalogue, works)
+        _write_verdicts_jsonl(
+            verdicts_path,
+            [ScreeningVerdict(work_id=w.id, relevance_score=80) for w in works],
+        )
         extractions_path.write_text("")
 
         run_id = "resume-run"
@@ -785,6 +804,7 @@ class TestRun:
         args = _make_run_args(
             tmp_path,
             catalogue=catalogue,
+            screening_verdicts=verdicts_path,
             extractions=extractions_path,
             skip_existing=True,
             run_id=run_id,
@@ -832,3 +852,105 @@ class TestRun:
         ]
         assert len(eligible_lines) == 1
         assert json.loads(eligible_lines[0])["id"] == "W1"
+
+
+# --- _active_works join ---
+
+
+class TestActiveWorksJoin:
+    """Unit tests for the _active_works inline-join helper."""
+
+    def test_active_works_threshold(self, tmp_path: Path) -> None:
+        """Works with a score at or above the threshold pass; those below are filtered."""
+        works = [
+            _make_work("https://openalex.org/W1"),
+            _make_work("https://openalex.org/W2"),
+            _make_work("https://openalex.org/W3"),
+        ]
+        verdicts = [
+            ScreeningVerdict(work_id="https://openalex.org/W1", relevance_score=80),
+            ScreeningVerdict(work_id="https://openalex.org/W2", relevance_score=49),
+            ScreeningVerdict(work_id="https://openalex.org/W3", relevance_score=50),
+        ]
+        catalogue_path = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        _write_works_jsonl(catalogue_path, works)
+        _write_verdicts_jsonl(verdicts_path, verdicts)
+
+        result = list(_active_works(catalogue_path, verdicts_path, screening_threshold=50.0))
+        ids = {w.id for w in result}
+        assert ids == {
+            "https://openalex.org/W1",
+            "https://openalex.org/W3",
+        }
+        assert "https://openalex.org/W2" not in ids
+
+    def test_null_score_sentinels_ride_through(self, tmp_path: Path) -> None:
+        """Works with relevance_score=None (sentinel reasons) always pass, regardless of threshold."""
+        works = [
+            _make_work("https://openalex.org/W1"),
+            _make_work("https://openalex.org/W2"),
+            _make_work("https://openalex.org/W3"),
+            _make_work("https://openalex.org/W4"),
+            _make_work("https://openalex.org/W5"),
+        ]
+        verdicts = [
+            ScreeningVerdict(
+                work_id="https://openalex.org/W1",
+                relevance_score=None,
+                reason="no-abstract",
+            ),
+            ScreeningVerdict(
+                work_id="https://openalex.org/W2",
+                relevance_score=None,
+                reason="llm-parse-failure",
+            ),
+            ScreeningVerdict(
+                work_id="https://openalex.org/W3",
+                relevance_score=None,
+                reason="llm-timeout",
+            ),
+            ScreeningVerdict(
+                work_id="https://openalex.org/W4",
+                relevance_score=80,
+            ),
+            ScreeningVerdict(
+                work_id="https://openalex.org/W5",
+                relevance_score=10,
+            ),
+        ]
+        catalogue_path = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        _write_works_jsonl(catalogue_path, works)
+        _write_verdicts_jsonl(verdicts_path, verdicts)
+
+        result = list(_active_works(catalogue_path, verdicts_path, screening_threshold=50.0))
+        ids = {w.id for w in result}
+        # W1, W2, W3 have None score → always pass through.
+        # W4 has score 80 ≥ 50 → passes.
+        # W5 has score 10 < 50 → filtered out.
+        assert ids == {
+            "https://openalex.org/W1",
+            "https://openalex.org/W2",
+            "https://openalex.org/W3",
+            "https://openalex.org/W4",
+        }
+        assert "https://openalex.org/W5" not in ids
+
+    def test_works_without_verdicts_are_excluded(self, tmp_path: Path) -> None:
+        """Works present in the catalogue but absent from verdicts are excluded."""
+        works = [
+            _make_work("https://openalex.org/W1"),
+            _make_work("https://openalex.org/W2"),
+        ]
+        verdicts = [
+            ScreeningVerdict(work_id="https://openalex.org/W1", relevance_score=90),
+        ]
+        catalogue_path = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        _write_works_jsonl(catalogue_path, works)
+        _write_verdicts_jsonl(verdicts_path, verdicts)
+
+        result = list(_active_works(catalogue_path, verdicts_path, screening_threshold=50.0))
+        assert len(result) == 1
+        assert result[0].id == "https://openalex.org/W1"

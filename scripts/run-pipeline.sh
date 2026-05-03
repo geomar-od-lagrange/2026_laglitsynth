@@ -112,7 +112,9 @@ run_stage 6 fulltext-extraction \
 # follow-up.
 run_stage 7 fulltext-eligibility \
     laglitsynth fulltext-eligibility \
-        --catalogue "$ROOT/screening-adjudication/included.jsonl" \
+        --catalogue "$ROOT/catalogue-dedup/deduplicated.jsonl" \
+        --screening-verdicts "$ROOT/screening-abstracts/$RUN_ID/verdicts.jsonl" \
+        --screening-threshold 50 \
         --extractions "$ROOT/fulltext-extraction/extraction.jsonl" \
         --data-dir "$ROOT" \
         --run-id "$RUN_ID" \
