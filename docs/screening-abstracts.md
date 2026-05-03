@@ -30,8 +30,14 @@ laglitsynth screening-abstracts data/catalogue-dedup/deduplicated.jsonl \
 # stricter threshold
 laglitsynth screening-abstracts input.jsonl "..." --screening-threshold 70
 
-# custom output directory
-laglitsynth screening-abstracts input.jsonl "..." --output-dir data/screening-abstracts/
+# bucket root override (e.g. for sweeps writing into a sibling tree)
+laglitsynth screening-abstracts input.jsonl "..." --data-dir runs/sweep-A
+
+# pin the run-id (otherwise a fresh <iso>_<12hex> is generated)
+laglitsynth screening-abstracts input.jsonl "..." --run-id 2026-05-03T14-30-00_abc123def456
+
+# rerun with the configuration of a prior run (fresh run-id)
+laglitsynth screening-abstracts input.jsonl "..." --config data/screening-abstracts/<run-id>/config.yaml
 
 # prompt tuning: process first 20 works, print verdicts, don't write output
 laglitsynth screening-abstracts input.jsonl "..." --dry-run --max-records 20
@@ -43,7 +49,9 @@ laglitsynth screening-abstracts input.jsonl "..." --dry-run --max-records 20
 |---|---|
 | `INPUT` (positional) | Input JSONL file path (required). |
 | `PROMPT` (positional) | Relevance screening prompt string (required). |
-| `--output-dir` | Output directory. Default: `data/screening-abstracts/`. |
+| `--data-dir` | Bucket root for stage outputs (default: `data/`). |
+| `--run-id` | Run identifier (default: generated `<iso>_<12hex>`). |
+| `--config` | YAML config file whose values seed argparse defaults; explicit CLI flags override. |
 | `--model` | Ollama model name (default: `gemma3:4b`). |
 | `--screening-threshold` | Relevance score cutoff, 0--100 (default: 50). |
 | `--base-url` | Ollama API base URL (default: `http://localhost:11434`). |
@@ -51,9 +59,14 @@ laglitsynth screening-abstracts input.jsonl "..." --dry-run --max-records 20
 | `--dry-run` | Print verdicts to stderr without writing any output files. |
 | `--concurrency` | In-flight LLM requests (default: `1`). See [llm-concurrency.md](llm-concurrency.md). |
 
+The resolved output directory is `<data-dir>/screening-abstracts/<run-id>/`.
+See [configs.md](configs.md) for the config-file precedence rule and the
+inlining behaviour of file-valued args (none on this stage; the codebook
+and eligibility-criteria stages inline their YAML on save).
+
 ## Output format
 
-Each run produces two files in `--output-dir`:
+Each run produces three files in `<data-dir>/screening-abstracts/<run-id>/`:
 
 - **`verdicts.jsonl`** — one `ScreeningVerdict` per input work, appended
   per-record so a partial file from a killed run is still valid JSONL.
@@ -62,6 +75,9 @@ Each run produces two files in `--output-dir`:
   above/below/skipped counts. Written upfront with zeroed counts when
   the run starts and rewritten with the real counts at the end, so a
   mid-run reviewer export still sees the criterion + LLM fingerprint.
+- **`config.yaml`** — fully-resolved CLI+config values for this run,
+  excluding `run_id` and `--config` itself. Replay via
+  `--config <run-dir>/config.yaml` (a fresh run-id is generated).
 
 ### ScreeningVerdict fields
 

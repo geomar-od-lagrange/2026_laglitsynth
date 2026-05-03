@@ -98,9 +98,10 @@ class EligibilityMeta(BaseModel):
 `run` and `llm` are the shared reproducibility nests from
 [`src/laglitsynth/models.py`](../src/laglitsynth/models.py) — they
 carry `tool`, `tool_version`, `run_at`, `validation_skipped`, `model`,
-`temperature`, and `prompt_sha256`. `prompt_sha256` covers
-`SYSTEM_PROMPT`, `USER_TEMPLATE`, and the Ollama `num_ctx` setting, so
-any prompt- or context-window change shifts the hash.
+`temperature`, and `prompt_sha256`. `prompt_sha256` covers the loaded
+eligibility-criteria system prompt, `USER_TEMPLATE`, and the Ollama
+`num_ctx` setting, so any prompt- or context-window change shifts the
+hash.
 
 Per-sentinel counts (`no_source_count`, `tei_parse_failure_count`,
 `llm_parse_failure_count`, `llm_timeout_count`) let operators diagnose
@@ -110,16 +111,18 @@ stage 8 (`extraction-codebook`) is deliberate.
 ## Storage layout
 
 ```
-data/fulltext-eligibility/
-  verdicts.jsonl            # one EligibilityVerdict per input work
-  eligible.jsonl            # Work records where verdict.eligible is True
-  eligibility-meta.json     # EligibilityMeta
+<data-dir>/fulltext-eligibility/<run-id>/
+  verdicts.jsonl              # one EligibilityVerdict per input work
+  eligible.jsonl              # Work records where verdict.eligible is True
+  eligibility-meta.json       # EligibilityMeta
+  config.yaml                 # resolved CLI+config, criteria inlined
 ```
 
-`verdicts.jsonl` is the source of truth. `eligible.jsonl` is a derived
-convenience file rebuilt each run by joining the catalogue against the
-verdict sidecar — same pattern as stage 4's
-[`included.jsonl`](screening-adjudication.md).
+See [configs.md](configs.md) for the run-id directory model and
+`config.yaml` semantics. `verdicts.jsonl` is the source of truth.
+`eligible.jsonl` is a derived convenience file rebuilt each run by
+joining the catalogue against the verdict sidecar — same pattern as
+stage 4's [`included.jsonl`](screening-adjudication.md).
 
 ## Fallback cascade
 
@@ -168,10 +171,14 @@ laglitsynth fulltext-eligibility \
     --catalogue data/screening-adjudication/included.jsonl \
     --extractions data/fulltext-extraction/extraction.jsonl \
     [--extraction-output-dir data/fulltext-extraction/] \
-    [--output-dir data/fulltext-eligibility/] \
+    [--data-dir data/] [--run-id <iso>_<12hex>] \
+    [--eligibility-criteria examples/eligibility-criteria/lagrangian-oceanography.yaml] \
+    [--config <run-dir>/config.yaml] \
     [--skip-existing] [--max-records N] [--dry-run] \
     [--model gemma3:4b] [--base-url http://localhost:11434]
 ```
+
+The resolved output directory is `<data-dir>/fulltext-eligibility/<run-id>/`.
 
 ### Arguments
 
@@ -183,15 +190,25 @@ laglitsynth fulltext-eligibility \
   of `--extractions`. See
   [`tei-wrapper`](../plans/done/tei-wrapper.md) for why the path is
   stored relative.
-- `--output-dir`: where to write verdicts, `eligible.jsonl`, and the
-  meta file.
-- `--skip-existing`: load any prior `verdicts.jsonl` and skip already-
-  assessed `work_id`s. The per-work verdict sidecar is appended to;
-  `eligible.jsonl` is regenerated from the union. If `eligibility-meta.json`
-  already exists and its recorded `prompt_sha256` differs from the hash the
-  current invocation would produce, the run aborts with an error — mixing
-  verdicts from different prompt versions in one file would silently corrupt
-  any downstream analysis.
+- `--data-dir`: bucket root for stage outputs (default: `data/`).
+- `--run-id`: run identifier. Default: a generated `<iso>_<12hex>`.
+- `--eligibility-criteria`: path to the YAML carrying the LLM system
+  prompt (default:
+  `examples/eligibility-criteria/lagrangian-oceanography.yaml`). The
+  file's contents are inlined into `config.yaml` on save so a run dir
+  is a self-contained run snapshot. See [configs.md](configs.md).
+- `--config`: optional YAML config file whose values seed argparse
+  defaults; explicit CLI flags still win. See [configs.md](configs.md).
+- `--skip-existing`: load any prior `verdicts.jsonl` (in the run dir
+  pointed at by `--run-id`) and skip already-assessed `work_id`s. The
+  per-work verdict sidecar is appended to; `eligible.jsonl` is
+  regenerated from the union. If `eligibility-meta.json` already exists
+  and its recorded `prompt_sha256` differs from the hash the current
+  invocation would produce, the run aborts with an error — mixing
+  verdicts from different prompt versions in one file would silently
+  corrupt any downstream analysis. Run-id'd dirs are fresh by default,
+  so this flag is meaningful only when paired with an explicit
+  `--run-id <existing>`.
 - `--max-records`: process only the first N works from the catalogue.
 - `--dry-run`: print verdicts to stderr without writing any output.
 - `--model`, `--base-url`: Ollama configuration. `--base-url` is checked
@@ -200,9 +217,10 @@ laglitsynth fulltext-eligibility \
 
 ## LLM prompt
 
-Hardcoded in
-[`laglitsynth.fulltext_eligibility.prompts`](../src/laglitsynth/fulltext_eligibility/prompts.py);
-the digest is recorded as `meta.llm.prompt_sha256`.
+Loaded at runtime from the YAML pointed at by `--eligibility-criteria`
+(default: the shipped Lagrangian-oceanography criterion). The file's
+`system_prompt` field is sent verbatim as the system message; the
+digest is recorded as `meta.llm.prompt_sha256`.
 
 ```
 System: You are assessing whether a scientific paper meets the inclusion

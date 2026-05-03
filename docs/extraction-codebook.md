@@ -23,11 +23,14 @@ validation, one record per input work, sentinel `reason` for skips.
 The seed codebook fields — identification, numerical choices,
 reproducibility indicators, extraction metadata — are defined in
 [codebook.md](codebook.md). That document is the authoritative field
-list and is not duplicated here. The Pydantic
-[`ExtractionRecord`](../src/laglitsynth/extraction_codebook/models.py)
-is a direct translation: every value field is paired with a `*_context`
-verbatim snippet, every content field is `str | None`, and premature
-enumeration is avoided on purpose.
+list and is not duplicated here. The shipped YAML transcription lives
+at
+[`examples/codebooks/lagrangian-oceanography.yaml`](../examples/codebooks/lagrangian-oceanography.yaml);
+the Pydantic record class is built dynamically at startup by
+[`load_codebook` + `build_record_model`](../src/laglitsynth/extraction_codebook/codebook.py).
+Every value field is paired with a `*_context` verbatim snippet,
+every content field is `str | None`, and premature enumeration is
+avoided on purpose.
 
 The [two-pass extraction](two-pass-extraction.md) pattern is the
 deferred alternative: it becomes targeted work once phase 3 review
@@ -52,19 +55,23 @@ are recorded with a sentinel `reason` and no LLM call.
 
 ## Data model
 
-### ExtractionRecord
+### ExtractionRecord (built dynamically)
 
 One per catalogue work reaching this stage. Every input work produces
 exactly one record, successes and failures alike — `records.jsonl` is
-the complete run record. See
-[codebook.md](codebook.md) for the field list.
+the complete run record. See [codebook.md](codebook.md) for the field
+list and
+[`build_record_model`](../src/laglitsynth/extraction_codebook/codebook.py)
+for the runtime construction (it composes the identification block on
+top of the codebook-driven payload model via
+`pydantic.create_model`).
 
 The record carries an identification block (`work_id`, `source_basis`,
 `reason`, `seed`, `truncated`, `raw_response`) plus the content fields
-from the codebook. Every content value is paired with a
-`*_context: str | None` verbatim snippet. Sentinel records have
-`reason` set and every content field `None`; a successful record has
-`reason=None`.
+from the loaded codebook. Every content value is paired with a
+`*_context: str | None` verbatim snippet (unless the YAML sets
+`context: false` on that field). Sentinel records have `reason` set
+and every content field `None`; a successful record has `reason=None`.
 
 A successful-but-truncated record has `reason=None` and
 `truncated=True`: the LLM answered, but on a shortened body. Abstract
@@ -97,23 +104,25 @@ class ExtractionCodebookMeta(BaseModel):
 `run` and `llm` are the shared reproducibility nests from
 [`src/laglitsynth/models.py`](../src/laglitsynth/models.py); they
 carry `tool`, `tool_version`, `run_at`, `validation_skipped`, `model`,
-`temperature`, and `prompt_sha256`. `prompt_sha256` covers
-`SYSTEM_PROMPT`, `USER_TEMPLATE`, the Ollama `num_ctx` setting, and
-`CHAR_BUDGET`, so any prompt, context-window, or truncation-budget
-change shifts the hash.
+`temperature`, and `prompt_sha256`. `prompt_sha256` covers the
+rendered codebook system prompt, `USER_TEMPLATE`, the Ollama `num_ctx`
+setting, and `CHAR_BUDGET`, so any prompt, codebook, context-window,
+or truncation-budget change shifts the hash.
 
 ## Storage layout
 
 ```
-data/extraction-codebook/
-  records.jsonl                         # one ExtractionRecord per input work
-  extraction-codebook-meta.json         # ExtractionCodebookMeta
+<data-dir>/extraction-codebook/<run-id>/
+  records.jsonl                          # one ExtractionRecord per input work
+  extraction-codebook-meta.json          # ExtractionCodebookMeta
+  config.yaml                            # resolved CLI+config, codebook inlined
 ```
 
-Filename note: stage 6 already writes `extraction.jsonl` (different
-directory, different schema). This stage uses `records.jsonl` to match
-the Pydantic model name (`ExtractionRecord`) and to avoid the
-conceptual collision. There is no derived convenience file; stage 9
+See [configs.md](configs.md) for the run-id directory model and
+`config.yaml` semantics. Filename note: stage 6 already writes
+`extraction.jsonl` (different directory, different schema). This
+stage uses `records.jsonl` to match the conceptual record name and to
+avoid the collision. There is no derived convenience file; stage 9
 and stages 10–12 read `records.jsonl` directly.
 
 ## Fallback cascade
@@ -189,10 +198,14 @@ laglitsynth extraction-codebook \
     --eligible data/fulltext-eligibility/eligible.jsonl \
     --extractions data/fulltext-extraction/extraction.jsonl \
     [--extraction-output-dir data/fulltext-extraction/] \
-    [--output-dir data/extraction-codebook/] \
+    [--data-dir data/] [--run-id <iso>_<12hex>] \
+    [--codebook examples/codebooks/lagrangian-oceanography.yaml] \
+    [--config <run-dir>/config.yaml] \
     [--skip-existing] [--max-records N] [--dry-run] \
     [--model gemma3:4b] [--base-url http://localhost:11434]
 ```
+
+The resolved output directory is `<data-dir>/extraction-codebook/<run-id>/`.
 
 ### Arguments
 
@@ -205,13 +218,28 @@ laglitsynth extraction-codebook \
   of `--extractions`. See
   [`tei-wrapper`](../plans/done/tei-wrapper.md) for why the path is
   stored relative.
-- `--output-dir`: where to write `records.jsonl` and the meta file.
-- `--skip-existing`: load any prior `records.jsonl` and skip already-
-  extracted `work_id`s. New records are appended to the existing sidecar.
-  If `extraction-codebook-meta.json` already exists and its recorded
-  `prompt_sha256` differs from the hash the current invocation would produce,
-  the run aborts with an error — mixing records from different prompt versions
-  in one file would silently corrupt any downstream analysis.
+- `--data-dir`: bucket root for stage outputs (default: `data/`).
+- `--run-id`: run identifier. Default: a generated `<iso>_<12hex>`.
+- `--codebook`: path to the codebook YAML carrying the LLM system
+  prompt and the field list. Default:
+  `examples/codebooks/lagrangian-oceanography.yaml`. The codebook
+  drives both the prompt and the dynamically-built payload validator —
+  adding/removing/renaming fields is a YAML edit. The codebook
+  contents are inlined into `config.yaml` on save so a run dir is a
+  self-contained run snapshot. See [configs.md](configs.md) and the
+  codebook-YAML format described below.
+- `--config`: optional YAML config file whose values seed argparse
+  defaults; explicit CLI flags still win. See [configs.md](configs.md).
+- `--skip-existing`: load any prior `records.jsonl` (in the run dir
+  pointed at by `--run-id`) and skip already-extracted `work_id`s. New
+  records are appended to the existing sidecar. If
+  `extraction-codebook-meta.json` already exists and its recorded
+  `prompt_sha256` differs from the hash the current invocation would
+  produce, the run aborts with an error — mixing records from
+  different prompt versions in one file would silently corrupt any
+  downstream analysis. Run-id'd dirs are fresh by default, so this
+  flag is meaningful only when paired with an explicit
+  `--run-id <existing>`.
 - `--max-records`: process only the first N works from the eligible
   catalogue.
 - `--dry-run`: print summaries to stderr without writing any output.
@@ -222,7 +250,7 @@ laglitsynth extraction-codebook \
 ### Model sizing
 
 The CLI default is `gemma3:4b` for consistency with stages 3 and 7,
-but **gemma3:4b does not reliably handle stage 8's 30-field
+but **gemma3:4b does not reliably handle stage 8's full codebook
 structured JSON on typical paper bodies** — in smoke runs it returned
 `{}` (empty object) on most full-text inputs. Pass a bigger model via
 `--model`.
@@ -232,27 +260,57 @@ invocations; the `prompt_sha256` covers `num_ctx` + `CHAR_BUDGET` but
 not the model tag, so model identity is only recorded via
 `meta.llm.model`.
 
+## Codebook YAML
+
+Codebooks are data-driven. The YAML carries the system prompt and the
+field list together so stage 8 has one config-file domain artifact:
+
+```yaml
+id: lagrangian-oceanography
+description: Codebook for computational Lagrangian methods in oceanography.
+system_prompt: |-
+  You extract structured metadata from scientific papers on computational
+  Lagrangian methods in oceanography. ...
+  Fields:
+  {fields}
+
+  Respond with a single JSON object containing exactly these keys.
+fields:
+  - name: sub_discipline
+    description: >-
+      Sub-discipline tag. Free text — use the paper's own phrasing ...
+    context_description: Short verbatim excerpt from the paper supporting the sub_discipline tag.
+  # ... 13 more paired fields ...
+  - name: in_text_locations
+    description: >-
+      Where in THIS PAPER the extracted values were found ...
+    context: false
+  - name: extraction_notes
+    description: >-
+      What was ambiguous, surprising, or hard to classify ...
+    context: false
+```
+
+`context: true` is the default. Each named field gets a paired
+`<name>_context: str | None` automatically; `context_description`
+overrides the auto-generated paired-field description. `context: false`
+skips the pair entirely (used for `in_text_locations` and
+`extraction_notes`).
+
+The system prompt's `{fields}` placeholder is substituted at runtime
+with the rendered field list (one
+`- "<name>": <description>` line per field, in YAML order). The
+runtime payload-validation pydantic model is built from `fields` via
+`pydantic.create_model()` — adding/removing/renaming fields is a YAML
+edit, not a code change.
+
 ## LLM prompt
 
-Hardcoded in
-[`laglitsynth.extraction_codebook.prompts`](../src/laglitsynth/extraction_codebook/prompts.py);
-the digest is recorded as `meta.llm.prompt_sha256`. The field block in
-the system prompt is generated from
-`_ExtractionPayload.model_json_schema()` so the prompt and the
-validator stay in lockstep when fields are added or renamed.
+Loaded at runtime from the codebook YAML pointed at by `--codebook`;
+the digest is recorded as `meta.llm.prompt_sha256`.
 
 ```
-System: You extract structured metadata from scientific papers on
-computational Lagrangian methods in oceanography. Every value field
-has a companion "*_context" field containing a short verbatim excerpt
-from the paper supporting that value. If the paper does not state the
-information, write null for both the value and its context — do not
-guess or infer.
-
-Fields:
-<one-line-per-field description, generated from the pydantic model>
-
-Respond with a single JSON object containing exactly these keys.
+System: <spec.system_prompt with {fields} substituted>
 
 User: <source_basis>:
 <rendered text>
@@ -262,16 +320,14 @@ User: <source_basis>:
 random seed recorded on the record. Same shape as
 [eligibility](eligibility.md).
 
-## Regenerate on codebook change
+## Changing the codebook
 
-The codebook is a hypothesis in phases 1–2 of
-[codebook.md](codebook.md). When the codebook changes — fields added,
-removed, split, merged — the Pydantic
-[`ExtractionRecord`](../src/laglitsynth/extraction_codebook/models.py)
-is regenerated to match. `extra="forbid"` makes old `records.jsonl`
-fail to load after a schema change. Policy: delete the data directory
-and re-run. This is green-field prototyping — there is no migration
-path and no backwards compatibility ([AGENTS.md](../AGENTS.md)).
+Edit the YAML and re-run. The dynamically-built record class enforces
+`extra="forbid"` so old `records.jsonl` files fail to load after a
+schema change. Policy: start a fresh run dir (which `--run-id` does by
+default) and re-run. This is green-field prototyping — there is no
+migration path and no backwards compatibility
+([AGENTS.md](../AGENTS.md)).
 
 ## What to defer
 

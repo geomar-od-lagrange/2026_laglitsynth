@@ -118,8 +118,9 @@ stage 4's [`included.jsonl`](screening-adjudication.md).
 
 | Path | Model | Description |
 |---|---|---|
-| `data/extraction-codebook/records.jsonl` | [`ExtractionRecord`](../src/laglitsynth/extraction_codebook/models.py) | One codebook record per input work (successes and sentinels) |
-| `data/extraction-codebook/extraction-codebook-meta.json` | [`ExtractionCodebookMeta`](../src/laglitsynth/extraction_codebook/models.py) | Per-branch counts, nested `run` + `llm` |
+| `<data-dir>/extraction-codebook/<run-id>/records.jsonl` | `ExtractionRecord` (built dynamically by [`build_record_model`](../src/laglitsynth/extraction_codebook/codebook.py)) | One codebook record per input work (successes and sentinels) |
+| `<data-dir>/extraction-codebook/<run-id>/extraction-codebook-meta.json` | [`ExtractionCodebookMeta`](../src/laglitsynth/extraction_codebook/models.py) | Per-branch counts, nested `run` + `llm` |
+| `<data-dir>/extraction-codebook/<run-id>/config.yaml` | resolved CLI+config (codebook inlined) | Self-contained run snapshot; see [configs.md](configs.md) |
 
 Every input work produces exactly one record; sentinel records carry
 `None` in all content fields and a `reason` from the vocabulary in
@@ -171,7 +172,8 @@ laglitsynth catalogue-dedup \
 
 # Stage 3 — screening-abstracts
 laglitsynth screening-abstracts INPUT PROMPT \
-    [--output-dir DIR] [--model MODEL] [--screening-threshold N] \
+    [--data-dir DIR] [--run-id ID] [--config FILE] \
+    [--model MODEL] [--screening-threshold N] \
     [--base-url URL] [--max-records N] [--concurrency N] [--dry-run]
 
 # Stage 3 — screening-abstracts-export (human review)
@@ -207,19 +209,24 @@ laglitsynth fulltext-eligibility \
     --catalogue data/screening-adjudication/included.jsonl \
     --extractions data/fulltext-extraction/extraction.jsonl \
     [--extraction-output-dir data/fulltext-extraction/] \
-    [--output-dir data/fulltext-eligibility/] \
+    [--data-dir DIR] [--run-id ID] \
+    [--eligibility-criteria FILE] [--config FILE] \
     [--skip-existing] [--max-records N] [--dry-run] \
     [--model MODEL] [--base-url URL]
 
 # Stage 8 — extraction-codebook
 laglitsynth extraction-codebook \
-    --eligible data/fulltext-eligibility/eligible.jsonl \
+    --eligible data/fulltext-eligibility/<run-id>/eligible.jsonl \
     --extractions data/fulltext-extraction/extraction.jsonl \
     [--extraction-output-dir data/fulltext-extraction/] \
-    [--output-dir data/extraction-codebook/] \
+    [--data-dir DIR] [--run-id ID] \
+    [--codebook FILE] [--config FILE] \
     [--skip-existing] [--max-records N] [--dry-run] \
     [--model MODEL] [--base-url URL]
 ```
+
+Stages 3, 7 and 8 use the run-id directory model: outputs land at
+`<data-dir>/<stage-subdir>/<run-id>/`. See [configs.md](configs.md).
 
 Stages 1 and 3 use positional arguments. All other subcommands use
 `--input` / `--output-dir` keyword flags. Stages 1 and 3 should be
@@ -284,12 +291,11 @@ laglitsynth catalogue-dedup \
     --input data/catalogue-fetch/combined.jsonl \
     --output-dir data/catalogue-dedup/
 
-# 3. Screening abstracts
+# 3. Screening abstracts (writes to data/screening-abstracts/<run-id>/)
 laglitsynth screening-abstracts \
     data/catalogue-dedup/deduplicated.jsonl \
     "Is this about computational Lagrangian methods in oceanography?" \
-    --screening-threshold 50 \
-    --output-dir data/screening-abstracts/
+    --screening-threshold 50
 
 # 4. Screening adjudication (pass-through in prototype)
 laglitsynth screening-adjudication \
@@ -316,19 +322,18 @@ laglitsynth fulltext-extraction \
     --output-dir data/fulltext-extraction/ \
     --grobid-url http://localhost:8070
 
-# 7. Fulltext eligibility
+# 7. Fulltext eligibility (writes to data/fulltext-eligibility/<run-id>/)
 laglitsynth fulltext-eligibility \
     --catalogue data/screening-adjudication/included.jsonl \
     --extractions data/fulltext-extraction/extraction.jsonl \
-    --extraction-output-dir data/fulltext-extraction/ \
-    --output-dir data/fulltext-eligibility/
+    --extraction-output-dir data/fulltext-extraction/
 
-# 8. Extraction codebook
+# 8. Extraction codebook (writes to data/extraction-codebook/<run-id>/)
+# Substitute <run-id> below with the run id printed by step 7.
 laglitsynth extraction-codebook \
-    --eligible data/fulltext-eligibility/eligible.jsonl \
+    --eligible data/fulltext-eligibility/<run-id>/eligible.jsonl \
     --extractions data/fulltext-extraction/extraction.jsonl \
-    --extraction-output-dir data/fulltext-extraction/ \
-    --output-dir data/extraction-codebook/
+    --extraction-output-dir data/fulltext-extraction/
 
 # 9. Extraction adjudication (pass-through in prototype)
 laglitsynth extraction-adjudication \
@@ -424,8 +429,9 @@ context-window change produces a different digest. Stage 8 also folds
 | [`Section`](../src/laglitsynth/fulltext_extraction/tei.py), [`Figure`](../src/laglitsynth/fulltext_extraction/tei.py), [`Citation`](../src/laglitsynth/fulltext_extraction/tei.py), [`BibReference`](../src/laglitsynth/fulltext_extraction/tei.py) | `laglitsynth.fulltext_extraction.tei` | 7, 8 (lazy views over TEI) |
 | [`EligibilityVerdict`](../src/laglitsynth/fulltext_eligibility/models.py) | `laglitsynth.fulltext_eligibility.models` | 7 |
 | [`EligibilityMeta`](../src/laglitsynth/fulltext_eligibility/models.py) | `laglitsynth.fulltext_eligibility.models` | 7 |
-| [`ExtractionRecord`](../src/laglitsynth/extraction_codebook/models.py) | `laglitsynth.extraction_codebook.models` | 8, 9, 10, 11 |
+| `ExtractionRecord` (dynamic; [`build_record_model`](../src/laglitsynth/extraction_codebook/codebook.py)) | `laglitsynth.extraction_codebook.codebook` | 8, 9, 10, 11 |
 | [`ExtractionCodebookMeta`](../src/laglitsynth/extraction_codebook/models.py) | `laglitsynth.extraction_codebook.models` | 8 |
+| [`CodebookSpec`](../src/laglitsynth/extraction_codebook/codebook.py) | `laglitsynth.extraction_codebook.codebook` | 8 (codebook YAML schema) |
 
 ### Models not yet defined
 
