@@ -49,8 +49,7 @@ LLM_CONCURRENCY="${LLM_CONCURRENCY:-1}"
 STOP_AFTER_STAGE="${STOP_AFTER_STAGE:-8}"
 
 # Single run-id threaded through stages 3, 7, 8 so downstream inputs
-# (stage 4's --input, stage 8's --eligible) land at predictable
-# <stage>/<RUN_ID>/ paths within $ROOT.
+# land at predictable <stage>/<RUN_ID>/ paths within $ROOT.
 RUN_ID="${RUN_ID:-$(laglitsynth generate-run-id)}"
 
 [[ "$STOP_AFTER_STAGE" =~ ^[0-9]+$ ]] || {
@@ -92,15 +91,11 @@ run_stage 3 screening-abstracts \
         --base-url "$OLLAMA_BASE" \
         --concurrency "$LLM_CONCURRENCY"
 
-run_stage 4 screening-adjudication \
-    laglitsynth screening-adjudication \
-        --input "$ROOT/screening-abstracts/$RUN_ID/verdicts.jsonl" \
-        --catalogue "$ROOT/catalogue-dedup/deduplicated.jsonl" \
-        --output-dir "$ROOT/screening-adjudication"
-
 run_stage 5 fulltext-retrieval \
     laglitsynth fulltext-retrieval \
-        --input "$ROOT/screening-adjudication/included.jsonl" \
+        --catalogue "$ROOT/catalogue-dedup/deduplicated.jsonl" \
+        --screening-verdicts "$ROOT/screening-abstracts/$RUN_ID/verdicts.jsonl" \
+        --screening-threshold 50 \
         --output-dir "$ROOT/fulltext-retrieval" \
         --email "$UNPAYWALL_EMAIL" \
         --skip-existing

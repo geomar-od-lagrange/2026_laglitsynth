@@ -16,14 +16,12 @@ from laglitsynth.fulltext_retrieval.retrieve import build_subparser as build_ret
 from laglitsynth.ids import build_subparser as build_run_id_subparser
 from laglitsynth.screening_abstracts.export import build_subparser as build_screening_export_subparser
 from laglitsynth.screening_abstracts.screen import build_subparser as build_screening_subparser
-from laglitsynth.screening_adjudication.adjudicate import build_subparser as build_adjudication_subparser
 
 _BUILDERS = (
     build_fetch_subparser,
     build_dedup_subparser,
     build_screening_subparser,
     build_screening_export_subparser,
-    build_adjudication_subparser,
     build_retrieval_subparser,
     build_extraction_subparser,
     build_eligibility_subparser,
