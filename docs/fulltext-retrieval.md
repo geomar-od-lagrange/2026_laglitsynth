@@ -1,10 +1,14 @@
 # Full-text retrieval
 
-Retrieve PDFs for works in the included catalogue. This is where the
+Retrieve PDFs for works that pass the screening threshold. This is where the
 catalogue becomes a corpus. The output is PDFs on disk and a retrieval
 status record per work — nothing more. Text extraction (parsing PDFs into
 structured sections) is a separate concern handled by
 [fulltext-extraction.md](fulltext-extraction.md).
+
+The stage joins the deduplicated catalogue against the stage 3 screening
+verdict sidecar at a caller-supplied `--screening-threshold` to determine
+the active work set.
 
 ## Source cascade
 
@@ -90,7 +94,7 @@ no source had a PDF. `failed` means a source was found but download failed
 
 ### RetrievalRecord
 
-One per work in the included catalogue, regardless of outcome.
+One per work in the active (above-threshold) work set, regardless of outcome.
 
 ```python
 class RetrievalRecord(BaseModel):
@@ -139,7 +143,9 @@ PDFs are not committed to git. Add `data/fulltext-retrieval/pdfs/` to `.gitignor
 
 ```
 laglitsynth fulltext-retrieval \
-    --input data/screening-adjudication/included.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    --screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
+    --screening-threshold 50 \
     --output-dir data/fulltext-retrieval/ \
     --email $UNPAYWALL_EMAIL \
     [--manual-dir data/fulltext-retrieval/manual/] \
@@ -149,7 +155,12 @@ laglitsynth fulltext-retrieval \
 
 ### Arguments
 
-- `--input`: path to the included catalogue JSONL (Work records).
+- `--catalogue`: path to the deduplicated catalogue JSONL (`Work` records
+  from stage 2).
+- `--screening-verdicts`: path to the stage 3 verdict sidecar
+  (`ScreeningVerdict` records).
+- `--screening-threshold`: relevance score cutoff 0–100 (default: 50).
+  Works at or above the threshold are retrieved.
 - `--output-dir`: where to write retrieval records, metadata, and PDFs.
 - `--email`: contact email for Unpaywall API requests. Required. Scripts
   source `.env` and pass `--email $UNPAYWALL_EMAIL`.

@@ -20,37 +20,34 @@ All tools are accessed via the `laglitsynth` CLI:
 laglitsynth --help
 ```
 
-Stages 1–8 are implemented. Each stage has its own doc under [`docs/`](docs/).
+Stages 1, 2, 3, 5, 6, 7, 8 are implemented (stage 4 is not). Each stage
+has its own doc under [`docs/`](docs/). Stage 9+ are specified in
+[`docs/pipeline.md`](docs/pipeline.md) but not yet implemented.
 
 - `laglitsynth catalogue-fetch` — search OpenAlex by keyword and store
   validated bibliographic records as JSONL. See
   [`docs/catalogue-fetch.md`](docs/catalogue-fetch.md).
-- `laglitsynth catalogue-dedup` — deduplicate a combined catalogue on
-  DOI and title. See [`docs/catalogue-dedup.md`](docs/catalogue-dedup.md).
+- `laglitsynth catalogue-dedup` — deduplicate a catalogue on OpenAlex ID,
+  DOI, and title+author+year; accepts globs and multiple inputs. See
+  [`docs/catalogue-dedup.md`](docs/catalogue-dedup.md).
 - `laglitsynth screening-abstracts` — score every abstract for relevance
   with a local Ollama-hosted LLM, emitting a `ScreeningVerdict` sidecar.
   See [`docs/screening-abstracts.md`](docs/screening-abstracts.md).
-- `laglitsynth screening-adjudication` — apply a threshold to the
-  screening verdicts, emit `AdjudicationVerdict` records and an
-  `included.jsonl` convenience file for stage 5. See
-  [`docs/screening-adjudication.md`](docs/screening-adjudication.md).
-- `laglitsynth fulltext-retrieval` — fetch PDFs via manual pickup, OA
-  URLs, and Unpaywall. See
+- `laglitsynth fulltext-retrieval` — join the deduplicated catalogue against
+  the screening verdicts at a threshold, then fetch PDFs via manual pickup,
+  OA URLs, and Unpaywall. See
   [`docs/fulltext-retrieval.md`](docs/fulltext-retrieval.md).
 - `laglitsynth fulltext-extraction` — parse retrieved PDFs into
   structured section text via GROBID. See
   [`docs/fulltext-extraction.md`](docs/fulltext-extraction.md).
-- `laglitsynth fulltext-eligibility` — assess full-text eligibility of
-  included works with a local LLM, emitting an `EligibilityVerdict`
-  sidecar plus an `eligible.jsonl` convenience file. See
+- `laglitsynth fulltext-eligibility` — join the catalogue against the
+  screening verdicts, then assess full-text eligibility with a local LLM,
+  emitting an `EligibilityVerdict` sidecar. See
   [`docs/eligibility.md`](docs/eligibility.md).
-- `laglitsynth extraction-codebook` — extract structured codebook
-  records (numerical choices, reproducibility indicators,
-  sub-discipline tags) from each eligible work with a local LLM. See
-  [`docs/extraction-codebook.md`](docs/extraction-codebook.md).
-
-Stage 9+ are specified in [`docs/pipeline.md`](docs/pipeline.md) but not
-yet implemented.
+- `laglitsynth extraction-codebook` — join the catalogue against the
+  eligibility verdicts, then extract structured codebook records (numerical
+  choices, reproducibility indicators, sub-discipline tags) with a local
+  LLM. See [`docs/extraction-codebook.md`](docs/extraction-codebook.md).
 
 ## Running the pipeline
 

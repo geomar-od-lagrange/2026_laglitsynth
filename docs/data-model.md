@@ -15,6 +15,12 @@ errors.
 types used by the pipeline's own internal records — `RunMeta` and `LlmMeta`
 — described below.
 
+Stage 2 deduplication introduces [`DroppedRecord`](../src/laglitsynth/catalogue_dedup/models.py)
+in [`src/laglitsynth/catalogue_dedup/models.py`](../src/laglitsynth/catalogue_dedup/models.py),
+recording each dropped duplicate's `work_id`, the surviving record's `work_id`,
+and the matching rule that triggered the drop (`openalex_id`, `doi`, or
+`title_author_year`).
+
 ## Shared run-level types
 
 `RunMeta` and `LlmMeta` in

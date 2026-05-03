@@ -86,6 +86,11 @@ Update this file when a plan is written, implemented, or archived.
   criterion, percent-formatted score, reviewer placeholders, LLM
   verdict block collapsed by default.
 
+- [Verdicts-only cutover](verdicts-only-cutover.md) — stage 4
+  (`screening-adjudication`) deleted; stages 5, 7, 8 rewired to inline-join
+  the deduplicated catalogue against upstream verdict sidecars; no more
+  `included.jsonl` or `eligible.jsonl` convenience copies.
+
 ## In flight
 
 - (None.)

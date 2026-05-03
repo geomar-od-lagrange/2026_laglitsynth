@@ -29,10 +29,13 @@ prototype; false negatives are not.
 
 ## Input
 
-The stage consumes two artifacts:
+The stage consumes three artifacts:
 
-- The included catalogue ([`Work`](../src/laglitsynth/catalogue_fetch/models.py)
-  records from [`screening-adjudication`](screening-adjudication.md)).
+- The deduplicated catalogue ([`Work`](../src/laglitsynth/catalogue_fetch/models.py)
+  records from [`catalogue-dedup`](catalogue-dedup.md)).
+- The stage 3 screening verdict sidecar ([`ScreeningVerdict`](../src/laglitsynth/screening_abstracts/models.py)
+  records), plus a `--screening-threshold` cutoff. The stage joins these at
+  read time to determine which works to assess.
 - The extraction JSONL ([`ExtractedDocument`](../src/laglitsynth/fulltext_extraction/models.py)
   records from [`fulltext-extraction`](fulltext-extraction.md)).
 
@@ -113,16 +116,14 @@ stage 8 (`extraction-codebook`) is deliberate.
 ```
 <data-dir>/fulltext-eligibility/<run-id>/
   verdicts.jsonl              # one EligibilityVerdict per input work
-  eligible.jsonl              # Work records where verdict.eligible is True
   eligibility-meta.json       # EligibilityMeta
   config.yaml                 # resolved CLI+config, criteria inlined
 ```
 
 See [configs.md](configs.md) for the run-id directory model and
-`config.yaml` semantics. `verdicts.jsonl` is the source of truth.
-`eligible.jsonl` is a derived convenience file rebuilt each run by
-joining the catalogue against the verdict sidecar — same pattern as
-stage 4's [`included.jsonl`](screening-adjudication.md).
+`config.yaml` semantics. `verdicts.jsonl` is the source of truth and the
+sole output of this stage. Downstream stages that need the eligible work
+set join the catalogue against this sidecar at their own read time.
 
 ## Fallback cascade
 
@@ -139,8 +140,8 @@ For each catalogue work, in catalogue order:
 ## Sentinel reasons
 
 All sentinels set `eligible=None` and `seed=None`. Downstream consumers
-read [`eligible.jsonl`](#storage-layout) and never see the tri-state —
-sentinels are excluded from it by construction.
+join the catalogue against `verdicts.jsonl` filtering for `eligible is True`,
+so sentinel records are naturally excluded from the active work set.
 
 | Reason | Branch | Trigger |
 |---|---|---|
@@ -168,7 +169,9 @@ abstract.
 
 ```
 laglitsynth fulltext-eligibility \
-    --catalogue data/screening-adjudication/included.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    --screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
+    --screening-threshold 50 \
     --extractions data/fulltext-extraction/extraction.jsonl \
     [--extraction-output-dir data/fulltext-extraction/] \
     [--data-dir data/] [--run-id <iso>_<12hex>] \
@@ -182,7 +185,12 @@ The resolved output directory is `<data-dir>/fulltext-eligibility/<run-id>/`.
 
 ### Arguments
 
-- `--catalogue`: the included catalogue (`Work` records).
+- `--catalogue`: the deduplicated catalogue (`Work` records from stage 2).
+- `--screening-verdicts`: the stage 3 verdict sidecar
+  (`ScreeningVerdict` records). The stage joins this against the catalogue
+  at the `--screening-threshold` cutoff to determine which works to assess.
+- `--screening-threshold`: relevance score cutoff 0–100 (default: 50).
+  Works whose stage 3 score is at or above this threshold are assessed.
 - `--extractions`: the extraction JSONL (`ExtractedDocument` records).
   Works without a matching record fall back to the abstract.
 - `--extraction-output-dir`: directory that
@@ -201,14 +209,12 @@ The resolved output directory is `<data-dir>/fulltext-eligibility/<run-id>/`.
   defaults; explicit CLI flags still win. See [configs.md](configs.md).
 - `--skip-existing`: load any prior `verdicts.jsonl` (in the run dir
   pointed at by `--run-id`) and skip already-assessed `work_id`s. The
-  per-work verdict sidecar is appended to; `eligible.jsonl` is
-  regenerated from the union. If `eligibility-meta.json` already exists
-  and its recorded `prompt_sha256` differs from the hash the current
-  invocation would produce, the run aborts with an error — mixing
-  verdicts from different prompt versions in one file would silently
-  corrupt any downstream analysis. Run-id'd dirs are fresh by default,
-  so this flag is meaningful only when paired with an explicit
-  `--run-id <existing>`.
+  verdict sidecar is appended to on completion. If `eligibility-meta.json`
+  already exists and its recorded `prompt_sha256` differs from the hash the
+  current invocation would produce, the run aborts with an error — mixing
+  verdicts from different prompt versions in one file would silently corrupt
+  any downstream analysis. Run-id'd dirs are fresh by default, so this flag
+  is meaningful only when paired with an explicit `--run-id <existing>`.
 - `--max-records`: process only the first N works from the catalogue.
 - `--dry-run`: print verdicts to stderr without writing any output.
 - `--model`, `--base-url`: Ollama configuration. `--base-url` is checked
