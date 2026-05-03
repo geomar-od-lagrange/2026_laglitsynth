@@ -1,0 +1,100 @@
+id: lagrangian-oceanography
+description: Codebook for computational Lagrangian methods in oceanography.
+system_prompt: |-
+  You extract structured metadata from scientific papers on computational
+  Lagrangian methods in oceanography. You will be shown the text of one
+  paper and must fill a JSON object with the fields below. Every value
+  field has a companion "*_context" field containing a short verbatim
+  excerpt from the paper supporting that value. If the paper does not
+  state the information, write null for both the value and its context —
+  do not guess or infer.
+
+  Fields:
+  {fields}
+
+  Respond with a single JSON object containing exactly these keys.
+fields:
+  - name: sub_discipline
+    description: >-
+      Sub-discipline tag. Free text — use the paper's own phrasing
+      (e.g. 'water parcels', 'tracers', 'objects', 'passive debris
+      tracking', 'larval connectivity'). Not a fixed taxonomy.
+
+  - name: integration_scheme
+    description: >-
+      Numerical integration scheme used to advance particles
+      (e.g. 'Euler forward', 'RK4', 'RK45 adaptive').
+
+  - name: time_step_strategy
+    description: >-
+      How the time step is chosen (e.g. 'fixed', 'adaptive CFL-based',
+      'sub-stepped within ocean model step'). Separate from time_step_value.
+
+  - name: time_step_value
+    description: >-
+      Numeric time step with units if stated (e.g. '300s', '1h',
+      'variable'). Interpretable only alongside ocean_model resolution.
+
+  - name: interpolation_spatial
+    description: >-
+      Spatial interpolation scheme for velocity at particle positions
+      (e.g. 'trilinear', 'bicubic + linear vertical').
+
+  - name: interpolation_temporal
+    description: >-
+      Temporal interpolation scheme between model snapshots
+      (e.g. 'linear between snapshots', 'none'). Often unstated.
+
+  - name: diffusion_scheme
+    description: >-
+      Stochastic diffusion / random-walk scheme, if any
+      (e.g. 'random walk', 'Markov-1', 'none'). May not apply.
+
+  - name: software
+    description: >-
+      Particle-tracking software used
+      (e.g. 'OceanParcels v2.4', 'OpenDrift', 'custom Fortran').
+
+  - name: ocean_model
+    description: >-
+      Ocean circulation model whose velocity field drives the tracking
+      (e.g. 'NEMO ORCA025', 'MITgcm', 'ROMS L3').
+
+  - name: methods_detail
+    description: >-
+      Brief summary of how thoroughly the numerical methods are
+      described in the paper. Describe quality, not content.
+
+  - name: code_tracking_software
+    description: >-
+      Availability statement for the particle-tracking software itself
+      (e.g. 'yes, GitHub link', 'named but not linked', 'not mentioned').
+
+  - name: code_experiment_setup
+    description: >-
+      Availability of experiment setup / preprocessing scripts
+      (configuration, domain setup, forcing).
+
+  - name: code_analysis
+    description: >-
+      Availability of analysis scripts (post-processing, plotting, statistics).
+
+  - name: config_available
+    description: >-
+      Whether runtime parameters (domain, resolution, forcing) are
+      given in the paper itself. Describe availability in words,
+      not as a yes/no boolean.
+
+  - name: in_text_locations
+    description: >-
+      Where in THIS PAPER the extracted values were found — section
+      headings, figure/table numbers, or nearby phrases that help a
+      human reviewer locate them. Not the paper's subject matter;
+      not geographic place names in the paper's content.
+    context: false
+
+  - name: extraction_notes
+    description: >-
+      What was ambiguous, surprising, or hard to classify about this
+      paper's methods. Free text.
+    context: false
