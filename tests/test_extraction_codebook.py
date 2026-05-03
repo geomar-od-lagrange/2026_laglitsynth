@@ -852,6 +852,25 @@ class TestCliWiring:
             )
         assert mock_run.called
 
+    def test_default_model_is_llama_3_1_8b(self) -> None:
+        parser = argparse.ArgumentParser()
+        subparsers = parser.add_subparsers(dest="command")
+        from laglitsynth.extraction_codebook.extract import build_subparser
+
+        build_subparser(subparsers)
+        parsed = parser.parse_args(
+            [
+                "extraction-codebook",
+                "--catalogue",
+                "/tmp/cat.jsonl",
+                "--eligibility-verdicts",
+                "/tmp/ev.jsonl",
+                "--extractions",
+                "/tmp/x.jsonl",
+            ]
+        )
+        assert parsed.model == "llama3.1:8b"
+
 
 # --- _active_eligible_works join ---
 

@@ -349,8 +349,8 @@ def build_subparser(
     )
     parser.add_argument(
         "--model",
-        default="gemma3:4b",
-        help="Ollama model name (default: gemma3:4b)",
+        default="llama3.1:8b",
+        help="Ollama model name (default: llama3.1:8b)",
     )
     parser.add_argument(
         "--base-url",

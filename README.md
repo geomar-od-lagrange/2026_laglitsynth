@@ -214,16 +214,13 @@ ollama serve
 ollama pull gemma3:4b
 ```
 
-`gemma3:4b` (the CLI default) handles stages 3 and 7 comfortably but
-struggles with stage 8's 30-field structured JSON on typical paper
-bodies. For stage 8 a larger model is usually needed — in our smoke
-tests `llama3.1:8b` and `qwen2.5:14b` both produced valid records
-where `gemma3:4b` returned empty JSON. Pull whichever you want to use
-and pass it via `--model`.
+`gemma3:4b` (the CLI default for stages 3 and 7) handles those stages
+comfortably but returns empty JSON on stage 8's 30-field structured
+JSON payload. `llama3.1:8b` is the stage 8 default; `qwen2.5:14b` also
+works. Pull the models you need:
 
 ```bash
-ollama pull llama3.1:8b        # or qwen2.5:14b, etc.
-laglitsynth extraction-codebook --model llama3.1:8b ...
+ollama pull llama3.1:8b        # stage 8 default; or qwen2.5:14b, etc.
 ```
 
 ## GROBID (for full-text extraction)

@@ -209,7 +209,7 @@ laglitsynth extraction-codebook \
     [--codebook examples/codebooks/lagrangian-oceanography.yaml] \
     [--config <run-dir>/config.yaml] \
     [--skip-existing] [--max-records N] [--dry-run] \
-    [--model gemma3:4b] [--base-url http://localhost:11434]
+    [--model llama3.1:8b] [--base-url http://localhost:11434]
 ```
 
 The resolved output directory is `<data-dir>/extraction-codebook/<run-id>/`.
@@ -260,11 +260,9 @@ The resolved output directory is `<data-dir>/extraction-codebook/<run-id>/`.
 
 ### Model sizing
 
-The CLI default is `gemma3:4b` for consistency with stages 3 and 7,
-but **gemma3:4b does not reliably handle stage 8's full codebook
-structured JSON on typical paper bodies** — in smoke runs it returned
-`{}` (empty object) on most full-text inputs. Pass a bigger model via
-`--model`.
+The CLI default is `llama3.1:8b`. Smaller models (e.g. `gemma3:4b`)
+return empty JSON on the full codebook payload — pick `--model gemma3:4b`
+only for testing.
 
 Pick the model once and carry `--model` through to all stage 8
 invocations; the `prompt_sha256` covers `num_ctx` + `CHAR_BUDGET` but
