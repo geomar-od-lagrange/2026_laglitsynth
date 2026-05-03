@@ -216,8 +216,17 @@ def test_unique_sheet_name_truncates_base_to_fit_suffix() -> None:
     assert result.endswith("_2")
 
 
-def test_xlsx_export_full_set(tmp_path: Path) -> None:
-    works = [_make_work("https://openalex.org/W1"), _make_work("https://openalex.org/W2")]
+def test_xlsx_export_filters_no_abstract(tmp_path: Path) -> None:
+    """no-abstract verdicts are dropped — unscoreable for the reviewer.
+
+    llm-parse-failure and llm-timeout still appear (they have an
+    abstract; only the LLM call failed)."""
+    works = [
+        _make_work("https://openalex.org/W1"),
+        _make_work("https://openalex.org/W2", abstract=None),
+        _make_work("https://openalex.org/W3"),
+        _make_work("https://openalex.org/W4"),
+    ]
     verdicts = [
         ScreeningVerdict(
             work_id="https://openalex.org/W1",
@@ -231,6 +240,19 @@ def test_xlsx_export_full_set(tmp_path: Path) -> None:
             reason="no-abstract",
             seed=None,
         ),
+        ScreeningVerdict(
+            work_id="https://openalex.org/W3",
+            relevance_score=None,
+            reason="llm-parse-failure",
+            seed=None,
+            raw_response="malformed",
+        ),
+        ScreeningVerdict(
+            work_id="https://openalex.org/W4",
+            relevance_score=None,
+            reason="llm-timeout",
+            seed=None,
+        ),
     ]
     verdicts_path, catalogue_path, output_path = _write_inputs(
         tmp_path, works, verdicts, output_suffix="xlsx"
@@ -240,9 +262,10 @@ def test_xlsx_export_full_set(tmp_path: Path) -> None:
         verdicts_path, catalogue_path, output_path, n_subset=None
     )
 
-    assert count == 2
+    # W2 (no-abstract) is dropped; W1, W3, W4 stay.
+    assert count == 3
     wb = load_workbook(output_path)
-    assert wb.sheetnames == ["Index", "W1", "W2"]
+    assert wb.sheetnames == ["Index", "W1", "W3", "W4"]
     index = wb["Index"]
     # Reviewer-identity rows above the table.
     assert index["A1"].value == "reviewer_name"
@@ -253,7 +276,8 @@ def test_xlsx_export_full_set(tmp_path: Path) -> None:
     assert index["F5"].value == "llm_score"
     assert index["H5"].value == "sheet"
     assert index["A6"].value == "https://openalex.org/W1"
-    assert index["A7"].value == "https://openalex.org/W2"
+    assert index["A7"].value == "https://openalex.org/W3"
+    assert index["A8"].value == "https://openalex.org/W4"
     # Index hyperlink points at the per-work sheet via the canonical
     # in-workbook ``location`` form.
     link = index["H6"]
@@ -263,8 +287,9 @@ def test_xlsx_export_full_set(tmp_path: Path) -> None:
     # llm_score formatted as percent and stored as fraction.
     assert index["F6"].value == 0.8
     assert index["F6"].number_format == "0%"
-    # Sentinel verdict has blank score cell.
+    # Sentinel verdict (llm-parse-failure / llm-timeout) has blank score cell.
     assert index["F7"].value is None
+    assert index["F8"].value is None
 
 
 def test_xlsx_export_subset_preserves_verdict_order(tmp_path: Path) -> None:
@@ -320,13 +345,19 @@ def test_xlsx_export_subset_oversize_emits_full_set(tmp_path: Path) -> None:
     assert wb.sheetnames == ["Index", "W0", "W1", "W2"]
 
 
-def test_xlsx_export_sentinel_relevance_score_is_none(tmp_path: Path) -> None:
-    works = [_make_work("https://openalex.org/W1", abstract=None)]
+def test_xlsx_export_llm_failure_sentinels_keep_sheet(tmp_path: Path) -> None:
+    """llm-parse-failure / llm-timeout still get a per-work sheet.
+
+    The abstract is present so the reviewer can score; only the LLM
+    output is unusable. ``llm_score`` is blank, ``llm_reason`` carries
+    the sentinel string.
+    """
+    works = [_make_work("https://openalex.org/W1")]
     verdicts = [
         ScreeningVerdict(
             work_id="https://openalex.org/W1",
             relevance_score=None,
-            reason="no-abstract",
+            reason="llm-timeout",
             seed=None,
         )
     ]
@@ -343,7 +374,7 @@ def test_xlsx_export_sentinel_relevance_score_is_none(tmp_path: Path) -> None:
     assert work_sheet["B17"].value is None
     # llm_reason carries the sentinel string.
     assert work_sheet["A18"].value == "llm_reason"
-    assert work_sheet["B18"].value == "no-abstract"
+    assert work_sheet["B18"].value == "llm-timeout"
 
 
 def test_xlsx_work_sheet_layout(tmp_path: Path) -> None:

@@ -285,6 +285,44 @@ def run(args: argparse.Namespace) -> None:
         verdicts_path.parent.mkdir(parents=True, exist_ok=True)
         verdicts_path.unlink(missing_ok=True)
 
+    def _build_meta(
+        *,
+        above: int,
+        below: int,
+        skipped: int,
+        parse_failures: int,
+        timeouts: int,
+    ) -> ScreeningMeta:
+        return ScreeningMeta(
+            run=RunMeta(
+                tool=TOOL_NAME,
+                run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+                validation_skipped=stats.skipped,
+            ),
+            llm=LlmMeta(
+                model=args.model,
+                temperature=_TEMPERATURE,
+                prompt_sha256=prompt_sha256,
+            ),
+            threshold=threshold,
+            input_path=str(args.input),
+            input_count=total,
+            above_threshold_count=above,
+            below_threshold_count=below,
+            skipped_count=skipped,
+            llm_parse_failure_count=parse_failures,
+            llm_timeout_count=timeouts,
+            prompt=user_prompt,
+        )
+
+    # Write meta upfront so a mid-run reviewer-export sees prompt + LLM
+    # fingerprint. Counts start at zero and get rewritten at the end.
+    if not args.dry_run:
+        write_meta(
+            meta_path,
+            _build_meta(above=0, below=0, skipped=0, parse_failures=0, timeouts=0),
+        )
+
     t0 = time.monotonic()
     above_threshold_count = 0
     below_threshold_count = 0
@@ -343,29 +381,13 @@ def run(args: argparse.Namespace) -> None:
     )
 
     if not args.dry_run:
-        run_meta = RunMeta(
-            tool=TOOL_NAME,
-            run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
-            validation_skipped=stats.skipped,
-        )
-        llm_meta = LlmMeta(
-            model=args.model,
-            temperature=_TEMPERATURE,
-            prompt_sha256=prompt_sha256,
-        )
         write_meta(
             meta_path,
-            ScreeningMeta(
-                run=run_meta,
-                llm=llm_meta,
-                threshold=threshold,
-                input_path=str(args.input),
-                input_count=total,
-                above_threshold_count=above_threshold_count,
-                below_threshold_count=below_threshold_count,
-                skipped_count=skipped_count,
-                llm_parse_failure_count=llm_parse_failure_count,
-                llm_timeout_count=llm_timeout_count,
-                prompt=user_prompt,
+            _build_meta(
+                above=above_threshold_count,
+                below=below_threshold_count,
+                skipped=skipped_count,
+                parse_failures=llm_parse_failure_count,
+                timeouts=llm_timeout_count,
             ),
         )

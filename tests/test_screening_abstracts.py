@@ -679,6 +679,75 @@ def test_screen_works_concurrent_processes_all(tmp_path: Path) -> None:
         assert v.reason == f"r{i}"
 
 
+def test_run_writes_meta_before_loop_starts(tmp_path: Path) -> None:
+    """Meta is written upfront so a mid-run reviewer-export sees it.
+
+    Asserts that screening-meta.json exists by the time the LLM call
+    on the first work begins, with prompt + LLM fingerprint populated
+    and zeroed counts.
+    """
+    works = [_make_work(f"W{i}", abstract=f"a{i}") for i in range(3)]
+    _write_works_jsonl(tmp_path / "input.jsonl", works)
+
+    out_dir = tmp_path / "out"
+    meta_path = out_dir / "screening-meta.json"
+
+    captured: dict[str, Any] = {}
+
+    def side_effect(
+        work_id: str,
+        formatted_input: str,
+        prompt: str,
+        *,
+        model: str,
+        base_url: str,
+        client: Any,
+    ) -> ScreeningVerdict:
+        # On the first call, capture whether the meta exists.
+        if "first_call_meta_present" not in captured:
+            captured["first_call_meta_present"] = meta_path.exists()
+            if meta_path.exists():
+                captured["first_call_meta"] = json.loads(meta_path.read_text())
+        return ScreeningVerdict(
+            work_id=work_id, relevance_score=80, reason="ok", seed=1
+        )
+
+    args = MagicMock()
+    args.input = tmp_path / "input.jsonl"
+    args.prompt = "the criterion"
+    args.output_dir = out_dir
+    args.model = "m"
+    args.base_url = "http://x"
+    args.screening_threshold = 50
+    args.max_records = None
+    args.dry_run = False
+    args.concurrency = 1
+
+    with (
+        patch("laglitsynth.screening_abstracts.screen._preflight"),
+        patch(
+            "laglitsynth.screening_abstracts.screen.classify_abstract",
+            side_effect=side_effect,
+        ),
+        patch("laglitsynth.screening_abstracts.screen.OpenAI"),
+    ):
+        from laglitsynth.screening_abstracts.screen import run
+
+        run(args)
+
+    assert captured["first_call_meta_present"] is True
+    upfront = captured["first_call_meta"]
+    assert upfront["prompt"] == "the criterion"
+    assert upfront["above_threshold_count"] == 0
+    assert upfront["below_threshold_count"] == 0
+    assert upfront["llm"]["model"] == "m"
+    assert upfront["input_count"] == 3
+
+    # Final meta has the real counts.
+    final = json.loads(meta_path.read_text())
+    assert final["above_threshold_count"] == 3
+
+
 def test_run_streaming_append_partial_is_valid(tmp_path: Path) -> None:
     """A killed run leaves a valid partial verdicts.jsonl (clean-rerun only —
     resume is not supported, but the file shouldn't be truncated mid-line)."""

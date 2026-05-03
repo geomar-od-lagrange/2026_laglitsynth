@@ -429,6 +429,12 @@ def _load_meta(meta_path: Path | None) -> tuple[str, dict[str, object]]:
     a stub.
     """
     if meta_path is None or not meta_path.exists():
+        print(
+            f"WARNING: screening-meta.json not found at {meta_path}; "
+            f"per-work sheets will show '<screening criterion not available>'. "
+            f"Pass --meta to point at the right file.",
+            file=sys.stderr,
+        )
         return ("<screening criterion not available>", {})
 
     raw = json.loads(meta_path.read_text())
@@ -457,7 +463,14 @@ def export_review_xlsx(
     seed: int = _DEFAULT_SUBSET_SEED,
     meta_path: Path | None = None,
 ) -> int:
-    """Build and save the review workbook, returning the per-work sheet count."""
+    """Build and save the review workbook, returning the per-work sheet count.
+
+    ``no-abstract`` verdicts are filtered out — a reviewer cannot score
+    a work whose abstract is missing from the catalogue, and showing a
+    blank-abstract sheet wastes their time. ``llm-parse-failure`` and
+    ``llm-timeout`` verdicts are kept: those still have an abstract,
+    just no usable LLM verdict to compare against.
+    """
     catalogue: dict[str, Work] = {w.id: w for w in read_jsonl(catalogue_path, Work)}
     verdicts = list(read_jsonl(verdicts_path, ScreeningVerdict))
     for verdict in verdicts:
@@ -467,7 +480,16 @@ def export_review_xlsx(
                 f"catalogue {catalogue_path}"
             )
 
-    selected = sample_verdicts(verdicts, n_subset, seed)
+    reviewable = [v for v in verdicts if v.reason != "no-abstract"]
+    dropped = len(verdicts) - len(reviewable)
+    if dropped:
+        print(
+            f"Dropping {dropped} no-abstract verdicts from the workbook "
+            f"(unscoreable for the human reviewer).",
+            file=sys.stderr,
+        )
+
+    selected = sample_verdicts(reviewable, n_subset, seed)
     criterion, llm_meta = _load_meta(meta_path)
 
     wb = Workbook()

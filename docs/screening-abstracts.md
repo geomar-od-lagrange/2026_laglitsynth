@@ -55,10 +55,13 @@ laglitsynth screening-abstracts input.jsonl "..." --dry-run --max-records 20
 
 Each run produces two files in `--output-dir`:
 
-- **`verdicts.jsonl`** — one `ScreeningVerdict` per input work.
+- **`verdicts.jsonl`** — one `ScreeningVerdict` per input work, appended
+  per-record so a partial file from a killed run is still valid JSONL.
 - **`screening-meta.json`** — `ScreeningMeta` sidecar with nested `run`
-  and `llm` blocks, threshold, input path, input count, and
-  above/below/skipped counts.
+  and `llm` blocks, threshold, input path, input count, prompt, and
+  above/below/skipped counts. Written upfront with zeroed counts when
+  the run starts and rewritten with the real counts at the end, so a
+  mid-run reviewer export still sees the criterion + LLM fingerprint.
 
 ### ScreeningVerdict fields
 
@@ -248,10 +251,12 @@ Each per-work `W<id>` sheet uses a vertical `Field | Value` layout:
   reviewer has to actively expand to see the LLM's verdict.
 
 Sheet names are the trailing OpenAlex id (e.g. `W3213722062`);
-collisions are suffixed `_2`, `_3`, …. Sentinel verdicts
-(`no-abstract`, `llm-parse-failure`, `llm-timeout`) still get a
-per-work sheet — `llm_score` is blank, `llm_reason` carries the
-sentinel string, and `llm_raw_response` is blank for `no-abstract` /
-`llm-timeout` and carries the malformed text for `llm-parse-failure`.
+collisions are suffixed `_2`, `_3`, …. `no-abstract` verdicts are
+filtered out — there is nothing for the human to score from. The
+other null-score sentinels (`llm-parse-failure`, `llm-timeout`) still
+get a per-work sheet because the abstract is present: `llm_score` is
+blank, `llm_reason` carries the sentinel string, and `llm_raw_response`
+is blank for `llm-timeout` and carries the malformed text for
+`llm-parse-failure`.
 
 The export is read-only: edits to LLM cells are ignored at ingest.
