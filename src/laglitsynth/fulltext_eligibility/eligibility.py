@@ -38,7 +38,6 @@ from laglitsynth.io import (
     JsonlReadStats,
     append_jsonl,
     read_jsonl,
-    write_jsonl,
     write_meta,
 )
 from laglitsynth.models import LlmMeta, RunMeta
@@ -346,7 +345,6 @@ def run(args: argparse.Namespace) -> None:
         args.run_id = generate_run_id()
     output_dir: Path = Path(args.data_dir) / STAGE_SUBDIR / args.run_id
     verdicts_path = output_dir / "verdicts.jsonl"
-    eligible_path = output_dir / "eligible.jsonl"
     meta_path = output_dir / "eligibility-meta.json"
 
     extraction_output_dir: Path = (
@@ -499,11 +497,6 @@ def run(args: argparse.Namespace) -> None:
 
     if args.dry_run:
         return
-
-    # Rebuild eligible.jsonl from the verdict sidecar + active works.
-    eligible_ids = {v.work_id for v in all_verdicts if v.eligible is True}
-    eligible_works = [w for w in active if w.id in eligible_ids]
-    write_jsonl(eligible_works, eligible_path)
 
     run_meta = RunMeta(
         tool=TOOL_NAME,

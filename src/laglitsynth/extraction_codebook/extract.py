@@ -15,7 +15,7 @@ import logging
 import random
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -42,6 +42,7 @@ from laglitsynth.extraction_codebook.prompts import (
     build_user_message,
     render_fulltext,
 )
+from laglitsynth.fulltext_eligibility.models import EligibilityVerdict
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
 from laglitsynth.ids import generate_run_id
 from laglitsynth.io import (
@@ -156,6 +157,43 @@ def extract_codebook(
     return cast(ExtractionRecordProto, record)
 
 
+def _active_eligible_works(
+    catalogue_path: Path,
+    eligibility_verdicts_path: Path,
+    stats: JsonlReadStats | None = None,
+) -> Iterator[Work]:
+    """Yield Works that have an explicit ``eligible=True`` verdict.
+
+    Joins the eligibility verdict sidecar to the catalogue.  Works with
+    ``eligible=False`` or ``eligible=None`` (sentinel skips) are excluded.
+    No screening threshold is re-applied here — stage 7 already gated by
+    screening, so the eligibility verdict is the only gate needed.
+
+    The catalogue is required (rather than just the verdict file) because
+    stage 8 falls back to ``Work.abstract`` when TEI is missing.
+
+    Raises ``KeyError`` if a verdict's ``work_id`` is absent from the
+    catalogue — this signals a data inconsistency (stage 7 wrote a verdict
+    for a work the catalogue does not contain).
+    """
+    ev = {
+        v.work_id: v
+        for v in read_jsonl(eligibility_verdicts_path, EligibilityVerdict, stats)
+    }
+    catalogue = {
+        w.id: w for w in read_jsonl(catalogue_path, Work, stats)
+    }
+    for v in ev.values():
+        if v.eligible is not True:
+            continue
+        if v.work_id not in catalogue:
+            raise KeyError(
+                f"work_id {v.work_id!r} found in eligibility verdicts but absent "
+                f"from catalogue {catalogue_path}; this is a data inconsistency"
+            )
+        yield catalogue[v.work_id]
+
+
 def _load_extractions(
     path: Path, stats: JsonlReadStats
 ) -> dict[str, ExtractedDocument]:
@@ -163,7 +201,7 @@ def _load_extractions(
 
 
 def extract_works(
-    catalogue_path: Path,
+    works: Iterable[Work],
     extractions: dict[str, ExtractedDocument],
     extraction_output_dir: Path,
     *,
@@ -172,11 +210,10 @@ def extract_works(
     max_records: int | None,
     ctx: CodebookContext,
     skip_ids: set[str] | None = None,
-    stats: JsonlReadStats | None = None,
 ) -> Iterator[ExtractionRecordProto]:
     skip_ids = skip_ids or set()
     processed = 0
-    for work in read_jsonl(catalogue_path, Work, stats):
+    for work in works:
         if work.id in skip_ids:
             continue
         if max_records is not None and processed >= max_records:
@@ -263,10 +300,21 @@ def build_subparser(
         help="Extract codebook records for eligible works using a local LLM.",
     )
     parser.add_argument(
-        "--eligible",
+        "--catalogue",
         type=Path,
         required=True,
-        help="Eligible catalogue JSONL (data/fulltext-eligibility/eligible.jsonl)",
+        help=(
+            "Deduplicated catalogue JSONL (data/catalogue-dedup/deduplicated.jsonl). "
+            "Required for the abstract fallback path: when TEI is missing, stage 8 "
+            "falls back to Work.abstract, so the full Work record is needed — not "
+            "just the work_id from the eligibility verdict."
+        ),
+    )
+    parser.add_argument(
+        "--eligibility-verdicts",
+        type=Path,
+        required=True,
+        help="Eligibility verdicts JSONL (data/fulltext-eligibility/<run-id>/verdicts.jsonl)",
     )
     parser.add_argument(
         "--extractions",
@@ -383,7 +431,10 @@ def run(args: argparse.Namespace) -> None:
     stats = JsonlReadStats()
     extractions = _load_extractions(args.extractions, stats)
 
-    total = sum(1 for _ in read_jsonl(args.eligible, Work, stats))
+    eligible_works = list(
+        _active_eligible_works(args.catalogue, args.eligibility_verdicts, stats)
+    )
+    total = len(eligible_works)
 
     skip_ids: set[str] = set()
     prior_records: list[ExtractionRecordProto] = []
@@ -422,7 +473,7 @@ def run(args: argparse.Namespace) -> None:
     new_records: list[ExtractionRecordProto] = []
 
     for record in extract_works(
-        args.eligible,
+        eligible_works,
         extractions,
         extraction_output_dir,
         client=client,
@@ -430,7 +481,6 @@ def run(args: argparse.Namespace) -> None:
         max_records=args.max_records,
         ctx=ctx,
         skip_ids=skip_ids,
-        stats=stats,
     ):
         index += 1
         new_records.append(record)
@@ -505,7 +555,8 @@ def run(args: argparse.Namespace) -> None:
         ExtractionCodebookMeta(
             run=run_meta,
             llm=llm_meta,
-            input_catalogue=str(args.eligible),
+            input_catalogue=str(args.catalogue),
+            input_eligibility_verdicts=str(args.eligibility_verdicts),
             input_extractions=str(args.extractions),
             input_count=total,
             full_text_count=full_text_count,

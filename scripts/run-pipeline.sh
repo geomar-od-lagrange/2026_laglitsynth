@@ -123,7 +123,8 @@ run_stage 7 fulltext-eligibility \
 
 run_stage 8 extraction-codebook \
     laglitsynth extraction-codebook \
-        --eligible "$ROOT/fulltext-eligibility/$RUN_ID/eligible.jsonl" \
+        --catalogue "$ROOT/catalogue-dedup/deduplicated.jsonl" \
+        --eligibility-verdicts "$ROOT/fulltext-eligibility/$RUN_ID/verdicts.jsonl" \
         --extractions "$ROOT/fulltext-extraction/extraction.jsonl" \
         --data-dir "$ROOT" \
         --run-id "$RUN_ID" \

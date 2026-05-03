@@ -679,7 +679,7 @@ class TestRun:
 
         out_dir = _resolved_out_dir(args)
         assert (out_dir / "verdicts.jsonl").exists()
-        assert (out_dir / "eligible.jsonl").exists()
+        assert not (out_dir / "eligible.jsonl").exists()
         assert (out_dir / "eligibility-meta.json").exists()
         assert (out_dir / "config.yaml").exists()
 
@@ -689,15 +689,6 @@ class TestRun:
             if l.strip()
         ]
         assert len(verdict_lines) == 3
-
-        eligible_lines = [
-            l
-            for l in (out_dir / "eligible.jsonl").read_text().splitlines()
-            if l.strip()
-        ]
-        # Only W1 is eligible.
-        assert len(eligible_lines) == 1
-        assert json.loads(eligible_lines[0])["id"] == "W1"
 
         meta = json.loads((out_dir / "eligibility-meta.json").read_text())
         assert meta["input_count"] == 3
@@ -844,14 +835,6 @@ class TestRun:
         assert meta["no_source_count"] == 0
         assert meta["tei_parse_failure_count"] == 0
         assert meta["llm_parse_failure_count"] == 0
-
-        eligible_lines = [
-            l
-            for l in (out_dir / "eligible.jsonl").read_text().splitlines()
-            if l.strip()
-        ]
-        assert len(eligible_lines) == 1
-        assert json.loads(eligible_lines[0])["id"] == "W1"
 
 
 # --- _active_works join ---

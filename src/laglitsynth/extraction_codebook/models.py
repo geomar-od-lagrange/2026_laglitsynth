@@ -26,6 +26,7 @@ class ExtractionCodebookMeta(BaseModel):
     run: RunMeta
     llm: LlmMeta
     input_catalogue: str
+    input_eligibility_verdicts: str
     input_extractions: str
     input_count: int
     full_text_count: int
