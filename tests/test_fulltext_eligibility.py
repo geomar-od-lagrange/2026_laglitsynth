@@ -747,6 +747,11 @@ class TestRun:
             "llm_timeout_count": 0,
             "by_source_basis": {"abstract_only": 1},
         }
+        # Validate the dict is a real valid EligibilityMeta shape; if the model
+        # changes, this assertion fails loudly instead of silently.
+        from laglitsynth.fulltext_eligibility.models import EligibilityMeta
+
+        EligibilityMeta.model_validate(stale_meta)
         (out_dir / "eligibility-meta.json").write_text(json.dumps(stale_meta))
 
         args = _make_run_args(
@@ -766,6 +771,55 @@ class TestRun:
 
             with pytest.raises(SystemExit, match="prompt_sha256"):
                 run(args)
+
+    def test_validation_skipped_counts_invalid_catalogue_lines(
+        self, tmp_path: Path
+    ) -> None:
+        """meta.run.validation_skipped reflects malformed lines in catalogue and verdicts."""
+        # One valid work with a valid screening verdict; one malformed line in
+        # each of catalogue and verdicts.  Two skipped total.
+        catalogue = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        extractions_path = tmp_path / "extraction.jsonl"
+
+        work = _make_work("W1", abstract="about oceans")
+
+        with open(catalogue, "w") as f:
+            f.write(work.model_dump_json() + "\n")
+            f.write('{"not_a_real_field": "x"}\n')
+
+        valid_sv = ScreeningVerdict(work_id="W1", relevance_score=80)
+        with open(verdicts_path, "w") as f:
+            f.write(valid_sv.model_dump_json() + "\n")
+            f.write('{"not_a_real_field": "y"}\n')
+
+        extractions_path.write_text("")
+
+        args = _make_run_args(
+            tmp_path,
+            catalogue=catalogue,
+            screening_verdicts=verdicts_path,
+            extractions=extractions_path,
+            run_id="skipped-test-run",
+        )
+
+        with (
+            patch("laglitsynth.fulltext_eligibility.eligibility._preflight"),
+            patch(
+                "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
+                side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
+            ),
+            patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
+        ):
+            from laglitsynth.fulltext_eligibility.eligibility import run
+
+            run(args)
+
+        import json as _json
+
+        out_dir = _resolved_out_dir(args)
+        meta = _json.loads((out_dir / "eligibility-meta.json").read_text())
+        assert meta["run"]["validation_skipped"] == 2
 
     def test_skip_existing_processes_only_delta(self, tmp_path: Path) -> None:
         catalogue = tmp_path / "catalogue.jsonl"

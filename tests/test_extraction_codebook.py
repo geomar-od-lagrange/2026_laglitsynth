@@ -617,9 +617,15 @@ class TestRun:
             "abstract_only_count": 1,
             "skipped_count": 0,
             "llm_parse_failure_count": 0,
+            "llm_timeout_count": 0,
             "truncated_count": 0,
             "by_source_basis": {"abstract_only": 1},
         }
+        # Validate the dict is a real valid ExtractionCodebookMeta shape; if the
+        # model changes, this assertion fails loudly instead of silently.
+        from laglitsynth.extraction_codebook.models import ExtractionCodebookMeta
+
+        ExtractionCodebookMeta.model_validate(stale_meta)
         (out_dir / "extraction-codebook-meta.json").write_text(json.dumps(stale_meta))
 
         args = _make_run_args(
@@ -639,6 +645,55 @@ class TestRun:
 
             with pytest.raises(SystemExit, match="prompt_sha256"):
                 run(args)
+
+    def test_validation_skipped_counts_invalid_catalogue_lines(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        """meta.run.validation_skipped reflects malformed lines in catalogue and verdicts."""
+        # One valid work with a valid eligibility verdict; one malformed line in
+        # each of catalogue and verdicts.  Two skipped total.
+        catalogue = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        extractions_path = tmp_path / "extraction.jsonl"
+
+        work = _make_work("W1", abstract="about oceans")
+
+        with open(catalogue, "w") as f:
+            f.write(work.model_dump_json() + "\n")
+            f.write('{"not_a_real_field": "x"}\n')
+
+        valid_verdict = EligibilityVerdict(
+            work_id="W1", eligible=True, source_basis="abstract_only"
+        )
+        with open(verdicts_path, "w") as f:
+            f.write(valid_verdict.model_dump_json() + "\n")
+            f.write('{"not_a_real_field": "y"}\n')
+
+        extractions_path.write_text("")
+
+        args = _make_run_args(
+            tmp_path,
+            catalogue=catalogue,
+            eligibility_verdicts=verdicts_path,
+            extractions=extractions_path,
+            run_id="skipped-test-run",
+        )
+
+        mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
+        with (
+            patch("laglitsynth.extraction_codebook.extract._preflight"),
+            patch(
+                "laglitsynth.extraction_codebook.extract.OpenAI",
+                return_value=mock_client,
+            ),
+        ):
+            from laglitsynth.extraction_codebook.extract import run
+
+            run(args)
+
+        out_dir = _resolved_out_dir(args)
+        meta = json.loads((out_dir / "extraction-codebook-meta.json").read_text())
+        assert meta["run"]["validation_skipped"] == 2
 
     def test_skip_existing_processes_only_delta(
         self, tmp_path: Path, ctx: CodebookContext

@@ -675,6 +675,55 @@ class TestUnpaywallEmail:
         assert "email=addr%40example.com" in called_url or "email=addr@example.com" in called_url
 
 
+class TestValidationSkipped:
+    def test_validation_skipped_counts_invalid_catalogue_lines(
+        self, tmp_path: Path
+    ) -> None:
+        """meta.run.validation_skipped reflects malformed lines in catalogue and verdicts."""
+        # One valid work with a matching valid verdict, plus one malformed
+        # line in each of catalogue and verdicts.  Two skipped total.
+        work = _make_work("https://openalex.org/W1", doi=None)
+        catalogue_path = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+
+        # Write catalogue: one valid Work + one malformed line (wrong field names).
+        with open(catalogue_path, "w") as f:
+            f.write(work.model_dump_json() + "\n")
+            f.write('{"not_a_real_field": "x"}\n')
+
+        # Write verdicts: one valid ScreeningVerdict + one malformed line.
+        verdict = ScreeningVerdict(work_id="https://openalex.org/W1", relevance_score=80)
+        with open(verdicts_path, "w") as f:
+            f.write(verdict.model_dump_json() + "\n")
+            f.write('{"not_a_real_field": "y"}\n')
+
+        args = MagicMock()
+        args.catalogue = catalogue_path
+        args.screening_verdicts = verdicts_path
+        args.screening_threshold = 50.0
+        args.output_dir = tmp_path / "out"
+        args.email = "test@example.com"
+        args.manual_dir = None
+        args.skip_existing = False
+        args.dry_run = False
+
+        client_mock = MagicMock(spec=httpx.Client)
+        client_mock.get.side_effect = httpx.ConnectError("connection refused")
+
+        rl = _RateLimiter()
+        with (
+            patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client", return_value=client_mock),
+            patch("laglitsynth.fulltext_retrieval.retrieve._RateLimiter", return_value=rl),
+        ):
+            run(args)
+
+        import json as _json
+
+        meta_path = tmp_path / "out" / "retrieval-meta.json"
+        meta = _json.loads(meta_path.read_text())
+        assert meta["run"]["validation_skipped"] == 2
+
+
 class TestActiveWorksJoin:
     """Unit tests for the _active_works inline-join helper."""
 
