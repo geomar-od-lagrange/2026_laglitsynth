@@ -20,9 +20,10 @@ All tools are accessed via the `laglitsynth` CLI:
 laglitsynth --help
 ```
 
-Stages 1, 2, 3, 5, 6, 7, 8 are implemented (stage 4 is not). Each stage
-has its own doc under [`docs/`](docs/). Stage 9+ are specified in
-[`docs/pipeline.md`](docs/pipeline.md) but not yet implemented.
+Stages 1, 2, 3, 5, 6, 7, 8 are implemented; stage 4 was deleted in the
+verdicts-only cutover. Stages 9–12 are specified in
+[`docs/pipeline.md`](docs/pipeline.md) but not yet implemented. Each
+implemented stage has its own doc under [`docs/`](docs/).
 
 - `laglitsynth catalogue-fetch` — search OpenAlex by keyword and store
   validated bibliographic records as JSONL. See
@@ -165,17 +166,17 @@ produced automatically. To spot-check stage 3's verdicts, run
 ```bash
 # Flat CSV — one row per work, opens in Excel / Numbers / LibreOffice
 laglitsynth screening-abstracts-export --format csv \
-    --verdicts data/run/screening-abstracts/verdicts.jsonl \
+    --verdicts data/run/screening-abstracts/<run-id>/verdicts.jsonl \
     --catalogue data/run/catalogue-dedup/deduplicated.jsonl
 
 # XLSX — one tab per work plus an index sheet (better for deep review)
 laglitsynth screening-abstracts-export --format xlsx \
-    --verdicts data/run/screening-abstracts/verdicts.jsonl \
+    --verdicts data/run/screening-abstracts/<run-id>/verdicts.jsonl \
     --catalogue data/run/catalogue-dedup/deduplicated.jsonl
 
 # Reproducible random subset of 30 works (xlsx only)
 laglitsynth screening-abstracts-export --format xlsx \
-    --verdicts data/run/screening-abstracts/verdicts.jsonl \
+    --verdicts data/run/screening-abstracts/<run-id>/verdicts.jsonl \
     --catalogue data/run/catalogue-dedup/deduplicated.jsonl \
     --n-subset 30 --subset-seed 1
 ```

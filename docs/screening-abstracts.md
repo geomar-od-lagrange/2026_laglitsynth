@@ -163,7 +163,7 @@ workbook.
 ```bash
 laglitsynth screening-abstracts-export \
     --format csv \
-    --verdicts data/screening-abstracts/verdicts.jsonl \
+    --verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
     --catalogue data/catalogue-dedup/deduplicated.jsonl
 ```
 
@@ -212,13 +212,13 @@ click away for cross-check.
 ```bash
 laglitsynth screening-abstracts-export \
     --format xlsx \
-    --verdicts data/screening-abstracts/verdicts.jsonl \
+    --verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
     --catalogue data/catalogue-dedup/deduplicated.jsonl
 
 # Spot-check a reproducible random sample of 30 works.
 laglitsynth screening-abstracts-export \
     --format xlsx \
-    --verdicts data/screening-abstracts/verdicts.jsonl \
+    --verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
     --catalogue data/catalogue-dedup/deduplicated.jsonl \
     --n-subset 30 --subset-seed 1
 ```

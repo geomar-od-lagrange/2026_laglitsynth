@@ -24,15 +24,17 @@ times and combining results) is a planned optional extension; see
 
 ### Resolution
 
-A shared `resolve` module joins the deduplicated catalogue against verdict
-sidecars and caller-supplied thresholds to produce the active work set for
-a given pipeline stage. Every stage from 5 onward uses this module. The
-resolve logic lives in one place, not duplicated per stage.
+Stages 5, 7, and 8 each join the deduplicated catalogue against an upstream
+verdict sidecar at a caller-supplied threshold to determine their active work
+set. This logic lives in a small file-local `_active_works` helper in each
+stage's runner — three copies by design. A shared `laglitsynth.resolve`
+module is deferred until stage 9 adds a fourth consumer; see the
+[Resolve module](#resolve-module) note under "Gaps" below.
 
-Thresholds are CLI flags (e.g. `--screening-threshold 50`), passed through
-to the resolve module. Each run's threshold is recorded in the stage's meta
-sidecar for provenance. A pipeline-level config file may replace CLI flags
-once thresholds are tuned on real data.
+Thresholds are CLI flags (e.g. `--screening-threshold 50`). Each run's
+threshold is recorded in the stage's meta sidecar for provenance. A
+pipeline-level config file may replace CLI flags once thresholds are tuned
+on real data.
 
 ## Artifact map
 
@@ -59,8 +61,8 @@ The meta files stay as per-run provenance records — they are not merged.
 
 | Path | Model | Description |
 |---|---|---|
-| `data/screening-abstracts/verdicts.jsonl` | [`ScreeningVerdict`](../src/laglitsynth/screening_abstracts/models.py) | Relevance score and reason for every work |
-| `data/screening-abstracts/screening-meta.json` | [`ScreeningMeta`](../src/laglitsynth/screening_abstracts/models.py) | Prompt, model, threshold, counts |
+| `data/screening-abstracts/<run-id>/verdicts.jsonl` | [`ScreeningVerdict`](../src/laglitsynth/screening_abstracts/models.py) | Relevance score and reason for every work |
+| `data/screening-abstracts/<run-id>/screening-meta.json` | [`ScreeningMeta`](../src/laglitsynth/screening_abstracts/models.py) | Prompt, model, threshold, counts |
 
 Verdicts cover all works in the deduplicated catalogue, not just accepted
 ones. The accept/reject decision is derived from the relevance score and

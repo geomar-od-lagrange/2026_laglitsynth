@@ -6,10 +6,10 @@ Update this file when a plan is written, implemented, or archived.
 
 ## Implemented
 
-- Stages 1–6 end-to-end: `catalogue-fetch` → `catalogue-dedup` →
-  `screening-abstracts` → `screening-adjudication` → `fulltext-retrieval`
-  → `fulltext-extraction`. Ships with `pixi run typecheck` and `pixi
-  run test` green (76 tests, 79% coverage).
+- Stages 1–3, 5–8 end-to-end: `catalogue-fetch` → `catalogue-dedup` →
+  `screening-abstracts` → `fulltext-retrieval` → `fulltext-extraction`
+  → `fulltext-eligibility` → `extraction-codebook`. Stage 4
+  (`screening-adjudication`) was deleted in the verdicts-only cutover.
 - [Flag-don't-filter cutover](done/flag-dont-filter-cutover.md) — stage
   3 emits a `ScreeningVerdict` sidecar covering every input work; stage
   4 applies the threshold and emits `AdjudicationVerdict` records
