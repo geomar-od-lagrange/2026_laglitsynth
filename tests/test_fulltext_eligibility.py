@@ -698,6 +698,7 @@ class TestRun:
         assert meta["tei_parse_failure_count"] == 0
         assert meta["llm_parse_failure_count"] == 0
         assert meta["by_source_basis"] == {"abstract_only": 2, "none": 1}
+        assert meta["input_screening_verdicts"] == str(verdicts_path)
         assert meta["run"]["tool"] == "laglitsynth.fulltext_eligibility.assess"
         assert meta["llm"]["temperature"] == 0.8
         assert len(meta["llm"]["prompt_sha256"]) == 64
@@ -735,6 +736,7 @@ class TestRun:
                 "prompt_sha256": "0" * 64,  # deliberately wrong hash
             },
             "input_catalogue": str(catalogue),
+            "input_screening_verdicts": str(verdicts_path),
             "input_extractions": str(extractions_path),
             "input_count": 1,
             "eligible_count": 0,
@@ -742,6 +744,7 @@ class TestRun:
             "no_source_count": 0,
             "tei_parse_failure_count": 0,
             "llm_parse_failure_count": 0,
+            "llm_timeout_count": 0,
             "by_source_basis": {"abstract_only": 1},
         }
         (out_dir / "eligibility-meta.json").write_text(json.dumps(stale_meta))

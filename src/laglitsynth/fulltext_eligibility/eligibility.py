@@ -514,6 +514,7 @@ def run(args: argparse.Namespace) -> None:
             run=run_meta,
             llm=llm_meta,
             input_catalogue=str(args.catalogue),
+            input_screening_verdicts=str(args.screening_verdicts),
             input_extractions=str(args.extractions),
             input_count=total,
             eligible_count=eligible_count,

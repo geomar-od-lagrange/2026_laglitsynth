@@ -88,6 +88,7 @@ class EligibilityMeta(BaseModel):
     run: RunMeta
     llm: LlmMeta
     input_catalogue: str
+    input_screening_verdicts: str
     input_extractions: str
     input_count: int
     eligible_count: int
@@ -95,6 +96,7 @@ class EligibilityMeta(BaseModel):
     no_source_count: int
     tei_parse_failure_count: int
     llm_parse_failure_count: int
+    llm_timeout_count: int
     by_source_basis: dict[str, int]
 ```
 
