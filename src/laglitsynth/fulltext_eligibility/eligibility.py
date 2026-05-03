@@ -18,6 +18,7 @@ from openai import APIConnectionError, APITimeoutError, OpenAI
 from pydantic import ValidationError
 
 from laglitsynth.catalogue_fetch.models import Work
+from laglitsynth.config import register_config_arg, resolve_yaml_arg, save_resolved_config
 from laglitsynth.fulltext_eligibility.models import (
     TOOL_NAME,
     EligibilityMeta,
@@ -26,12 +27,13 @@ from laglitsynth.fulltext_eligibility.models import (
     _EligibilityPayload,
 )
 from laglitsynth.fulltext_eligibility.prompts import (
-    SYSTEM_PROMPT,
     USER_TEMPLATE,
     build_user_message,
+    load_system_prompt,
     render_fulltext,
 )
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
+from laglitsynth.ids import generate_run_id
 from laglitsynth.io import (
     JsonlReadStats,
     append_jsonl,
@@ -42,6 +44,11 @@ from laglitsynth.io import (
 from laglitsynth.models import LlmMeta, RunMeta
 
 logger = logging.getLogger(__name__)
+
+STAGE_SUBDIR = "fulltext-eligibility"
+DEFAULT_ELIGIBILITY_CRITERIA = Path(
+    "examples/eligibility-criteria/lagrangian-oceanography.yaml"
+)
 
 _TEMPERATURE = 0.8
 _NUM_CTX = 32768
@@ -56,6 +63,7 @@ def classify_eligibility(
     *,
     model: str,
     client: OpenAI,
+    system_prompt: str,
 ) -> EligibilityVerdict:
     """Call the LLM, validate the payload, compose the verdict.
 
@@ -70,7 +78,7 @@ def classify_eligibility(
             model=model,
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
             ],
             temperature=_TEMPERATURE,
@@ -124,6 +132,7 @@ def assess_works(
     client: OpenAI,
     model: str,
     max_records: int | None,
+    system_prompt: str,
     skip_ids: set[str] | None = None,
     stats: JsonlReadStats | None = None,
 ) -> Iterator[EligibilityVerdict]:
@@ -135,7 +144,9 @@ def assess_works(
         if max_records is not None and processed >= max_records:
             return
         processed += 1
-        yield _assess_one(work, extractions, extraction_output_dir, client, model)
+        yield _assess_one(
+            work, extractions, extraction_output_dir, client, model, system_prompt
+        )
 
 
 def _assess_one(
@@ -144,6 +155,7 @@ def _assess_one(
     extraction_output_dir: Path,
     client: OpenAI,
     model: str,
+    system_prompt: str,
 ) -> EligibilityVerdict:
     # Step 1: prefer full text when an extraction exists.
     extracted = extractions.get(work.id)
@@ -165,7 +177,12 @@ def _assess_one(
         if rendered:
             prompt = build_user_message("full_text", rendered)
             return classify_eligibility(
-                work.id, prompt, "full_text", client=client, model=model
+                work.id,
+                prompt,
+                "full_text",
+                client=client,
+                model=model,
+                system_prompt=system_prompt,
             )
         # Empty body (valid XML, no content): fall through to abstract.
 
@@ -173,7 +190,12 @@ def _assess_one(
     if work.abstract:
         prompt = build_user_message("abstract_only", work.abstract)
         return classify_eligibility(
-            work.id, prompt, "abstract_only", client=client, model=model
+            work.id,
+            prompt,
+            "abstract_only",
+            client=client,
+            model=model,
+            system_prompt=system_prompt,
         )
 
     # Step 3: no source at all.
@@ -226,10 +248,24 @@ def build_subparser(
         ),
     )
     parser.add_argument(
-        "--output-dir",
+        "--data-dir",
         type=Path,
-        default=Path("data/fulltext-eligibility"),
-        help="Output directory (default: data/fulltext-eligibility/)",
+        default=Path("data"),
+        help="Bucket root for stage outputs (default: data/)",
+    )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Run identifier; default = generate_run_id() (<iso>_<12hex>).",
+    )
+    parser.add_argument(
+        "--eligibility-criteria",
+        default=str(DEFAULT_ELIGIBILITY_CRITERIA),
+        help=(
+            f"Eligibility-criteria YAML — path to a spec on the CLI; on "
+            f"reload from a saved snapshot, the inlined mapping is "
+            f"consumed directly (default: {DEFAULT_ELIGIBILITY_CRITERIA})."
+        ),
     )
     parser.add_argument(
         "--model",
@@ -257,6 +293,7 @@ def build_subparser(
         action="store_true",
         help="Print verdicts to stderr without writing output",
     )
+    register_config_arg(parser)
     parser.set_defaults(run=run)
     return parser
 
@@ -264,33 +301,42 @@ def build_subparser(
 def run(args: argparse.Namespace) -> None:
     _preflight(args)
 
-    output_dir: Path = args.output_dir
+    if args.run_id is None:
+        args.run_id = generate_run_id()
+    output_dir: Path = Path(args.data_dir) / STAGE_SUBDIR / args.run_id
     verdicts_path = output_dir / "verdicts.jsonl"
     eligible_path = output_dir / "eligible.jsonl"
     meta_path = output_dir / "eligibility-meta.json"
 
     extraction_output_dir: Path = (
-        args.extraction_output_dir
+        Path(args.extraction_output_dir)
         if args.extraction_output_dir is not None
-        else args.extractions.parent
+        else Path(args.extractions).parent
     )
 
+    criteria_spec = resolve_yaml_arg(args.eligibility_criteria)
+    system_prompt = load_system_prompt(criteria_spec)
+
     prompt_sha256 = hashlib.sha256(
-        (SYSTEM_PROMPT + "\n" + USER_TEMPLATE + "\n" + str(_NUM_CTX)).encode("utf-8")
+        (system_prompt + "\n" + USER_TEMPLATE + "\n" + str(_NUM_CTX)).encode("utf-8")
     ).hexdigest()
 
     # Prompt-hash guard: refuse --skip-existing when the recorded hash differs.
     if args.skip_existing and meta_path.exists():
         try:
-            recorded_sha = json.loads(meta_path.read_text())["llm"]["prompt_sha256"]
-            if recorded_sha != prompt_sha256:
-                raise SystemExit(
-                    f"recorded prompt_sha256 in {meta_path} differs from current; "
-                    f"refusing --skip-existing to avoid mixing prompt versions in "
-                    f"{verdicts_path}"
-                )
-        except (KeyError, json.JSONDecodeError):
-            pass  # malformed or missing key: let the run proceed
+            recorded = json.loads(meta_path.read_text())
+        except json.JSONDecodeError as exc:
+            raise SystemExit(
+                f"failed to parse {meta_path} ({exc}); refusing --skip-existing "
+                f"on a corrupted meta file"
+            )
+        recorded_sha = recorded.get("llm", {}).get("prompt_sha256")
+        if recorded_sha is not None and recorded_sha != prompt_sha256:
+            raise SystemExit(
+                f"recorded prompt_sha256 in {meta_path} differs from current; "
+                f"refusing --skip-existing to avoid mixing prompt versions in "
+                f"{verdicts_path}"
+            )
 
     stats = JsonlReadStats()
     extractions = _load_extractions(args.extractions, stats)
@@ -312,6 +358,10 @@ def run(args: argparse.Namespace) -> None:
     print(f"Assessing {total} works with model {args.model}", file=sys.stderr)
     if not args.dry_run:
         print(f"Output dir: {output_dir}", file=sys.stderr)
+
+    if not args.dry_run:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        save_resolved_config(args, output_dir, inlines=["eligibility_criteria"])
 
     # Start-of-run truncation: non-resuming runs rewrite verdicts.jsonl.
     if not args.dry_run and not args.skip_existing and verdicts_path.exists():
@@ -335,6 +385,7 @@ def run(args: argparse.Namespace) -> None:
         client=client,
         model=args.model,
         max_records=args.max_records,
+        system_prompt=system_prompt,
         skip_ids=skip_ids,
         stats=stats,
     ):

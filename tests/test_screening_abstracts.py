@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -418,6 +419,25 @@ def test_preflight_raises_on_connection_failure() -> None:
 # --- run() end-to-end with mocked LLM ---
 
 
+def _run_args(tmp_path: Path, **overrides: Any) -> argparse.Namespace:
+    """Build a Namespace mirroring screen.build_subparser defaults."""
+    base: dict[str, Any] = {
+        "input": tmp_path / "input.jsonl",
+        "prompt": "about oceans",
+        "data_dir": tmp_path,
+        "run_id": "test-run-id",
+        "model": "m",
+        "base_url": "http://x",
+        "screening_threshold": 50,
+        "max_records": None,
+        "dry_run": False,
+        "concurrency": 1,
+        "config": None,
+    }
+    base.update(overrides)
+    return argparse.Namespace(**base)
+
+
 def test_run_dry_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     works = [
         _make_work("W1", abstract="Ocean currents."),
@@ -430,16 +450,8 @@ def test_run_dry_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None
         "W2": {"relevance_score": 20, "reason": "no"},
     }
 
-    args = MagicMock()
-    args.input = tmp_path / "input.jsonl"
-    args.prompt = "about oceans"
-    args.output_dir = tmp_path / "out"
-    args.model = "m"
-    args.base_url = "http://x"
-    args.screening_threshold = 50
-    args.max_records = None
-    args.dry_run = True
-    args.concurrency = 1
+    args = _run_args(tmp_path, dry_run=True)
+    out_dir = tmp_path / "screening-abstracts" / "test-run-id"
 
     with (
         patch("laglitsynth.screening_abstracts.screen._preflight"),
@@ -454,8 +466,9 @@ def test_run_dry_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None
         run(args)
 
     # No output files should be created
-    assert not (tmp_path / "out" / "verdicts.jsonl").exists()
-    assert not (tmp_path / "out" / "screening-meta.json").exists()
+    assert not (out_dir / "verdicts.jsonl").exists()
+    assert not (out_dir / "screening-meta.json").exists()
+    assert not (out_dir / "config.yaml").exists()
 
 
 def test_run_writes_output_files(tmp_path: Path) -> None:
@@ -471,18 +484,8 @@ def test_run_writes_output_files(tmp_path: Path) -> None:
         "W3": {"relevance_score": 20, "reason": "no"},
     }
 
-    out_dir = tmp_path / "out"
-
-    args = MagicMock()
-    args.input = tmp_path / "input.jsonl"
-    args.prompt = "about oceans"
-    args.output_dir = out_dir
-    args.model = "m"
-    args.base_url = "http://x"
-    args.screening_threshold = 50
-    args.max_records = None
-    args.dry_run = False
-    args.concurrency = 1
+    args = _run_args(tmp_path)
+    out_dir = tmp_path / "screening-abstracts" / "test-run-id"
 
     with (
         patch("laglitsynth.screening_abstracts.screen._preflight"),
@@ -496,9 +499,10 @@ def test_run_writes_output_files(tmp_path: Path) -> None:
 
         run(args)
 
-    # Only verdicts.jsonl and screening-meta.json should exist; no accepted/rejected split
+    # verdicts.jsonl, screening-meta.json, config.yaml should exist; no accepted/rejected split
     assert (out_dir / "verdicts.jsonl").exists()
     assert (out_dir / "screening-meta.json").exists()
+    assert (out_dir / "config.yaml").exists()
     assert not (out_dir / "accepted.jsonl").exists()
     assert not (out_dir / "rejected.jsonl").exists()
 
@@ -597,18 +601,8 @@ def test_prompt_sha256_matches(tmp_path: Path) -> None:
     ).hexdigest()
 
     classify_results = {"W1": {"relevance_score": 80, "reason": "yes"}}
-    out_dir = tmp_path / "out"
-
-    args = MagicMock()
-    args.input = tmp_path / "input.jsonl"
-    args.prompt = user_prompt
-    args.output_dir = out_dir
-    args.model = "m"
-    args.base_url = "http://x"
-    args.screening_threshold = 50
-    args.max_records = None
-    args.dry_run = False
-    args.concurrency = 1
+    args = _run_args(tmp_path, prompt=user_prompt)
+    out_dir = tmp_path / "screening-abstracts" / "test-run-id"
 
     with (
         patch("laglitsynth.screening_abstracts.screen._preflight"),
@@ -689,7 +683,7 @@ def test_run_writes_meta_before_loop_starts(tmp_path: Path) -> None:
     works = [_make_work(f"W{i}", abstract=f"a{i}") for i in range(3)]
     _write_works_jsonl(tmp_path / "input.jsonl", works)
 
-    out_dir = tmp_path / "out"
+    out_dir = tmp_path / "screening-abstracts" / "test-run-id"
     meta_path = out_dir / "screening-meta.json"
 
     captured: dict[str, Any] = {}
@@ -712,16 +706,7 @@ def test_run_writes_meta_before_loop_starts(tmp_path: Path) -> None:
             work_id=work_id, relevance_score=80, reason="ok", seed=1
         )
 
-    args = MagicMock()
-    args.input = tmp_path / "input.jsonl"
-    args.prompt = "the criterion"
-    args.output_dir = out_dir
-    args.model = "m"
-    args.base_url = "http://x"
-    args.screening_threshold = 50
-    args.max_records = None
-    args.dry_run = False
-    args.concurrency = 1
+    args = _run_args(tmp_path, prompt="the criterion")
 
     with (
         patch("laglitsynth.screening_abstracts.screen._preflight"),
@@ -772,17 +757,8 @@ def test_run_streaming_append_partial_is_valid(tmp_path: Path) -> None:
             work_id=work_id, relevance_score=50, reason="ok", seed=1
         )
 
-    out_dir = tmp_path / "out"
-    args = MagicMock()
-    args.input = tmp_path / "input.jsonl"
-    args.prompt = "p"
-    args.output_dir = out_dir
-    args.model = "m"
-    args.base_url = "http://x"
-    args.screening_threshold = 50
-    args.max_records = None
-    args.dry_run = False
-    args.concurrency = 1
+    out_dir = tmp_path / "screening-abstracts" / "test-run-id"
+    args = _run_args(tmp_path, prompt="p")
 
     with (
         patch("laglitsynth.screening_abstracts.screen._preflight"),
@@ -802,3 +778,98 @@ def test_run_streaming_append_partial_is_valid(tmp_path: Path) -> None:
     assert 0 < len(lines) < 4
     for line in lines:
         json.loads(line)  # raises if corrupted
+
+
+# --- Run dirs, config.yaml, --run-id ---
+
+
+def test_run_id_default_generates_fresh_dir(tmp_path: Path) -> None:
+    """run_id=None at parse time → generate_run_id() produces a fresh dir."""
+    works = [_make_work("W1", abstract="a")]
+    _write_works_jsonl(tmp_path / "input.jsonl", works)
+
+    args = _run_args(tmp_path, run_id=None)
+
+    classify_results = {"W1": {"relevance_score": 80, "reason": "ok"}}
+    with (
+        patch("laglitsynth.screening_abstracts.screen._preflight"),
+        patch(
+            "laglitsynth.screening_abstracts.screen.classify_abstract",
+            side_effect=_mock_classify(classify_results),
+        ),
+        patch("laglitsynth.screening_abstracts.screen.OpenAI"),
+    ):
+        from laglitsynth.screening_abstracts.screen import run
+
+        run(args)
+
+    # args.run_id is now resolved to a generated id, and the run dir lives under it.
+    assert args.run_id is not None
+    out_dir = tmp_path / "screening-abstracts" / args.run_id
+    assert (out_dir / "verdicts.jsonl").exists()
+    assert (out_dir / "config.yaml").exists()
+
+
+def test_config_yaml_records_resolved_args(tmp_path: Path) -> None:
+    works = [_make_work("W1", abstract="a")]
+    _write_works_jsonl(tmp_path / "input.jsonl", works)
+
+    args = _run_args(tmp_path, prompt="about oceans", model="gemma3:4b")
+
+    classify_results = {"W1": {"relevance_score": 80, "reason": "ok"}}
+    with (
+        patch("laglitsynth.screening_abstracts.screen._preflight"),
+        patch(
+            "laglitsynth.screening_abstracts.screen.classify_abstract",
+            side_effect=_mock_classify(classify_results),
+        ),
+        patch("laglitsynth.screening_abstracts.screen.OpenAI"),
+    ):
+        from laglitsynth.screening_abstracts.screen import run
+
+        run(args)
+
+    import yaml as _yaml
+
+    out_dir = tmp_path / "screening-abstracts" / "test-run-id"
+    written = _yaml.safe_load((out_dir / "config.yaml").read_text())
+    assert written["prompt"] == "about oceans"
+    assert written["model"] == "gemma3:4b"
+    assert written["screening_threshold"] == 50
+    # run_id excluded — replay must generate a fresh one.
+    assert "run_id" not in written
+    # config (the --config flag itself) excluded.
+    assert "config" not in written
+
+
+def test_config_seeds_defaults_explicit_cli_wins(tmp_path: Path) -> None:
+    """End-to-end through cli.main: --config seeds defaults; explicit CLI flag wins."""
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text(
+        "model: from-config\nscreening_threshold: 75\nconcurrency: 4\n",
+        encoding="utf-8",
+    )
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(args: Any) -> None:
+        captured["args"] = args
+
+    argv = [
+        "screening-abstracts",
+        str(tmp_path / "input.jsonl"),
+        "the-prompt",
+        "--config",
+        str(cfg),
+        "--model",
+        "from-cli",
+    ]
+    from laglitsynth.cli import main
+
+    with patch("laglitsynth.screening_abstracts.screen.run", fake_run):
+        main(argv)
+
+    args = captured["args"]
+    assert args.model == "from-cli"  # CLI wins
+    assert args.screening_threshold == 75  # config seeded
+    assert args.concurrency == 4  # config seeded

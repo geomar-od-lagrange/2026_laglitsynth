@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 from typing import Any
@@ -54,7 +55,7 @@ class TestClassifyEligibility:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt text", "full_text", model="m", client=mock_client
+            "W1", "prompt text", "full_text", model="m", client=mock_client, system_prompt="SP"
         )
         assert verdict.work_id == "W1"
         assert verdict.eligible is True
@@ -68,7 +69,7 @@ class TestClassifyEligibility:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt text", "abstract_only", model="m", client=mock_client
+            "W1", "prompt text", "abstract_only", model="m", client=mock_client, system_prompt="SP"
         )
         assert verdict.eligible is False
         assert verdict.source_basis == "abstract_only"
@@ -78,7 +79,7 @@ class TestClassifyEligibility:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt", "full_text", model="m", client=mock_client
+            "W1", "prompt", "full_text", model="m", client=mock_client, system_prompt="SP"
         )
         assert verdict.reason == "llm-parse-failure"
         assert verdict.eligible is None
@@ -90,7 +91,7 @@ class TestClassifyEligibility:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt", "full_text", model="m", client=mock_client
+            "W1", "prompt", "full_text", model="m", client=mock_client, system_prompt="SP"
         )
         assert verdict.reason == "llm-parse-failure"
         assert verdict.raw_response == '{"reason": "ok"}'
@@ -103,7 +104,7 @@ class TestClassifyEligibility:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt", "full_text", model="m", client=mock_client
+            "W1", "prompt", "full_text", model="m", client=mock_client, system_prompt="SP"
         )
         assert verdict.reason == "ok"
         assert verdict.eligible is True
@@ -115,7 +116,7 @@ class TestClassifyEligibility:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt", "full_text", model="m", client=mock_client
+            "W1", "prompt", "full_text", model="m", client=mock_client, system_prompt="SP"
         )
         assert verdict.reason == "a / b"
 
@@ -125,7 +126,7 @@ class TestClassifyEligibility:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt", "full_text", model="m", client=mock_client
+            "W1", "prompt", "full_text", model="m", client=mock_client, system_prompt="SP"
         )
         assert verdict.eligible is True
         assert verdict.reason == "ok"
@@ -137,7 +138,7 @@ class TestClassifyEligibility:
             request=MagicMock()
         )
         verdict = classify_eligibility(
-            "W1", "prompt", "full_text", model="m", client=mock_client
+            "W1", "prompt", "full_text", model="m", client=mock_client, system_prompt="SP"
         )
         assert verdict.reason == "llm-timeout"
         assert verdict.eligible is None
@@ -151,7 +152,7 @@ class TestClassifyEligibility:
             request=MagicMock()
         )
         verdict = classify_eligibility(
-            "W1", "prompt", "abstract_only", model="m", client=mock_client
+            "W1", "prompt", "abstract_only", model="m", client=mock_client, system_prompt="SP"
         )
         assert verdict.reason == "llm-timeout"
         assert verdict.source_basis == "abstract_only"
@@ -165,7 +166,7 @@ class TestClassifyEligibility:
             return_value=42,
         ):
             verdict = classify_eligibility(
-                "W1", "prompt", "full_text", model="m", client=mock_client
+                "W1", "prompt", "full_text", model="m", client=mock_client, system_prompt="SP"
             )
         assert verdict.seed == 42
 
@@ -183,6 +184,7 @@ def _mock_classify(
         *,
         model: str,
         client: Any,
+        system_prompt: str,
     ) -> EligibilityVerdict:
         entry = results[work_id]
         if entry == "error":
@@ -247,6 +249,7 @@ class TestAssessWorksCascade:
                     client=MagicMock(),
                     model="m",
                     max_records=None,
+                    system_prompt="SP",
                 )
             )
 
@@ -287,6 +290,7 @@ class TestAssessWorksCascade:
                     client=MagicMock(),
                     model="m",
                     max_records=None,
+                    system_prompt="SP",
                 )
             )
 
@@ -315,6 +319,7 @@ class TestAssessWorksCascade:
                     client=MagicMock(),
                     model="m",
                     max_records=None,
+                    system_prompt="SP",
                 )
             )
 
@@ -353,6 +358,7 @@ class TestAssessWorksCascade:
                     client=MagicMock(),
                     model="m",
                     max_records=None,
+                    system_prompt="SP",
                 )
             )
 
@@ -398,6 +404,7 @@ class TestAssessWorksCascade:
                     client=MagicMock(),
                     model="m",
                     max_records=None,
+                    system_prompt="SP",
                 )
             )
 
@@ -422,6 +429,7 @@ class TestAssessWorksCascade:
                     client=MagicMock(),
                     model="m",
                     max_records=None,
+                    system_prompt="SP",
                 )
             )
 
@@ -448,6 +456,7 @@ class TestAssessWorksCascade:
             *,
             model: str,
             client: Any,
+            system_prompt: str,
         ) -> EligibilityVerdict:
             if work_id == "W1":
                 return EligibilityVerdict(
@@ -478,6 +487,7 @@ class TestAssessWorksCascade:
                     client=MagicMock(),
                     model="m",
                     max_records=None,
+                    system_prompt="SP",
                 )
             )
 
@@ -506,6 +516,7 @@ class TestAssessWorksCascade:
                     client=MagicMock(),
                     model="m",
                     max_records=None,
+                    system_prompt="SP",
                 )
             )
         assert verdicts[0].seed == 99
@@ -556,6 +567,12 @@ class TestPreflight:
 # --- run() end-to-end ---
 
 
+_TEST_CRITERIA_SPEC = {
+    "id": "test-criteria",
+    "system_prompt": "You are a test classifier. Respond with JSON.",
+}
+
+
 def _make_run_args(
     tmp_path: Path,
     *,
@@ -564,18 +581,26 @@ def _make_run_args(
     dry_run: bool = False,
     skip_existing: bool = False,
     max_records: int | None = None,
-) -> MagicMock:
-    args = MagicMock()
-    args.catalogue = catalogue
-    args.extractions = extractions
-    args.extraction_output_dir = extractions.parent
-    args.output_dir = tmp_path / "out"
-    args.model = "m"
-    args.base_url = "http://x"
-    args.max_records = max_records
-    args.skip_existing = skip_existing
-    args.dry_run = dry_run
-    return args
+    run_id: str = "test-run-id",
+) -> argparse.Namespace:
+    return argparse.Namespace(
+        catalogue=catalogue,
+        extractions=extractions,
+        extraction_output_dir=extractions.parent,
+        data_dir=tmp_path,
+        run_id=run_id,
+        eligibility_criteria=_TEST_CRITERIA_SPEC,
+        model="m",
+        base_url="http://x",
+        max_records=max_records,
+        skip_existing=skip_existing,
+        dry_run=dry_run,
+        config=None,
+    )
+
+
+def _resolved_out_dir(args: argparse.Namespace) -> Path:
+    return Path(args.data_dir) / "fulltext-eligibility" / args.run_id
 
 
 class TestRun:
@@ -606,9 +631,8 @@ class TestRun:
 
             run(args)
 
-        assert not (args.output_dir).exists() or not any(
-            (args.output_dir).iterdir()
-        )
+        out_dir = _resolved_out_dir(args)
+        assert not out_dir.exists() or not any(out_dir.iterdir())
 
     def test_writes_expected_files(self, tmp_path: Path) -> None:
         catalogue = tmp_path / "catalogue.jsonl"
@@ -645,10 +669,11 @@ class TestRun:
 
             run(args)
 
-        out_dir = args.output_dir
+        out_dir = _resolved_out_dir(args)
         assert (out_dir / "verdicts.jsonl").exists()
         assert (out_dir / "eligible.jsonl").exists()
         assert (out_dir / "eligibility-meta.json").exists()
+        assert (out_dir / "config.yaml").exists()
 
         verdict_lines = [
             l
@@ -689,8 +714,9 @@ class TestRun:
         _write_works_jsonl(catalogue, [_make_work("W1", abstract="first abstract")])
         extractions_path.write_text("")
 
-        out_dir = tmp_path / "out"
-        out_dir.mkdir()
+        run_id = "stale-run"
+        out_dir = tmp_path / "fulltext-eligibility" / run_id
+        out_dir.mkdir(parents=True)
 
         # Write a meta file with a stale/wrong prompt_sha256.
         stale_meta = {
@@ -721,8 +747,8 @@ class TestRun:
             catalogue=catalogue,
             extractions=extractions_path,
             skip_existing=True,
+            run_id=run_id,
         )
-        args.output_dir = out_dir
 
         with (
             patch("laglitsynth.fulltext_eligibility.eligibility._preflight"),
@@ -743,8 +769,9 @@ class TestRun:
         _write_works_jsonl(catalogue, works)
         extractions_path.write_text("")
 
-        out_dir = tmp_path / "out"
-        out_dir.mkdir()
+        run_id = "resume-run"
+        out_dir = tmp_path / "fulltext-eligibility" / run_id
+        out_dir.mkdir(parents=True)
         # Prior verdict for W1 only.
         prior = EligibilityVerdict(
             work_id="W1",
@@ -760,8 +787,8 @@ class TestRun:
             catalogue=catalogue,
             extractions=extractions_path,
             skip_existing=True,
+            run_id=run_id,
         )
-        args.output_dir = out_dir
 
         classify_results: dict[str, dict[str, Any] | str] = {
             "W2": {"eligible": False, "reason": "nope"},

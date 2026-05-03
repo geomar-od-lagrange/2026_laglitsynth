@@ -1,31 +1,38 @@
 """Prompt construction for full-text eligibility assessment.
 
-The system prompt is the canonical text of the three-point eligibility
-criterion. ``render_fulltext`` flattens a ``TeiDocument`` into a single
+The system prompt is loaded from an external eligibility-criteria YAML
+at runtime so swapping topics is configuration work rather than a
+refactor. ``render_fulltext`` flattens a ``TeiDocument`` into a single
 string the LLM can consume. ``build_user_message`` wraps the rendered
 body with the ``source_basis`` tag the system prompt references.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
+from laglitsynth.config import resolve_yaml_arg
 from laglitsynth.fulltext_eligibility.models import SourceBasis
 from laglitsynth.fulltext_extraction.tei import TeiDocument, flatten_sections
 
-SYSTEM_PROMPT = """\
-You are assessing whether a scientific paper meets the inclusion criteria
-for a systematic review of numerical methods in Lagrangian oceanography.
-
-Criteria:
-1. The paper describes a computation that tracks particles, tracers, or
-   objects in an ocean flow field.
-2. The paper is primary research (not a review, editorial, or commentary).
-3. The paper contains at least some description of the numerical methods
-   used.
-
-Respond with JSON: {"eligible": true|false, "reason": "<one sentence>"}.
-Return ONLY the JSON object, nothing else."""
-
 USER_TEMPLATE = "{source_basis}:\n{text}"
+
+
+def load_system_prompt(spec: str | Path | dict[str, Any]) -> str:
+    """Return the eligibility-criteria system prompt from a YAML spec.
+
+    ``spec`` may be a path to a YAML file or an already-loaded mapping
+    (the inlined-snapshot case). The mapping must carry a string-valued
+    ``system_prompt`` field.
+    """
+    loaded = resolve_yaml_arg(spec)
+    prompt = loaded.get("system_prompt")
+    if not isinstance(prompt, str):
+        raise ValueError(
+            "eligibility-criteria spec must include a string 'system_prompt' field"
+        )
+    return prompt
 
 
 def render_fulltext(tei: TeiDocument) -> str:

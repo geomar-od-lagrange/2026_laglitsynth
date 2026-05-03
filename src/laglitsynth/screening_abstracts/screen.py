@@ -17,6 +17,8 @@ from pathlib import Path
 from openai import APIConnectionError, APITimeoutError, OpenAI
 
 from laglitsynth.catalogue_fetch.models import Work
+from laglitsynth.config import register_config_arg, save_resolved_config
+from laglitsynth.ids import generate_run_id
 from laglitsynth.io import (
     JsonlReadStats,
     append_jsonl,
@@ -25,6 +27,8 @@ from laglitsynth.io import (
 )
 from laglitsynth.models import LlmMeta, RunMeta
 from laglitsynth.screening_abstracts.models import TOOL_NAME, ScreeningMeta, ScreeningVerdict
+
+STAGE_SUBDIR = "screening-abstracts"
 
 logger = logging.getLogger(__name__)
 
@@ -212,10 +216,15 @@ def build_subparser(
     parser.add_argument("input", type=Path, help="Input JSONL file path")
     parser.add_argument("prompt", help="Relevance screening prompt string")
     parser.add_argument(
-        "--output-dir",
+        "--data-dir",
         type=Path,
-        default=Path("data/screening-abstracts"),
-        help="Output directory (default: data/screening-abstracts/)",
+        default=Path("data"),
+        help="Bucket root for stage outputs (default: data/)",
+    )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Run identifier; default = generate_run_id() (<iso>_<12hex>).",
     )
     parser.add_argument(
         "--model", default="gemma3:4b", help="Ollama model name (default: gemma3:4b)"
@@ -252,6 +261,7 @@ def build_subparser(
             "See docs/llm-concurrency.md."
         ),
     )
+    register_config_arg(parser)
     parser.set_defaults(run=run)
     return parser
 
@@ -259,7 +269,9 @@ def build_subparser(
 def run(args: argparse.Namespace) -> None:
     _preflight(args)
 
-    output_dir: Path = args.output_dir
+    if args.run_id is None:
+        args.run_id = generate_run_id()
+    output_dir: Path = Path(args.data_dir) / STAGE_SUBDIR / args.run_id
     verdicts_path = output_dir / "verdicts.jsonl"
     meta_path = output_dir / "screening-meta.json"
     threshold: int = args.screening_threshold
@@ -282,7 +294,8 @@ def run(args: argparse.Namespace) -> None:
     # append. Resume is explicitly not supported — see
     # docs/llm-concurrency.md.
     if not args.dry_run:
-        verdicts_path.parent.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        save_resolved_config(args, output_dir)
         verdicts_path.unlink(missing_ok=True)
 
     def _build_meta(

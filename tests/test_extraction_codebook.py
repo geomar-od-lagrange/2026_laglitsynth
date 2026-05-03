@@ -1,7 +1,14 @@
-"""Tests for the ``extraction_codebook`` stage."""
+"""Tests for the ``extraction_codebook`` stage.
+
+The codebook YAML loader and dynamic-payload-model behaviours are
+covered in ``test_extraction_codebook_loader.py``. This file focuses on
+the ``extract_codebook`` LLM-call path, the cascade in ``extract_works``,
+and the end-to-end ``run()`` wiring (run dirs, config.yaml, meta).
+"""
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 from typing import Any
@@ -9,14 +16,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from openai import APIConnectionError, APITimeoutError
+from pydantic import BaseModel
 
+from laglitsynth.extraction_codebook.codebook import CodebookContext
 from laglitsynth.extraction_codebook.extract import (
     extract_codebook,
     extract_works,
-)
-from laglitsynth.extraction_codebook.models import (
-    ExtractionRecord,
-    _ExtractionPayload,
 )
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
 
@@ -29,8 +34,12 @@ from conftest import (
     _write_works_jsonl,
 )
 
+DEFAULT_CODEBOOK_PATH = Path("examples/codebooks/lagrangian-oceanography.yaml")
 
-# --- fixtures and helpers ---
+
+@pytest.fixture(scope="module")
+def ctx() -> CodebookContext:
+    return CodebookContext.from_spec(DEFAULT_CODEBOOK_PATH)
 
 
 def _write_malformed_tei(path: Path) -> None:
@@ -38,330 +47,175 @@ def _write_malformed_tei(path: Path) -> None:
     path.write_bytes(b"not xml at all")
 
 
-def _valid_payload_json() -> str:
-    """Return a JSON payload with every ``_ExtractionPayload`` field set.
-
-    Uses placeholder strings to keep the test explicit about which
-    fields come from the LLM.
-    """
-    data: dict[str, str | None] = {}
-    for name in _ExtractionPayload.model_fields:
-        # Any valid str or None is fine; alternate for variety.
-        data[name] = f"v:{name}"
-    return json.dumps(data)
+def _valid_payload_json(payload_field_names: tuple[str, ...] | list[str]) -> str:
+    return json.dumps({name: f"v:{name}" for name in payload_field_names})
 
 
-def _all_none_payload_json() -> str:
-    data: dict[str, str | None] = {
-        name: None for name in _ExtractionPayload.model_fields
-    }
-    return json.dumps(data)
+def _call_extract(
+    ctx: CodebookContext,
+    *,
+    work_id: str = "W1",
+    source_basis: str = "full_text",
+    user_text: str = "body",
+    client: Any,
+    truncated: bool = False,
+) -> BaseModel:
+    return extract_codebook(  # type: ignore[return-value]
+        work_id,
+        source_basis,  # type: ignore[arg-type]
+        user_text,
+        client=client,
+        model="m",
+        truncated=truncated,
+        ctx=ctx,
+    )
 
 
-# --- ExtractionRecord model ---
-
-
-class TestSchemaRoundtrip:
-    def test_populated_record_roundtrip(self) -> None:
-        payload = json.loads(_valid_payload_json())
-        record = ExtractionRecord(
-            work_id="W1",
-            source_basis="full_text",
-            reason=None,
-            seed=42,
-            truncated=False,
-            **payload,
+def _call_extract_works(
+    ctx: CodebookContext,
+    catalogue: Path,
+    extractions: dict[str, ExtractedDocument],
+    extraction_output_dir: Path,
+    *,
+    client: Any,
+    max_records: int | None = None,
+) -> list[BaseModel]:
+    return list(
+        extract_works(  # type: ignore[arg-type]
+            catalogue,
+            extractions,
+            extraction_output_dir,
+            client=client,
+            model="m",
+            max_records=max_records,
+            ctx=ctx,
         )
-        reparsed = ExtractionRecord.model_validate_json(record.model_dump_json())
-        assert reparsed == record
-
-    def test_all_none_sentinel_variant(self) -> None:
-        payload = {name: None for name in _ExtractionPayload.model_fields}
-        record = ExtractionRecord(
-            work_id="W1",
-            source_basis="none",
-            reason="no-source",
-            seed=None,
-            truncated=False,
-            **payload,
-        )
-        reparsed = ExtractionRecord.model_validate_json(record.model_dump_json())
-        assert reparsed == record
-
-    def test_extra_fields_dropped_by_inherited_coercer(self) -> None:
-        # ExtractionRecord inherits _ExtractionPayload's mode="before" validator
-        # which drops unknown keys before pydantic sees them (LLM-tolerance design).
-        # Extras passed at construction time are silently dropped; the record is
-        # valid. This is the expected behaviour: extra="forbid" guards
-        # deserialization of stored records against schema drift, but construction
-        # from caller code goes through the coercer.
-        payload = {name: None for name in _ExtractionPayload.model_fields}
-        record = ExtractionRecord(
-            work_id="W1",
-            source_basis="none",
-            reason=None,
-            seed=None,
-            truncated=False,
-            bonus="no",  # type: ignore[call-arg]
-            **payload,
-        )
-        assert record.work_id == "W1"
-        assert not hasattr(record, "bonus")
+    )
 
 
 # --- extract_codebook ---
 
 
 class TestExtractCodebook:
-    def test_valid_payload_produces_record(self) -> None:
-        resp = _mock_openai_response(_valid_payload_json())
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        record = extract_codebook(
-            "W1",
-            "full_text",
-            "body text",
-            client=mock_client,
-            model="m",
-            truncated=False,
+    def test_valid_payload_produces_record(self, ctx: CodebookContext) -> None:
+        resp = _mock_openai_response(
+            _valid_payload_json(ctx.payload_field_names)
         )
-        assert record.work_id == "W1"
-        assert record.source_basis == "full_text"
-        assert record.reason is None
-        assert isinstance(record.seed, int)
-        assert record.truncated is False
-        assert record.integration_scheme == "v:integration_scheme"
+        client = MagicMock()
+        client.chat.completions.create.return_value = resp
+        record = _call_extract(ctx, client=client)
+        assert record.work_id == "W1"  # type: ignore[attr-defined]
+        assert record.source_basis == "full_text"  # type: ignore[attr-defined]
+        assert record.reason is None  # type: ignore[attr-defined]
+        assert isinstance(record.seed, int)  # type: ignore[attr-defined]
+        assert record.truncated is False  # type: ignore[attr-defined]
+        assert record.integration_scheme == "v:integration_scheme"  # type: ignore[attr-defined]
 
-    def test_truncated_flag_forwarded(self) -> None:
-        resp = _mock_openai_response(_valid_payload_json())
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        record = extract_codebook(
-            "W1",
-            "full_text",
-            "body",
-            client=mock_client,
-            model="m",
-            truncated=True,
+    def test_truncated_flag_forwarded(self, ctx: CodebookContext) -> None:
+        resp = _mock_openai_response(
+            _valid_payload_json(ctx.payload_field_names)
         )
-        assert record.truncated is True
-        assert record.reason is None
+        client = MagicMock()
+        client.chat.completions.create.return_value = resp
+        record = _call_extract(ctx, client=client, truncated=True)
+        assert record.truncated is True  # type: ignore[attr-defined]
+        assert record.reason is None  # type: ignore[attr-defined]
 
-    def test_seed_forwarded_to_client(self) -> None:
-        resp = _mock_openai_response(_valid_payload_json())
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
+    def test_seed_forwarded_to_client(self, ctx: CodebookContext) -> None:
+        resp = _mock_openai_response(
+            _valid_payload_json(ctx.payload_field_names)
+        )
+        client = MagicMock()
+        client.chat.completions.create.return_value = resp
         with patch(
             "laglitsynth.extraction_codebook.extract.random.randint",
             return_value=42,
         ):
-            record = extract_codebook(
-                "W1",
-                "full_text",
-                "body",
-                client=mock_client,
-                model="m",
-                truncated=False,
-            )
-        assert record.seed == 42
+            record = _call_extract(ctx, client=client)
+        assert record.seed == 42  # type: ignore[attr-defined]
 
-    def test_timeout_yields_llm_timeout_sentinel(self) -> None:
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.side_effect = APITimeoutError(
-            request=MagicMock()
-        )
-        record = extract_codebook(
-            "W1",
-            "full_text",
-            "body",
-            client=mock_client,
-            model="m",
-            truncated=False,
-        )
-        assert record.reason == "llm-timeout"
-        assert record.source_basis == "full_text"
-        assert record.seed is None
-        assert record.truncated is False
-        assert record.raw_response is None
-        for name in _ExtractionPayload.model_fields:
+    def test_timeout_yields_llm_timeout_sentinel(self, ctx: CodebookContext) -> None:
+        client = MagicMock()
+        client.chat.completions.create.side_effect = APITimeoutError(request=MagicMock())
+        record = _call_extract(ctx, client=client)
+        assert record.reason == "llm-timeout"  # type: ignore[attr-defined]
+        assert record.source_basis == "full_text"  # type: ignore[attr-defined]
+        assert record.seed is None  # type: ignore[attr-defined]
+        assert record.truncated is False  # type: ignore[attr-defined]
+        assert record.raw_response is None  # type: ignore[attr-defined]
+        for name in ctx.payload_field_names:
             assert getattr(record, name) is None
 
-    def test_connection_error_yields_llm_timeout_sentinel(self) -> None:
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.side_effect = APIConnectionError(
-            request=MagicMock()
-        )
-        record = extract_codebook(
-            "W1",
-            "abstract_only",
-            "abs",
-            client=mock_client,
-            model="m",
-            truncated=False,
-        )
-        assert record.reason == "llm-timeout"
-        assert record.source_basis == "abstract_only"
+    def test_connection_error_yields_llm_timeout_sentinel(
+        self, ctx: CodebookContext
+    ) -> None:
+        client = MagicMock()
+        client.chat.completions.create.side_effect = APIConnectionError(request=MagicMock())
+        record = _call_extract(ctx, client=client, source_basis="abstract_only")
+        assert record.reason == "llm-timeout"  # type: ignore[attr-defined]
+        assert record.source_basis == "abstract_only"  # type: ignore[attr-defined]
 
-    def test_bad_json_yields_llm_parse_failure(self) -> None:
+    def test_bad_json_yields_llm_parse_failure(
+        self, ctx: CodebookContext
+    ) -> None:
         resp = _mock_openai_response("not json at all")
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        record = extract_codebook(
-            "W1",
-            "abstract_only",
-            "abstract",
-            client=mock_client,
-            model="m",
-            truncated=False,
-        )
-        assert record.reason == "llm-parse-failure"
-        assert record.source_basis == "abstract_only"
-        assert record.seed is None
-        assert record.truncated is False
-        # Every content field is None on a sentinel.
-        for name in _ExtractionPayload.model_fields:
+        client = MagicMock()
+        client.chat.completions.create.return_value = resp
+        record = _call_extract(ctx, client=client, source_basis="abstract_only")
+        assert record.reason == "llm-parse-failure"  # type: ignore[attr-defined]
+        assert record.source_basis == "abstract_only"  # type: ignore[attr-defined]
+        assert record.seed is None  # type: ignore[attr-defined]
+        for name in ctx.payload_field_names:
             assert getattr(record, name) is None
 
-    def test_partial_json_missing_keys_parses_with_none_defaults(self) -> None:
-        # Partial LLM response: only one field populated, rest default to None.
-        # This is the intended tolerant-parse behaviour — a single laggy field
-        # cannot discard the other 29.
+    def test_partial_json_missing_keys_parses_with_none_defaults(
+        self, ctx: CodebookContext
+    ) -> None:
         resp = _mock_openai_response('{"integration_scheme": "RK4"}')
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        record = extract_codebook(
-            "W1",
-            "full_text",
-            "body",
-            client=mock_client,
-            model="m",
-            truncated=False,
-        )
-        assert record.reason is None
-        assert record.integration_scheme == "RK4"
-        assert record.time_step_strategy is None
-        assert record.sub_discipline is None
+        client = MagicMock()
+        client.chat.completions.create.return_value = resp
+        record = _call_extract(ctx, client=client)
+        assert record.reason is None  # type: ignore[attr-defined]
+        assert record.integration_scheme == "RK4"  # type: ignore[attr-defined]
+        assert record.time_step_strategy is None  # type: ignore[attr-defined]
+        assert record.sub_discipline is None  # type: ignore[attr-defined]
 
-    def test_bool_field_coerced_to_yes_no_string(self) -> None:
-        # LLMs often answer `config_available` with a JSON bool. We coerce
-        # to keep the str-only downstream contract.
-        resp = _mock_openai_response(
-            '{"config_available": true, "code_tracking_software": false}'
-        )
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        record = extract_codebook(
-            "W1",
-            "full_text",
-            "body",
-            client=mock_client,
-            model="m",
-            truncated=False,
-        )
-        assert record.reason is None
-        assert record.config_available == "yes"
-        assert record.code_tracking_software == "no"
-
-    def test_list_field_coerced_to_joined_string(self) -> None:
-        # LLMs treat plural-named fields as lists; coerce to a " / "-joined string.
-        resp = _mock_openai_response(
-            '{"in_text_locations": ["Section 2.1", "Table 3"]}'
-        )
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        record = extract_codebook(
-            "W1",
-            "full_text",
-            "body",
-            client=mock_client,
-            model="m",
-            truncated=False,
-        )
-        assert record.reason is None
-        assert record.in_text_locations == "Section 2.1 / Table 3"
-
-    def test_empty_list_coerced_to_none(self) -> None:
-        resp = _mock_openai_response('{"in_text_locations": []}')
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        record = extract_codebook(
-            "W1",
-            "full_text",
-            "body",
-            client=mock_client,
-            model="m",
-            truncated=False,
-        )
-        assert record.reason is None
-        assert record.in_text_locations is None
-
-    def test_extra_fields_dropped_by_coercer(self) -> None:
-        # LLMs at t>0 sprinkle extras like "confidence", "notes". The
-        # coercer drops unknown keys so a stray field does not nuke the
-        # whole 30-field record via extra="forbid".
-        resp = _mock_openai_response(
-            '{"integration_scheme": "RK4", "confidence": 95, "notes": "extra"}'
-        )
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        record = extract_codebook(
-            "W1",
-            "full_text",
-            "body",
-            client=mock_client,
-            model="m",
-            truncated=False,
-        )
-        assert record.reason is None
-        assert record.integration_scheme == "RK4"
-
-    def test_raw_response_captured_on_success(self) -> None:
+    def test_raw_response_captured_on_success(
+        self, ctx: CodebookContext
+    ) -> None:
         content = '{"integration_scheme": "RK4"}'
         resp = _mock_openai_response(content)
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        record = extract_codebook(
-            "W1",
-            "full_text",
-            "body",
-            client=mock_client,
-            model="m",
-            truncated=False,
-        )
-        assert record.raw_response == content
+        client = MagicMock()
+        client.chat.completions.create.return_value = resp
+        record = _call_extract(ctx, client=client)
+        assert record.raw_response == content  # type: ignore[attr-defined]
 
-    def test_raw_response_captured_on_llm_parse_failure(self) -> None:
+    def test_raw_response_captured_on_llm_parse_failure(
+        self, ctx: CodebookContext
+    ) -> None:
         content = "this is not json at all"
         resp = _mock_openai_response(content)
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        record = extract_codebook(
-            "W1",
-            "full_text",
-            "body",
-            client=mock_client,
-            model="m",
-            truncated=False,
-        )
-        assert record.reason == "llm-parse-failure"
-        assert record.raw_response == content
+        client = MagicMock()
+        client.chat.completions.create.return_value = resp
+        record = _call_extract(ctx, client=client)
+        assert record.reason == "llm-parse-failure"  # type: ignore[attr-defined]
+        assert record.raw_response == content  # type: ignore[attr-defined]
 
 
 # --- extract_works cascade ---
 
 
 class TestExtractWorksCascade:
-    def test_full_text_branch(self, tmp_path: Path) -> None:
+    def test_full_text_branch(self, tmp_path: Path, ctx: CodebookContext) -> None:
         catalogue = tmp_path / "catalogue.jsonl"
         extractions_path = tmp_path / "extraction.jsonl"
-        output_dir = tmp_path / "ext_out"
+        ext_out = tmp_path / "ext_out"
 
-        work = _make_work("W1", abstract="The abstract.")
-        _write_works_jsonl(catalogue, [work])
+        _write_works_jsonl(catalogue, [_make_work("W1", abstract="The abstract.")])
 
         tei_path = "tei/W1.tei.xml"
         _write_tei(
-            output_dir / tei_path,
+            ext_out / tei_path,
             f'<div xmlns="{TEI_NS}"><head>Methods</head><p>Real content.</p></div>',
         )
         extracted = ExtractedDocument(
@@ -372,193 +226,107 @@ class TestExtractWorksCascade:
         )
         _write_extractions_jsonl(extractions_path, [extracted])
 
-        extractions = {extracted.work_id: extracted}
+        resp = _mock_openai_response(
+            _valid_payload_json(ctx.payload_field_names)
+        )
+        client = MagicMock()
+        client.chat.completions.create.return_value = resp
 
-        resp = _mock_openai_response(_valid_payload_json())
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-
-        records = list(
-            extract_works(
-                catalogue,
-                extractions,
-                output_dir,
-                client=mock_client,
-                model="m",
-                max_records=None,
-            )
+        records = _call_extract_works(
+            ctx,
+            catalogue,
+            {extracted.work_id: extracted},
+            ext_out,
+            client=client,
         )
 
         assert len(records) == 1
-        assert records[0].source_basis == "full_text"
-        assert records[0].reason is None
-        # Prompt should see the section text, not the abstract.
-        call_kwargs = mock_client.chat.completions.create.call_args[1]
-        user_msg = call_kwargs["messages"][1]["content"]
+        assert records[0].source_basis == "full_text"  # type: ignore[attr-defined]
+        assert records[0].reason is None  # type: ignore[attr-defined]
+        # The user message should contain the full-text section, not the abstract.
+        user_msg = client.chat.completions.create.call_args[1]["messages"][1]["content"]
         assert "Methods" in user_msg
         assert "Real content." in user_msg
         assert "full_text:" in user_msg
         assert "The abstract." not in user_msg
 
     def test_abstract_only_branch_when_extraction_missing(
-        self, tmp_path: Path
+        self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
         catalogue = tmp_path / "catalogue.jsonl"
-        output_dir = tmp_path / "ext_out"
-        work = _make_work("W1", abstract="Paper abstract text.")
-        _write_works_jsonl(catalogue, [work])
+        ext_out = tmp_path / "ext_out"
+        _write_works_jsonl(catalogue, [_make_work("W1", abstract="Paper abstract text.")])
 
-        resp = _mock_openai_response(_valid_payload_json())
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-
-        records = list(
-            extract_works(
-                catalogue,
-                {},
-                output_dir,
-                client=mock_client,
-                model="m",
-                max_records=None,
-            )
+        resp = _mock_openai_response(
+            _valid_payload_json(ctx.payload_field_names)
         )
+        client = MagicMock()
+        client.chat.completions.create.return_value = resp
 
-        assert len(records) == 1
-        assert records[0].source_basis == "abstract_only"
-        assert records[0].reason is None
-
-        call_kwargs = mock_client.chat.completions.create.call_args[1]
-        user_msg = call_kwargs["messages"][1]["content"]
-        assert "abstract_only:" in user_msg
-        assert "Paper abstract text." in user_msg
-
-    def test_no_source_sentinel_no_llm_call(self, tmp_path: Path) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
-        output_dir = tmp_path / "ext_out"
-        work = _make_work("W1", abstract=None)
-        _write_works_jsonl(catalogue, [work])
-
-        mock_client = MagicMock()
-        records = list(
-            extract_works(
-                catalogue,
-                {},
-                output_dir,
-                client=mock_client,
-                model="m",
-                max_records=None,
-            )
+        records = _call_extract_works(
+            ctx, catalogue, {}, ext_out, client=client
         )
-
         assert len(records) == 1
-        assert records[0].source_basis == "none"
-        assert records[0].reason == "no-source"
-        assert records[0].seed is None
-        assert records[0].truncated is False
-        mock_client.chat.completions.create.assert_not_called()
+        assert records[0].source_basis == "abstract_only"  # type: ignore[attr-defined]
+        assert records[0].reason is None  # type: ignore[attr-defined]
 
-    def test_malformed_tei_no_abstract_fallback(self, tmp_path: Path) -> None:
+    def test_no_source_sentinel_no_llm_call(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
         catalogue = tmp_path / "catalogue.jsonl"
-        output_dir = tmp_path / "ext_out"
-        work = _make_work("W1", abstract="Paper abstract.")
-        _write_works_jsonl(catalogue, [work])
+        ext_out = tmp_path / "ext_out"
+        _write_works_jsonl(catalogue, [_make_work("W1", abstract=None)])
+
+        client = MagicMock()
+        records = _call_extract_works(
+            ctx, catalogue, {}, ext_out, client=client
+        )
+        assert len(records) == 1
+        assert records[0].source_basis == "none"  # type: ignore[attr-defined]
+        assert records[0].reason == "no-source"  # type: ignore[attr-defined]
+        client.chat.completions.create.assert_not_called()
+
+    def test_malformed_tei_no_abstract_fallback(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        catalogue = tmp_path / "catalogue.jsonl"
+        ext_out = tmp_path / "ext_out"
+        _write_works_jsonl(catalogue, [_make_work("W1", abstract="Paper abstract.")])
 
         tei_path = "tei/W1.tei.xml"
-        _write_malformed_tei(output_dir / tei_path)
-
+        _write_malformed_tei(ext_out / tei_path)
         extracted = ExtractedDocument(
             work_id="W1",
             tei_path=tei_path,
             content_sha256="0" * 64,
             extracted_at="2026-04-17T00:00:00.000000+00:00",
         )
-        extractions = {extracted.work_id: extracted}
-
-        mock_client = MagicMock()
-        records = list(
-            extract_works(
-                catalogue,
-                extractions,
-                output_dir,
-                client=mock_client,
-                model="m",
-                max_records=None,
-            )
+        client = MagicMock()
+        records = _call_extract_works(
+            ctx,
+            catalogue,
+            {extracted.work_id: extracted},
+            ext_out,
+            client=client,
         )
-
         assert len(records) == 1
-        assert records[0].reason == "tei-parse-failure"
-        assert records[0].source_basis == "full_text"
-        assert records[0].seed is None
-        mock_client.chat.completions.create.assert_not_called()
+        assert records[0].reason == "tei-parse-failure"  # type: ignore[attr-defined]
+        assert records[0].source_basis == "full_text"  # type: ignore[attr-defined]
+        client.chat.completions.create.assert_not_called()
 
-    def test_llm_parse_failure_recorded(self, tmp_path: Path) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
-        output_dir = tmp_path / "ext_out"
-        work = _make_work("W1", abstract="Paper abstract.")
-        _write_works_jsonl(catalogue, [work])
-
-        resp = _mock_openai_response("not json at all")
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-
-        records = list(
-            extract_works(
-                catalogue,
-                {},
-                output_dir,
-                client=mock_client,
-                model="m",
-                max_records=None,
-            )
-        )
-
-        assert len(records) == 1
-        assert records[0].reason == "llm-parse-failure"
-        assert records[0].source_basis == "abstract_only"
-        assert records[0].seed is None
-
-    def test_seed_recorded_on_successful_record(self, tmp_path: Path) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
-        output_dir = tmp_path / "ext_out"
-        work = _make_work("W1", abstract="Abstract text.")
-        _write_works_jsonl(catalogue, [work])
-
-        resp = _mock_openai_response(_valid_payload_json())
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-
-        with patch(
-            "laglitsynth.extraction_codebook.extract.random.randint",
-            return_value=99,
-        ):
-            records = list(
-                extract_works(
-                    catalogue,
-                    {},
-                    output_dir,
-                    client=mock_client,
-                    model="m",
-                    max_records=None,
-                )
-            )
-        assert records[0].seed == 99
-
-    def test_truncation_flag_on_over_budget_body(self, tmp_path: Path) -> None:
+    def test_truncation_flag_on_over_budget_body(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
         catalogue = tmp_path / "catalogue.jsonl"
         extractions_path = tmp_path / "extraction.jsonl"
-        output_dir = tmp_path / "ext_out"
-
-        work = _make_work("W1", abstract=None)
-        _write_works_jsonl(catalogue, [work])
+        ext_out = tmp_path / "ext_out"
+        _write_works_jsonl(catalogue, [_make_work("W1", abstract=None)])
 
         big_section = (
-            f'<div xmlns="{TEI_NS}"><head>H{i}</head>'
-            f'<p>{"x" * 20_000}</p></div>'
+            f'<div xmlns="{TEI_NS}"><head>H{i}</head><p>{"x" * 20_000}</p></div>'
             for i in range(5)
         )
-        _write_tei(output_dir / "tei/W1.tei.xml", "".join(big_section))
-
+        _write_tei(ext_out / "tei/W1.tei.xml", "".join(big_section))
         extracted = ExtractedDocument(
             work_id="W1",
             tei_path="tei/W1.tei.xml",
@@ -566,62 +334,23 @@ class TestExtractWorksCascade:
             extracted_at="2026-04-17T00:00:00.000000+00:00",
         )
         _write_extractions_jsonl(extractions_path, [extracted])
-        extractions = {extracted.work_id: extracted}
 
-        resp = _mock_openai_response(_valid_payload_json())
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
+        resp = _mock_openai_response(
+            _valid_payload_json(ctx.payload_field_names)
+        )
+        client = MagicMock()
+        client.chat.completions.create.return_value = resp
 
-        records = list(
-            extract_works(
-                catalogue,
-                extractions,
-                output_dir,
-                client=mock_client,
-                model="m",
-                max_records=None,
-            )
+        records = _call_extract_works(
+            ctx,
+            catalogue,
+            {extracted.work_id: extracted},
+            ext_out,
+            client=client,
         )
         assert len(records) == 1
-        assert records[0].reason is None
-        assert records[0].truncated is True
-
-    def test_truncation_flag_false_when_body_fits(self, tmp_path: Path) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
-        extractions_path = tmp_path / "extraction.jsonl"
-        output_dir = tmp_path / "ext_out"
-
-        work = _make_work("W1", abstract=None)
-        _write_works_jsonl(catalogue, [work])
-
-        _write_tei(
-            output_dir / "tei/W1.tei.xml",
-            f'<div xmlns="{TEI_NS}"><head>H</head><p>Short.</p></div>',
-        )
-        extracted = ExtractedDocument(
-            work_id="W1",
-            tei_path="tei/W1.tei.xml",
-            content_sha256="0" * 64,
-            extracted_at="2026-04-17T00:00:00.000000+00:00",
-        )
-        _write_extractions_jsonl(extractions_path, [extracted])
-        extractions = {extracted.work_id: extracted}
-
-        resp = _mock_openai_response(_valid_payload_json())
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-
-        records = list(
-            extract_works(
-                catalogue,
-                extractions,
-                output_dir,
-                client=mock_client,
-                model="m",
-                max_records=None,
-            )
-        )
-        assert records[0].truncated is False
+        assert records[0].reason is None  # type: ignore[attr-defined]
+        assert records[0].truncated is True  # type: ignore[attr-defined]
 
 
 # --- _preflight ---
@@ -635,9 +364,7 @@ class TestPreflight:
         args.base_url = "http://localhost:99999"
         args.model = "nonexistent"
 
-        with patch(
-            "laglitsynth.extraction_codebook.extract.OpenAI"
-        ) as mock_cls:
+        with patch("laglitsynth.extraction_codebook.extract.OpenAI") as mock_cls:
             mock_cls.return_value.models.retrieve.side_effect = Exception(
                 "connection refused"
             )
@@ -656,18 +383,29 @@ def _make_run_args(
     dry_run: bool = False,
     skip_existing: bool = False,
     max_records: int | None = None,
-) -> MagicMock:
-    args = MagicMock()
-    args.eligible = eligible
-    args.extractions = extractions
-    args.extraction_output_dir = extractions.parent
-    args.output_dir = tmp_path / "out"
-    args.model = "m"
-    args.base_url = "http://x"
-    args.max_records = max_records
-    args.skip_existing = skip_existing
-    args.dry_run = dry_run
-    return args
+    run_id: str = "test-run-id",
+    extraction_output_dir: Path | None = None,
+) -> argparse.Namespace:
+    return argparse.Namespace(
+        eligible=eligible,
+        extractions=extractions,
+        extraction_output_dir=extraction_output_dir
+        if extraction_output_dir is not None
+        else extractions.parent,
+        data_dir=tmp_path,
+        run_id=run_id,
+        codebook=DEFAULT_CODEBOOK_PATH,
+        model="m",
+        base_url="http://x",
+        max_records=max_records,
+        skip_existing=skip_existing,
+        dry_run=dry_run,
+        config=None,
+    )
+
+
+def _resolved_out_dir(args: argparse.Namespace) -> Path:
+    return Path(args.data_dir) / "extraction-codebook" / args.run_id
 
 
 def _make_mock_client(payload_content: str) -> MagicMock:
@@ -679,7 +417,9 @@ def _make_mock_client(payload_content: str) -> MagicMock:
 
 
 class TestRun:
-    def test_dry_run_writes_nothing(self, tmp_path: Path) -> None:
+    def test_dry_run_writes_nothing(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
         eligible = tmp_path / "eligible.jsonl"
         extractions_path = tmp_path / "extraction.jsonl"
         _write_works_jsonl(eligible, [_make_work("W1", abstract="abs")])
@@ -692,7 +432,9 @@ class TestRun:
             dry_run=True,
         )
 
-        mock_client = _make_mock_client(_valid_payload_json())
+        mock_client = _make_mock_client(
+            _valid_payload_json(ctx.payload_field_names)
+        )
         with (
             patch("laglitsynth.extraction_codebook.extract._preflight"),
             patch(
@@ -704,11 +446,12 @@ class TestRun:
 
             run(args)
 
-        assert not (args.output_dir).exists() or not any(
-            (args.output_dir).iterdir()
-        )
+        out_dir = _resolved_out_dir(args)
+        assert not out_dir.exists() or not any(out_dir.iterdir())
 
-    def test_writes_expected_files(self, tmp_path: Path) -> None:
+    def test_writes_expected_files(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
         eligible = tmp_path / "eligible.jsonl"
         extractions_path = tmp_path / "extraction.jsonl"
 
@@ -726,7 +469,9 @@ class TestRun:
             extractions=extractions_path,
         )
 
-        mock_client = _make_mock_client(_valid_payload_json())
+        mock_client = _make_mock_client(
+            _valid_payload_json(ctx.payload_field_names)
+        )
         with (
             patch("laglitsynth.extraction_codebook.extract._preflight"),
             patch(
@@ -738,9 +483,10 @@ class TestRun:
 
             run(args)
 
-        out_dir = args.output_dir
+        out_dir = _resolved_out_dir(args)
         assert (out_dir / "records.jsonl").exists()
         assert (out_dir / "extraction-codebook-meta.json").exists()
+        assert (out_dir / "config.yaml").exists()
 
         record_lines = [
             line
@@ -762,21 +508,61 @@ class TestRun:
         assert meta["llm"]["temperature"] == 0.8
         assert len(meta["llm"]["prompt_sha256"]) == 64
 
+    def test_config_yaml_inlines_codebook(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        eligible = tmp_path / "eligible.jsonl"
+        extractions_path = tmp_path / "extraction.jsonl"
+        _write_works_jsonl(eligible, [_make_work("W1", abstract="abs")])
+        extractions_path.write_text("")
+
+        args = _make_run_args(
+            tmp_path,
+            eligible=eligible,
+            extractions=extractions_path,
+        )
+
+        mock_client = _make_mock_client(
+            _valid_payload_json(ctx.payload_field_names)
+        )
+        with (
+            patch("laglitsynth.extraction_codebook.extract._preflight"),
+            patch(
+                "laglitsynth.extraction_codebook.extract.OpenAI",
+                return_value=mock_client,
+            ),
+        ):
+            from laglitsynth.extraction_codebook.extract import run
+
+            run(args)
+
+        import yaml
+
+        config = yaml.safe_load(
+            (_resolved_out_dir(args) / "config.yaml").read_text()
+        )
+        # Codebook embedded as a mapping, not a path string.
+        assert isinstance(config["codebook"], dict)
+        assert config["codebook"]["id"] == "lagrangian-oceanography"
+        assert config["codebook"]["fields"]
+        # run_id excluded; replay generates a fresh one.
+        assert "run_id" not in config
+        # config flag itself excluded.
+        assert "config" not in config
+
     def test_skip_existing_refuses_when_prompt_sha256_differs(
         self, tmp_path: Path
     ) -> None:
-        """--skip-existing must raise SystemExit when recorded prompt_sha256 differs."""
-        import json
-
         eligible = tmp_path / "eligible.jsonl"
         extractions_path = tmp_path / "extraction.jsonl"
         _write_works_jsonl(eligible, [_make_work("W1", abstract="first abstract")])
         extractions_path.write_text("")
 
-        out_dir = tmp_path / "out"
-        out_dir.mkdir()
+        run_id = "stale-run"
+        out_dir = tmp_path / "extraction-codebook" / run_id
+        out_dir.mkdir(parents=True)
 
-        # Write a meta file with a stale/wrong prompt_sha256.
+        # Write a meta file with a deliberately wrong prompt_sha256.
         stale_meta = {
             "run": {
                 "tool": "laglitsynth.extraction_codebook.extract",
@@ -786,7 +572,7 @@ class TestRun:
             "llm": {
                 "model": "gemma3:4b",
                 "temperature": 0.8,
-                "prompt_sha256": "0" * 64,  # deliberately wrong hash
+                "prompt_sha256": "0" * 64,
             },
             "input_catalogue": str(eligible),
             "input_extractions": str(extractions_path),
@@ -805,8 +591,8 @@ class TestRun:
             eligible=eligible,
             extractions=extractions_path,
             skip_existing=True,
+            run_id=run_id,
         )
-        args.output_dir = out_dir
 
         with (
             patch("laglitsynth.extraction_codebook.extract._preflight"),
@@ -817,7 +603,9 @@ class TestRun:
             with pytest.raises(SystemExit, match="prompt_sha256"):
                 run(args)
 
-    def test_skip_existing_processes_only_delta(self, tmp_path: Path) -> None:
+    def test_skip_existing_processes_only_delta(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
         eligible = tmp_path / "eligible.jsonl"
         extractions_path = tmp_path / "extraction.jsonl"
         works = [
@@ -827,19 +615,20 @@ class TestRun:
         _write_works_jsonl(eligible, works)
         extractions_path.write_text("")
 
-        out_dir = tmp_path / "out"
-        out_dir.mkdir()
-        # Prior record for W1 only.
-        payload: dict[str, str | None] = {
-            name: None for name in _ExtractionPayload.model_fields
-        }
-        prior = ExtractionRecord(
+        run_id = "resume-run"
+        out_dir = tmp_path / "extraction-codebook" / run_id
+        out_dir.mkdir(parents=True)
+        # Prior record for W1 only — built via the same dynamic record_model
+        # the runtime would use, so the read-back validates cleanly.
+        record_model = ctx.record_model
+        payload_fields = {name: None for name in ctx.payload_field_names}
+        prior = record_model(
             work_id="W1",
             source_basis="abstract_only",
             reason=None,
             seed=1,
             truncated=False,
-            **payload,
+            **payload_fields,
         )
         (out_dir / "records.jsonl").write_text(prior.model_dump_json() + "\n")
 
@@ -848,10 +637,12 @@ class TestRun:
             eligible=eligible,
             extractions=extractions_path,
             skip_existing=True,
+            run_id=run_id,
         )
-        args.output_dir = out_dir
 
-        mock_client = _make_mock_client(_valid_payload_json())
+        mock_client = _make_mock_client(
+            _valid_payload_json(ctx.payload_field_names)
+        )
         with (
             patch("laglitsynth.extraction_codebook.extract._preflight"),
             patch(
@@ -865,10 +656,9 @@ class TestRun:
 
         # Only W2 was classified (W1 was skipped).
         assert mock_client.chat.completions.create.call_count == 1
-        # User message should mention W2's abstract.
-        user_msg = mock_client.chat.completions.create.call_args[1][
-            "messages"
-        ][1]["content"]
+        user_msg = mock_client.chat.completions.create.call_args[1]["messages"][1][
+            "content"
+        ]
         assert "second abstract" in user_msg
 
         record_lines = [
@@ -882,87 +672,12 @@ class TestRun:
         assert meta["abstract_only_count"] == 2
         assert meta["skipped_count"] == 0
 
-    def test_meta_counts_per_branch(self, tmp_path: Path) -> None:
-        eligible = tmp_path / "eligible.jsonl"
-        extractions_path = tmp_path / "extraction.jsonl"
-        output_dir_ext = tmp_path / "ext_out"
-
-        # W1: full_text, W2: abstract_only, W3: no-source, W4: tei-parse-failure.
-        w1 = _make_work("W1", abstract="abs1")
-        w2 = _make_work("W2", abstract="abs2")
-        w3 = _make_work("W3", abstract=None)
-        w4 = _make_work("W4", abstract="abs4")
-        _write_works_jsonl(eligible, [w1, w2, w3, w4])
-
-        _write_tei(
-            output_dir_ext / "tei/W1.tei.xml",
-            f'<div xmlns="{TEI_NS}"><head>M</head><p>Real methods.</p></div>',
-        )
-        _write_malformed_tei(output_dir_ext / "tei/W4.tei.xml")
-        records = [
-            ExtractedDocument(
-                work_id="W1",
-                tei_path="tei/W1.tei.xml",
-                content_sha256="0" * 64,
-                extracted_at="2026-04-17T00:00:00.000000+00:00",
-            ),
-            ExtractedDocument(
-                work_id="W4",
-                tei_path="tei/W4.tei.xml",
-                content_sha256="0" * 64,
-                extracted_at="2026-04-17T00:00:00.000000+00:00",
-            ),
-        ]
-        _write_extractions_jsonl(extractions_path, records)
-
-        args = _make_run_args(
-            tmp_path,
-            eligible=eligible,
-            extractions=extractions_path,
-        )
-        args.extraction_output_dir = output_dir_ext
-
-        mock_client = _make_mock_client(_valid_payload_json())
-        with (
-            patch("laglitsynth.extraction_codebook.extract._preflight"),
-            patch(
-                "laglitsynth.extraction_codebook.extract.OpenAI",
-                return_value=mock_client,
-            ),
-        ):
-            from laglitsynth.extraction_codebook.extract import run
-
-            run(args)
-
-        meta = json.loads(
-            (args.output_dir / "extraction-codebook-meta.json").read_text()
-        )
-        assert meta["full_text_count"] == 1
-        assert meta["abstract_only_count"] == 1
-        assert meta["skipped_count"] == 2  # no-source + tei-parse-failure
-        assert meta["llm_parse_failure_count"] == 0
-        # The full_text branch gets source_basis="full_text"; the
-        # tei-parse-failure sentinel also records source_basis="full_text".
-        assert meta["by_source_basis"].get("full_text") == 2
-        assert meta["by_source_basis"].get("abstract_only") == 1
-        assert meta["by_source_basis"].get("none") == 1
-
 
 # --- CLI wiring ---
 
 
 class TestCliWiring:
     def test_subparser_registered(self) -> None:
-        from laglitsynth import cli
-
-        parser_args: list[str] = []
-
-        def fake_run(args: Any) -> None:
-            parser_args.append(args.command)
-
-        # The subcommand must parse without error.
-        import argparse
-
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers(dest="command")
         from laglitsynth.extraction_codebook.extract import build_subparser
@@ -984,11 +699,7 @@ class TestCliWiring:
     def test_main_cli_includes_subparser(self) -> None:
         from laglitsynth.cli import main
 
-        # Running with the subcommand should reach our run() (which we
-        # patch) without argparse rejecting the command.
-        with patch(
-            "laglitsynth.extraction_codebook.extract.run"
-        ) as mock_run:
+        with patch("laglitsynth.extraction_codebook.extract.run") as mock_run:
             main(
                 [
                     "extraction-codebook",

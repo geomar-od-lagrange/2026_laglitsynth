@@ -1,13 +1,9 @@
-"""Prompt construction for the extraction codebook stage.
+"""User-message construction and full-text rendering for stage 8.
 
-The system prompt expands its field list from
-``_ExtractionPayload.model_json_schema()`` so the prompt and the
-validator stay in lockstep when fields are added or renamed.
-``render_fulltext`` flattens a ``TeiDocument`` into a single string,
-truncating at ``CHAR_BUDGET`` on paragraph boundaries to keep the
-prompt within the LLM's context window. ``build_user_message`` wraps
-the rendered body with the ``source_basis`` tag the system prompt
-references.
+The system prompt and field list are now codebook-driven and live in
+[codebook.py](codebook.py); this module only handles the per-work
+user-message body (TEI flattening + char-budget truncation) and the
+``source_basis`` framing tag.
 
 Stage 7 has its own ``render_fulltext`` without truncation. The budget
 behaviour is stage-8-specific; per the plan this duplicates the stage 7
@@ -16,51 +12,13 @@ helper with light factoring rather than introducing a shared module.
 
 from __future__ import annotations
 
-from typing import Any
-
-from laglitsynth.extraction_codebook.models import SourceBasis, _ExtractionPayload
+from laglitsynth.extraction_codebook.models import SourceBasis
 from laglitsynth.fulltext_extraction.tei import TeiDocument, flatten_sections
 
 # Tuning placeholder — tune on first smoke run against real papers.
 # Roughly ~15k tokens on typical English prose; the principled fix is
 # two-pass retrieval, not a larger number here.
 CHAR_BUDGET = 60_000
-
-
-def _field_line(name: str, info: dict[str, Any]) -> str:
-    description = info.get("description")
-    if description:
-        return f'- "{name}": {description}'
-    return f'- "{name}"'
-
-
-def _render_field_list() -> str:
-    schema = _ExtractionPayload.model_json_schema()
-    properties: dict[str, dict[str, Any]] = schema.get("properties", {})
-    # model_json_schema preserves field definition order and emits the
-    # per-field ``description`` set via ``Field(..., description=...)``
-    # on ``_ExtractionPayload`` — so the LLM sees the codebook
-    # definition of each field, not just its name.
-    return "\n".join(_field_line(name, info) for name, info in properties.items())
-
-
-_FIELD_LIST = _render_field_list()
-
-
-SYSTEM_PROMPT = f"""\
-You extract structured metadata from scientific papers on computational
-Lagrangian methods in oceanography. You will be shown the text of one
-paper and must fill a JSON object with the fields below. Every value
-field has a companion "*_context" field containing a short verbatim
-excerpt from the paper supporting that value. If the paper does not
-state the information, write null for both the value and its context —
-do not guess or infer.
-
-Fields:
-{_FIELD_LIST}
-
-Respond with a single JSON object containing exactly these keys."""
-
 
 USER_TEMPLATE = "{source_basis}:\n{text}"
 
