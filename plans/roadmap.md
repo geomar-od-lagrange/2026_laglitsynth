@@ -93,7 +93,7 @@ Update this file when a plan is written, implemented, or archived.
 
 ## In flight
 
-- (None.)
+- [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending.
 
 ## Queued — ready to plan
 
