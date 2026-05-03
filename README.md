@@ -12,6 +12,11 @@ pixi install
 cp .env.example .env  # then fill in OPENALEX_API_KEY and UNPAYWALL_EMAIL
 ```
 
+Stages 1 and 5 read `OPENALEX_API_KEY` and `UNPAYWALL_EMAIL` from `.env`
+automatically when their flags are absent. See
+[`docs/external-services.md`](docs/external-services.md) for the full
+credential setup.
+
 ## Tools
 
 All tools are accessed via the `laglitsynth` CLI:
@@ -25,30 +30,31 @@ verdicts-only cutover. Stages 9–12 are specified in
 [`docs/pipeline.md`](docs/pipeline.md) but not yet implemented. Each
 implemented stage has its own doc under [`docs/`](docs/).
 
-- `laglitsynth catalogue-fetch` — search OpenAlex by keyword and store
-  validated bibliographic records as JSONL. See
+- Stage 1 — `laglitsynth catalogue-fetch` — search OpenAlex by keyword and
+  store validated bibliographic records as JSONL. See
   [`docs/catalogue-fetch.md`](docs/catalogue-fetch.md).
-- `laglitsynth catalogue-dedup` — deduplicate a catalogue on OpenAlex ID,
-  DOI, and title+author+year; accepts globs and multiple inputs. See
-  [`docs/catalogue-dedup.md`](docs/catalogue-dedup.md).
-- `laglitsynth screening-abstracts` — score every abstract for relevance
-  with a local Ollama-hosted LLM, emitting a `ScreeningVerdict` sidecar.
-  See [`docs/screening-abstracts.md`](docs/screening-abstracts.md).
-- `laglitsynth fulltext-retrieval` — join the deduplicated catalogue against
-  the screening verdicts at a threshold, then fetch PDFs via manual pickup,
-  OA URLs, and Unpaywall. See
+- Stage 2 — `laglitsynth catalogue-dedup` — deduplicate a catalogue on
+  OpenAlex ID, DOI, and title+author+year; accepts globs and multiple
+  inputs. See [`docs/catalogue-dedup.md`](docs/catalogue-dedup.md).
+- Stage 3 — `laglitsynth screening-abstracts` — score every abstract for
+  relevance with a local Ollama-hosted LLM, emitting a `ScreeningVerdict`
+  sidecar. See [`docs/screening-abstracts.md`](docs/screening-abstracts.md).
+- Stage 5 — `laglitsynth fulltext-retrieval` — join the deduplicated
+  catalogue against the screening verdicts at a threshold, then fetch PDFs
+  via manual pickup, OA URLs, and Unpaywall. See
   [`docs/fulltext-retrieval.md`](docs/fulltext-retrieval.md).
-- `laglitsynth fulltext-extraction` — parse retrieved PDFs into
+- Stage 6 — `laglitsynth fulltext-extraction` — parse retrieved PDFs into
   structured section text via GROBID. See
   [`docs/fulltext-extraction.md`](docs/fulltext-extraction.md).
-- `laglitsynth fulltext-eligibility` — join the catalogue against the
-  screening verdicts, then assess full-text eligibility with a local LLM,
-  emitting an `EligibilityVerdict` sidecar. See
+- Stage 7 — `laglitsynth fulltext-eligibility` — join the catalogue against
+  the screening verdicts, then assess full-text eligibility with a local
+  LLM, emitting an `EligibilityVerdict` sidecar. See
   [`docs/eligibility.md`](docs/eligibility.md).
-- `laglitsynth extraction-codebook` — join the catalogue against the
-  eligibility verdicts, then extract structured codebook records (numerical
-  choices, reproducibility indicators, sub-discipline tags) with a local
-  LLM. See [`docs/extraction-codebook.md`](docs/extraction-codebook.md).
+- Stage 8 — `laglitsynth extraction-codebook` — join the catalogue against
+  the eligibility verdicts, then extract structured codebook records
+  (numerical choices, reproducibility indicators, sub-discipline tags) with
+  a local LLM. See
+  [`docs/extraction-codebook.md`](docs/extraction-codebook.md).
 - `laglitsynth bake-model` — bake an Ollama model tag with a hard-coded
   `num_ctx` via Modelfile; more reliable than `extra_body` at request time.
   See [`docs/bake-model.md`](docs/bake-model.md).
@@ -212,8 +218,18 @@ Stages 3 ([`screening-abstracts`](docs/screening-abstracts.md)), 7
 ([`extraction-codebook`](docs/extraction-codebook.md)) all call a local
 Ollama instance via the OpenAI-compatible API.
 
+Install Ollama if you haven't already:
+
 ```bash
-ollama serve
+# Linux
+curl -fsSL https://ollama.com/install.sh | sh
+# macOS
+brew install --cask ollama
+# or download from https://ollama.com/download
+```
+
+```bash
+OLLAMA_NUM_PARALLEL=2 ollama serve  # set before serve; export after start is silently ignored
 ollama pull gemma3:4b
 ```
 
@@ -226,15 +242,21 @@ works. Pull the models you need:
 ollama pull llama3.1:8b        # stage 8 default; or qwen2.5:14b, etc.
 ```
 
+See [`docs/external-services.md`](docs/external-services.md) for the full
+setup runbook.
+
 ## GROBID (for full-text extraction)
 
 The extraction stage requires a running GROBID server. One-shot via Docker:
 
 ```bash
-docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0
+docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0  # Apple Silicon: image is amd64-only; install Rosetta first via softwareupdate --install-rosetta
 ```
 
 See [`docs/fulltext-extraction.md`](docs/fulltext-extraction.md) for details.
+
+See [`docs/external-services.md`](docs/external-services.md) for memory
+tuning and macOS workarounds.
 
 ## Documentation
 
