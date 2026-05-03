@@ -568,4 +568,4 @@ def run(args: argparse.Namespace) -> None:
             by_source_basis=by_source_basis,
         ),
     )
-    print(f"Output dir: {output_dir}", file=sys.stderr)
+    print(f"Run dir: {output_dir}", file=sys.stderr)

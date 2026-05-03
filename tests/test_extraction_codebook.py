@@ -830,10 +830,10 @@ class TestActiveEligibleWorks:
 # --- run() stderr output ---
 
 
-def test_output_dir_printed_at_end(
+def test_run_dir_printed_to_stderr_at_end(
     tmp_path: Path, ctx: CodebookContext, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """run() prints 'Output dir: <output_dir>' to stderr at the end of a normal (non-dry) run."""
+    """run() prints 'Run dir: <output_dir>' to stderr at the end of a normal (non-dry) run."""
     catalogue = tmp_path / "catalogue.jsonl"
     verdicts_path = tmp_path / "verdicts.jsonl"
     extractions_path = tmp_path / "extraction.jsonl"
@@ -867,6 +867,6 @@ def test_output_dir_printed_at_end(
 
     err = capsys.readouterr().err
     assert f"Output dir: {expected_dir}" in err
-    # The line must appear at the end (last non-empty line).
+    # The end-of-run line must appear at the end (last non-empty line).
     last_line = [line for line in err.splitlines() if line.strip()][-1]
-    assert last_line == f"Output dir: {expected_dir}"
+    assert last_line == f"Run dir: {expected_dir}"
