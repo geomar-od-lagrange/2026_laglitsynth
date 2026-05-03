@@ -404,3 +404,4 @@ def run(args: argparse.Namespace) -> None:
                 timeouts=llm_timeout_count,
             ),
         )
+        print(f"Run dir: {output_dir}", file=sys.stderr)

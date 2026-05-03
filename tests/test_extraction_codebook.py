@@ -825,3 +825,48 @@ class TestActiveEligibleWorks:
 
         with pytest.raises(KeyError, match="W2"):
             list(_active_eligible_works(catalogue_path, verdicts_path))
+
+
+# --- run() stderr output ---
+
+
+def test_output_dir_printed_at_end(
+    tmp_path: Path, ctx: CodebookContext, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """run() prints 'Output dir: <output_dir>' to stderr at the end of a normal (non-dry) run."""
+    catalogue = tmp_path / "catalogue.jsonl"
+    verdicts_path = tmp_path / "verdicts.jsonl"
+    extractions_path = tmp_path / "extraction.jsonl"
+    _write_works_jsonl(catalogue, [_make_work("W1", abstract="abs")])
+    _write_eligibility_verdicts_jsonl(
+        verdicts_path,
+        [EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only")],
+    )
+    extractions_path.write_text("")
+
+    args = _make_run_args(
+        tmp_path,
+        catalogue=catalogue,
+        eligibility_verdicts=verdicts_path,
+        extractions=extractions_path,
+        run_id="test-stderr-run",
+    )
+    expected_dir = tmp_path / "extraction-codebook" / "test-stderr-run"
+
+    mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
+    with (
+        patch("laglitsynth.extraction_codebook.extract._preflight"),
+        patch(
+            "laglitsynth.extraction_codebook.extract.OpenAI",
+            return_value=mock_client,
+        ),
+    ):
+        from laglitsynth.extraction_codebook.extract import run
+
+        run(args)
+
+    err = capsys.readouterr().err
+    assert f"Output dir: {expected_dir}" in err
+    # The line must appear at the end (last non-empty line).
+    last_line = [line for line in err.splitlines() if line.strip()][-1]
+    assert last_line == f"Output dir: {expected_dir}"
