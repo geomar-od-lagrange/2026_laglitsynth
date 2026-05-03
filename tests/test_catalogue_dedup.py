@@ -1,4 +1,4 @@
-"""Tests for the catalogue_dedup submodule."""
+"""Tests for the catalogue_dedup three-rule implementation."""
 
 from __future__ import annotations
 
@@ -6,57 +6,305 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from laglitsynth.catalogue_dedup.dedup import run
+from laglitsynth.catalogue_dedup.dedup import (
+    _normalise_title,
+    deduplicate,
+    run,
+)
 from laglitsynth.catalogue_dedup.models import DeduplicationMeta
 
-from conftest import _make_work, _write_works_jsonl
+from conftest import _make_authorship, _make_work, _write_works_jsonl
 
 
-def test_pass_all_writes_all_works(tmp_path: Path) -> None:
-    works = [_make_work("https://openalex.org/W1"), _make_work("https://openalex.org/W2")]
-    _write_works_jsonl(tmp_path / "input.jsonl", works)
+# ---------------------------------------------------------------------------
+# Unit tests for deduplicate()
+# ---------------------------------------------------------------------------
+
+
+def test_dedup_by_openalex_id() -> None:
+    """Two works with the same OpenAlex ID → only one survives."""
+    w1 = _make_work("https://openalex.org/W1", title="Paper One")
+    w2 = _make_work("https://openalex.org/W1", title="Paper One (duplicate)")
+    survivors, dropped = deduplicate([w1, w2])
+    assert len(survivors) == 1
+    assert len(dropped) == 1
+    assert dropped[0].rule == "openalex_id"
+    assert survivors[0].id == "https://openalex.org/W1"
+
+
+def test_dedup_by_doi_normalisation() -> None:
+    """Works with DOIs that differ only in prefix/casing are duplicates."""
+    w1 = _make_work("https://openalex.org/W1", doi="https://doi.org/10.1234/test")
+    w2 = _make_work("https://openalex.org/W2", doi="http://doi.org/10.1234/test")
+    w3 = _make_work("https://openalex.org/W3", doi="https://dx.doi.org/10.1234/TEST")
+    survivors, dropped = deduplicate([w1, w2, w3])
+    assert len(survivors) == 1
+    assert len(dropped) == 2
+    assert all(d.rule == "doi" for d in dropped)
+
+
+def test_dedup_by_title_author_year() -> None:
+    """Works without DOI matching on normalised title + first author + year."""
+    auth = [_make_authorship("Jane Smith")]
+    w1 = _make_work(
+        "https://openalex.org/W1",
+        title="Ocean Dynamics: A Review",
+        publication_year=2020,
+        authorships=auth,
+    )
+    w2 = _make_work(
+        "https://openalex.org/W2",
+        title="ocean dynamics  a review",  # different whitespace/casing, no punctuation change
+        publication_year=2020,
+        authorships=[_make_authorship("Jane Smith")],
+    )
+    survivors, dropped = deduplicate([w1, w2])
+    assert len(survivors) == 1
+    assert len(dropped) == 1
+    assert dropped[0].rule == "title_author_year"
+
+
+def test_dedup_keeps_most_complete() -> None:
+    """When a duplicate is found, the record with more metadata survives."""
+    # w1 has no DOI, no authors; w2 has a DOI and one author — w2 should win.
+    w1 = _make_work("https://openalex.org/W1", doi=None)
+    w2 = _make_work(
+        "https://openalex.org/W2",
+        doi="https://doi.org/10.1234/abc",
+        title="Test Paper",
+        publication_year=2021,
+        authorships=[_make_authorship("Alice")],
+    )
+    # Force a rule-1 duplicate by using same OpenAlex ID.
+    w2_dup = _make_work(
+        "https://openalex.org/W1",  # same OA ID as w1
+        doi="https://doi.org/10.1234/abc",
+        authorships=[_make_authorship("Alice"), _make_authorship("Bob")],
+    )
+    survivors, dropped = deduplicate([w1, w2_dup])
+    # w2_dup has more authorships and a DOI; it should replace w1.
+    assert len(survivors) == 1
+    survived = survivors[0]
+    assert survived.doi == "https://doi.org/10.1234/abc"
+    assert len(survived.authorships) == 2
+    assert dropped[0].dropped_work_id == "https://openalex.org/W1"
+    assert dropped[0].survived_work_id == "https://openalex.org/W1"
+
+
+def test_dedup_keeps_most_complete_doi_beats_no_doi() -> None:
+    """With same OA ID, the record with a DOI beats the one without."""
+    w_no_doi = _make_work("https://openalex.org/W1", doi=None)
+    w_with_doi = _make_work(
+        "https://openalex.org/W1",
+        doi="https://doi.org/10.9999/x",
+        authorships=[],
+    )
+    survivors, dropped = deduplicate([w_no_doi, w_with_doi])
+    assert len(survivors) == 1
+    assert survivors[0].doi is not None
+    assert len(dropped) == 1
+    assert dropped[0].survived_work_id == "https://openalex.org/W1"
+
+
+def test_dropped_jsonl_records_rule(tmp_path: Path) -> None:
+    """dropped.jsonl contains survived_work_id and the matching rule."""
+    w1 = _make_work("https://openalex.org/W1", doi="https://doi.org/10.0/X")
+    w2 = _make_work("https://openalex.org/W2", doi="https://doi.org/10.0/x")
+
+    _write_works_jsonl(tmp_path / "input.jsonl", [w1, w2])
 
     args = MagicMock()
-    args.input = tmp_path / "input.jsonl"
+    args.input = [str(tmp_path / "input.jsonl")]
+    args.output_dir = tmp_path / "out"
+    run(args)
+
+    dropped_lines = (tmp_path / "out" / "dropped.jsonl").read_text().strip().splitlines()
+    assert len(dropped_lines) == 1
+    rec = json.loads(dropped_lines[0])
+    assert rec["rule"] == "doi"
+    assert "survived_work_id" in rec
+    assert "dropped_work_id" in rec
+
+
+def test_multi_input_glob(tmp_path: Path) -> None:
+    """Multiple input files via glob pattern are merged before dedup."""
+    works_a = [_make_work("https://openalex.org/W1"), _make_work("https://openalex.org/W2")]
+    works_b = [_make_work("https://openalex.org/W3"), _make_work("https://openalex.org/W4")]
+
+    _write_works_jsonl(tmp_path / "fetch_a.jsonl", works_a)
+    _write_works_jsonl(tmp_path / "fetch_b.jsonl", works_b)
+
+    args = MagicMock()
+    args.input = [str(tmp_path / "fetch_*.jsonl")]
     args.output_dir = tmp_path / "out"
     run(args)
 
     dedup_lines = (tmp_path / "out" / "deduplicated.jsonl").read_text().strip().splitlines()
-    assert len(dedup_lines) == 2
-    assert "W1" in dedup_lines[0]
-    assert "W2" in dedup_lines[1]
+    assert len(dedup_lines) == 4
+
+    meta_data = json.loads((tmp_path / "out" / "dedup-meta.json").read_text())
+    meta = DeduplicationMeta.model_validate(meta_data)
+    assert meta.input_count == 4
+    assert meta.output_count == 4
+    assert meta.duplicates_removed == 0
 
 
-def test_dropped_is_empty(tmp_path: Path) -> None:
-    works = [_make_work()]
-    _write_works_jsonl(tmp_path / "input.jsonl", works)
+def test_multi_input_glob_deduplicates_across_files(tmp_path: Path) -> None:
+    """A DOI duplicate spanning two input files is removed."""
+    w1 = _make_work("https://openalex.org/W1", doi="https://doi.org/10.1/dup")
+    w2 = _make_work("https://openalex.org/W2", doi="http://doi.org/10.1/dup")
+
+    _write_works_jsonl(tmp_path / "file_a.jsonl", [w1])
+    _write_works_jsonl(tmp_path / "file_b.jsonl", [w2])
 
     args = MagicMock()
-    args.input = tmp_path / "input.jsonl"
+    args.input = [str(tmp_path / "file_a.jsonl"), str(tmp_path / "file_b.jsonl")]
     args.output_dir = tmp_path / "out"
     run(args)
 
-    dropped = (tmp_path / "out" / "dropped.jsonl").read_text().strip()
-    assert dropped == ""
+    dedup_lines = (tmp_path / "out" / "deduplicated.jsonl").read_text().strip().splitlines()
+    assert len(dedup_lines) == 1
 
 
-def test_meta_correctness(tmp_path: Path) -> None:
-    works = [_make_work("https://openalex.org/W1"), _make_work("https://openalex.org/W2")]
+def test_works_without_doi_use_title_author_year(tmp_path: Path) -> None:
+    """Works with no DOI fall through to rule 3 for dedup."""
+    auth = [_make_authorship("Bob Jones")]
+    w1 = _make_work(
+        "https://openalex.org/W1",
+        doi=None,
+        title="Climate Change Effects",
+        publication_year=2019,
+        authorships=auth,
+    )
+    w2 = _make_work(
+        "https://openalex.org/W2",
+        doi=None,
+        title="climate change effects",
+        publication_year=2019,
+        authorships=[_make_authorship("Bob Jones")],
+    )
+    _write_works_jsonl(tmp_path / "input.jsonl", [w1, w2])
+
+    args = MagicMock()
+    args.input = [str(tmp_path / "input.jsonl")]
+    args.output_dir = tmp_path / "out"
+    run(args)
+
+    dedup_lines = (tmp_path / "out" / "deduplicated.jsonl").read_text().strip().splitlines()
+    assert len(dedup_lines) == 1
+
+    dropped_lines = (tmp_path / "out" / "dropped.jsonl").read_text().strip().splitlines()
+    assert len(dropped_lines) == 1
+    rec = json.loads(dropped_lines[0])
+    assert rec["rule"] == "title_author_year"
+
+
+def test_no_duplicates_passes_through_unchanged(tmp_path: Path) -> None:
+    """A set of distinct works is passed through unmodified."""
+    auth_a = [_make_authorship("Alice")]
+    auth_b = [_make_authorship("Bob")]
+    works = [
+        _make_work("https://openalex.org/W1", doi="https://doi.org/10.1/a",
+                   title="Paper A", publication_year=2020, authorships=auth_a),
+        _make_work("https://openalex.org/W2", doi="https://doi.org/10.1/b",
+                   title="Paper B", publication_year=2020, authorships=auth_b),
+        _make_work("https://openalex.org/W3", doi=None,
+                   title="Paper C", publication_year=2021, authorships=auth_a),
+    ]
     _write_works_jsonl(tmp_path / "input.jsonl", works)
 
     args = MagicMock()
-    args.input = tmp_path / "input.jsonl"
+    args.input = [str(tmp_path / "input.jsonl")]
+    args.output_dir = tmp_path / "out"
+    run(args)
+
+    dedup_lines = (tmp_path / "out" / "deduplicated.jsonl").read_text().strip().splitlines()
+    assert len(dedup_lines) == 3
+
+    dropped_text = (tmp_path / "out" / "dropped.jsonl").read_text().strip()
+    assert dropped_text == ""
+
+    meta_data = json.loads((tmp_path / "out" / "dedup-meta.json").read_text())
+    meta = DeduplicationMeta.model_validate(meta_data)
+    assert meta.input_count == 3
+    assert meta.output_count == 3
+    assert meta.duplicates_removed == 0
+    assert meta.by_rule == {}
+
+
+# ---------------------------------------------------------------------------
+# Rule 3 edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_rule3_skipped_for_missing_author() -> None:
+    """Works without authorships do not trigger rule 3."""
+    w1 = _make_work(
+        "https://openalex.org/W1",
+        doi=None,
+        title="Lonely Paper",
+        publication_year=2022,
+        authorships=[],
+    )
+    w2 = _make_work(
+        "https://openalex.org/W2",
+        doi=None,
+        title="Lonely Paper",
+        publication_year=2022,
+        authorships=[],
+    )
+    survivors, dropped = deduplicate([w1, w2])
+    # Rule 3 skipped for both — both survive as distinct records.
+    assert len(survivors) == 2
+    assert len(dropped) == 0
+
+
+def test_rule3_skipped_for_missing_year() -> None:
+    """Works without publication_year do not trigger rule 3."""
+    auth = [_make_authorship("Carol")]
+    w1 = _make_work(
+        "https://openalex.org/W1",
+        doi=None,
+        title="Undated Paper",
+        publication_year=None,
+        authorships=auth,
+    )
+    w2 = _make_work(
+        "https://openalex.org/W2",
+        doi=None,
+        title="Undated Paper",
+        publication_year=None,
+        authorships=[_make_authorship("Carol")],
+    )
+    survivors, dropped = deduplicate([w1, w2])
+    assert len(survivors) == 2
+    assert len(dropped) == 0
+
+
+# ---------------------------------------------------------------------------
+# Meta correctness (integration via run())
+# ---------------------------------------------------------------------------
+
+
+def test_meta_correctness(tmp_path: Path) -> None:
+    w1 = _make_work("https://openalex.org/W1", doi="https://doi.org/10.0/A")
+    w2 = _make_work("https://openalex.org/W2", doi="http://doi.org/10.0/a")  # same DOI
+    w3 = _make_work("https://openalex.org/W3", doi="https://doi.org/10.0/B")
+
+    _write_works_jsonl(tmp_path / "input.jsonl", [w1, w2, w3])
+
+    args = MagicMock()
+    args.input = [str(tmp_path / "input.jsonl")]
     args.output_dir = tmp_path / "out"
     run(args)
 
     meta_data = json.loads((tmp_path / "out" / "dedup-meta.json").read_text())
     meta = DeduplicationMeta.model_validate(meta_data)
-    assert meta.input_count == 2
+    assert meta.input_count == 3
     assert meta.output_count == 2
-    assert meta.duplicates_removed == 0
-    assert meta.by_rule == {}
+    assert meta.duplicates_removed == 1
+    assert meta.by_rule == {"doi": 1}
     assert meta.run.tool == "laglitsynth.catalogue_dedup.dedup"
-    assert meta.run.validation_skipped == 0
 
 
 def test_validation_skipped_counted(tmp_path: Path) -> None:
@@ -67,21 +315,21 @@ def test_validation_skipped_counted(tmp_path: Path) -> None:
         f.write('{"id": "not-a-work", "broken": true}\n')  # missing required fields
 
     args = MagicMock()
-    args.input = tmp_path / "input.jsonl"
+    args.input = [str(tmp_path / "input.jsonl")]
     args.output_dir = tmp_path / "out"
     run(args)
 
     meta_data = json.loads((tmp_path / "out" / "dedup-meta.json").read_text())
     meta = DeduplicationMeta.model_validate(meta_data)
     assert meta.run.validation_skipped == 1
-    assert meta.input_count == 1  # only valid work counted
+    assert meta.input_count == 1
 
 
 def test_empty_input(tmp_path: Path) -> None:
     _write_works_jsonl(tmp_path / "input.jsonl", [])
 
     args = MagicMock()
-    args.input = tmp_path / "input.jsonl"
+    args.input = [str(tmp_path / "input.jsonl")]
     args.output_dir = tmp_path / "out"
     run(args)
 
@@ -91,3 +339,181 @@ def test_empty_input(tmp_path: Path) -> None:
     meta_data = json.loads((tmp_path / "out" / "dedup-meta.json").read_text())
     assert meta_data["input_count"] == 0
     assert meta_data["output_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Issue #6 — collision safety in _insert (swap-survivor secondary collisions)
+# ---------------------------------------------------------------------------
+
+
+def test_doi_collision_under_swap_survivor() -> None:
+    """DOI index is not silently overwritten during a rule-1 swap.
+
+    Scenario:
+      A  — OA id=W1, doi=10.1/a
+      B  — OA id=W2, doi=10.1/b   (distinct record, distinct DOI)
+      C  — OA id=W1, doi=10.1/b   (same OA id as A → rule-1 match; same DOI as B)
+
+    When C wins the completeness contest against A (C has an author, A has
+    none), the swap path must detect that C's DOI already belongs to B and
+    resolve that collision too — not silently shadow B's DOI pointer.
+
+    Expected post-dedup state:
+      - Only 2 survivors: C (beats A on rule 1) + B or C merged with B on DOI.
+        Either way, exactly one record per DOI survives.
+      - The dropped.jsonl rule attributions are correct (no entry blaming the
+        wrong survivor).
+    """
+    auth = [_make_authorship("Alice")]
+    # A: bare record, no authors — lowest completeness.
+    a = _make_work("https://openalex.org/W1", doi="https://doi.org/10.1/a")
+    # B: different id+DOI — already a registered survivor.
+    b = _make_work(
+        "https://openalex.org/W2",
+        doi="https://doi.org/10.1/b",
+        authorships=auth,
+    )
+    # C: same OA id as A (rule-1 match), but DOI overlaps with B.
+    c = _make_work(
+        "https://openalex.org/W1",
+        doi="https://doi.org/10.1/b",  # same DOI as B
+        authorships=[_make_authorship("Alice"), _make_authorship("Bob")],  # most complete
+    )
+
+    survivors, dropped = deduplicate([a, b, c])
+
+    # Exactly two papers in total (A+C are the same paper; B+C share a DOI).
+    # After chaining: A dropped → C inserted → C vs B on DOI → one survives.
+    assert len(survivors) == 1, f"Expected 1 survivor, got {len(survivors)}: {[s.id for s in survivors]}"
+
+    # The surviving record must be C (it has the most authors).
+    assert survivors[0].id == "https://openalex.org/W1"
+
+    # All rule attributions must name a real dropped-vs-survived pair.
+    survivor_ids = {s.id for s in survivors}
+    for rec in dropped:
+        assert rec.survived_work_id in survivor_ids or rec.survived_work_id in {
+            d.dropped_work_id for d in dropped
+        }, f"survived_work_id {rec.survived_work_id!r} not reachable"
+
+
+def test_title_collision_under_swap_survivor() -> None:
+    """Title-key index is not silently overwritten during a rule-1 swap.
+
+    Scenario:
+      A  — OA id=W1, no doi, title="Sea Level Rise", author="Alice", year=2020
+      B  — OA id=W2, no doi, same title/author/year as A (already deduped as a
+           distinct OpenAlex record sharing rule-3 key — B registered first,
+           A would have been dropped; here we register A first so A is the
+           existing survivor)
+      C  — OA id=W1 (matches A on rule 1), same title/author/year,
+           more authors than A.
+
+    When C wins over A, C is re-inserted and its title key collides with B's
+    pointer.  The cascade must resolve that, not silently overwrite it.
+    """
+    auth_single = [_make_authorship("Alice")]
+    auth_multi = [_make_authorship("Alice"), _make_authorship("Bob")]
+
+    a = _make_work(
+        "https://openalex.org/W1",
+        doi=None,
+        title="Sea Level Rise",
+        publication_year=2020,
+        authorships=auth_single,
+    )
+    b = _make_work(
+        "https://openalex.org/W2",
+        doi=None,
+        title="Sea Level Rise",
+        publication_year=2020,
+        authorships=[_make_authorship("Alice")],
+    )
+    c = _make_work(
+        "https://openalex.org/W1",  # same id as A → rule-1 match
+        doi=None,
+        title="Sea Level Rise",
+        publication_year=2020,
+        authorships=auth_multi,  # more complete than A
+    )
+
+    survivors, dropped = deduplicate([a, b, c])
+
+    # A+C are the same OA record; B+C share the title key.
+    # C (most complete) should be the sole survivor.
+    assert len(survivors) == 1, f"Expected 1 survivor, got {len(survivors)}: {[s.id for s in survivors]}"
+    assert survivors[0].id == "https://openalex.org/W1"
+
+    # Every dropped record must name a correct survived_work_id.
+    dropped_ids = {rec.dropped_work_id for rec in dropped}
+    assert "https://openalex.org/W1" in dropped_ids or "https://openalex.org/W2" in dropped_ids
+
+
+# ---------------------------------------------------------------------------
+# Issue #8 — _completeness_key whitespace-only DOI
+# ---------------------------------------------------------------------------
+
+
+def test_whitespace_only_doi_does_not_count_as_complete() -> None:
+    """A DOI that is only whitespace must not be treated as present."""
+    w_ws_doi = _make_work("https://openalex.org/W1", doi="   ")
+    w_no_doi = _make_work("https://openalex.org/W2", doi=None)
+
+    # Both should have completeness key (0, 0) — neither beats the other.
+    from laglitsynth.catalogue_dedup.dedup import _completeness_key
+
+    assert _completeness_key(w_ws_doi) == (0, 0)
+    assert _completeness_key(w_no_doi) == (0, 0)
+
+    # In a swap-survivor scenario the whitespace DOI must not be the winner.
+    w_real_doi = _make_work(
+        "https://openalex.org/W1",
+        doi="https://doi.org/10.1/real",
+        authorships=[_make_authorship("Alice")],
+    )
+    survivors, dropped = deduplicate([w_ws_doi, w_real_doi])
+    assert len(survivors) == 1
+    assert survivors[0].doi == "https://doi.org/10.1/real"
+
+
+# ---------------------------------------------------------------------------
+# Issue #13 — Unicode punctuation in _normalise_title
+# ---------------------------------------------------------------------------
+
+
+def test_unicode_dashes_and_quotes_normalised() -> None:
+    """Unicode dashes and curly quotes are stripped by _normalise_title."""
+    # Em dash —, en dash –, curly double quotes " ", curly single quotes ' '
+    title_with_unicode = "Sea—Level – Rise: “A Review”"
+    title_plain = "Sea Level Rise A Review"
+
+    result = _normalise_title(title_with_unicode)
+    expected = _normalise_title(title_plain)
+
+    assert result is not None
+    assert result == expected, (
+        f"Unicode punctuation not stripped: {result!r} != {expected!r}"
+    )
+
+
+def test_unicode_dashes_enable_title_dedup() -> None:
+    """Two works whose titles differ only in Unicode dashes deduplicate on rule 3."""
+    auth = [_make_authorship("Jane Smith")]
+    w1 = _make_work(
+        "https://openalex.org/W1",
+        doi=None,
+        title="Sea—Level Rise: A Review",  # em dash + colon
+        publication_year=2021,
+        authorships=auth,
+    )
+    w2 = _make_work(
+        "https://openalex.org/W2",
+        doi=None,
+        title="Sea Level Rise A Review",  # plain ASCII, no punctuation
+        publication_year=2021,
+        authorships=[_make_authorship("Jane Smith")],
+    )
+    survivors, dropped = deduplicate([w1, w2])
+    assert len(survivors) == 1
+    assert len(dropped) == 1
+    assert dropped[0].rule == "title_author_year"

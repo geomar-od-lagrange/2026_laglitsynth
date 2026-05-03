@@ -9,7 +9,7 @@ import logging
 import random
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -38,10 +38,10 @@ from laglitsynth.io import (
     JsonlReadStats,
     append_jsonl,
     read_jsonl,
-    write_jsonl,
     write_meta,
 )
 from laglitsynth.models import LlmMeta, RunMeta
+from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,35 @@ _TEMPERATURE = 0.8
 _NUM_CTX = 32768
 _LLM_TIMEOUT_SECONDS = 300
 _LLM_MAX_RETRIES = 3
+
+
+def _active_works(
+    catalogue_path: Path,
+    screening_verdicts_path: Path,
+    screening_threshold: float,
+    stats: JsonlReadStats | None = None,
+) -> Iterator[Work]:
+    """Yield Works that pass the screening threshold gate.
+
+    Works whose ``ScreeningVerdict.relevance_score`` is None (sentinels:
+    ``no-abstract``, ``llm-parse-failure``, ``llm-timeout``) are never
+    filtered — absence of a score is not evidence of irrelevance.  Only an
+    explicit numeric score strictly below ``screening_threshold`` excludes.
+
+    Works present in the catalogue but absent from the verdicts file are also
+    excluded (they were never screened).
+    """
+    verdicts = {
+        v.work_id: v
+        for v in read_jsonl(screening_verdicts_path, ScreeningVerdict, stats)
+    }
+    for w in read_jsonl(catalogue_path, Work, stats):
+        sv = verdicts.get(w.id)
+        if sv is None:
+            continue
+        if sv.relevance_score is not None and sv.relevance_score < screening_threshold:
+            continue
+        yield w
 
 
 def classify_eligibility(
@@ -125,7 +154,7 @@ def _load_extractions(
 
 
 def assess_works(
-    catalogue_path: Path,
+    works: Iterable[Work],
     extractions: dict[str, ExtractedDocument],
     extraction_output_dir: Path,
     *,
@@ -134,11 +163,10 @@ def assess_works(
     max_records: int | None,
     system_prompt: str,
     skip_ids: set[str] | None = None,
-    stats: JsonlReadStats | None = None,
 ) -> Iterator[EligibilityVerdict]:
     skip_ids = skip_ids or set()
     processed = 0
-    for work in read_jsonl(catalogue_path, Work, stats):
+    for work in works:
         if work.id in skip_ids:
             continue
         if max_records is not None and processed >= max_records:
@@ -230,7 +258,19 @@ def build_subparser(
         "--catalogue",
         type=Path,
         required=True,
-        help="Included catalogue JSONL (data/screening-adjudication/included.jsonl)",
+        help="Deduplicated catalogue JSONL (data/catalogue-dedup/deduplicated.jsonl)",
+    )
+    parser.add_argument(
+        "--screening-verdicts",
+        type=Path,
+        required=True,
+        help="Stage 3 verdicts JSONL (data/screening-abstracts/<run-id>/verdicts.jsonl)",
+    )
+    parser.add_argument(
+        "--screening-threshold",
+        type=float,
+        default=50.0,
+        help="Relevance score cutoff, 0-100 (default: 50)",
     )
     parser.add_argument(
         "--extractions",
@@ -305,7 +345,6 @@ def run(args: argparse.Namespace) -> None:
         args.run_id = generate_run_id()
     output_dir: Path = Path(args.data_dir) / STAGE_SUBDIR / args.run_id
     verdicts_path = output_dir / "verdicts.jsonl"
-    eligible_path = output_dir / "eligible.jsonl"
     meta_path = output_dir / "eligibility-meta.json"
 
     extraction_output_dir: Path = (
@@ -341,7 +380,15 @@ def run(args: argparse.Namespace) -> None:
     stats = JsonlReadStats()
     extractions = _load_extractions(args.extractions, stats)
 
-    total = sum(1 for _ in read_jsonl(args.catalogue, Work, stats))
+    active: list[Work] = list(
+        _active_works(
+            args.catalogue,
+            args.screening_verdicts,
+            args.screening_threshold,
+            stats,
+        )
+    )
+    total = len(active)
 
     skip_ids: set[str] = set()
     prior_verdicts: list[EligibilityVerdict] = []
@@ -379,7 +426,7 @@ def run(args: argparse.Namespace) -> None:
     new_verdicts: list[EligibilityVerdict] = []
 
     for verdict in assess_works(
-        args.catalogue,
+        active,
         extractions,
         extraction_output_dir,
         client=client,
@@ -387,7 +434,6 @@ def run(args: argparse.Namespace) -> None:
         max_records=args.max_records,
         system_prompt=system_prompt,
         skip_ids=skip_ids,
-        stats=stats,
     ):
         index += 1
         new_verdicts.append(verdict)
@@ -452,13 +498,6 @@ def run(args: argparse.Namespace) -> None:
     if args.dry_run:
         return
 
-    # Rebuild eligible.jsonl from the verdict sidecar + catalogue join.
-    eligible_ids = {v.work_id for v in all_verdicts if v.eligible is True}
-    eligible_works = [
-        w for w in read_jsonl(args.catalogue, Work) if w.id in eligible_ids
-    ]
-    write_jsonl(eligible_works, eligible_path)
-
     run_meta = RunMeta(
         tool=TOOL_NAME,
         run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
@@ -475,6 +514,7 @@ def run(args: argparse.Namespace) -> None:
             run=run_meta,
             llm=llm_meta,
             input_catalogue=str(args.catalogue),
+            input_screening_verdicts=str(args.screening_verdicts),
             input_extractions=str(args.extractions),
             input_count=total,
             eligible_count=eligible_count,
@@ -486,3 +526,4 @@ def run(args: argparse.Namespace) -> None:
             by_source_basis=by_source_basis,
         ),
     )
+    print(f"Run dir: {output_dir}", file=sys.stderr)

@@ -1,31 +1,24 @@
-# Deduplication
+# Catalogue deduplication
 
-Remove duplicate records from the retrieved catalogue before screening
-effort is spent. Duplicates arise when multiple keyword searches return
-overlapping result sets, or when the same work appears under different
+Stage 2 removes duplicate records from the retrieved catalogue before
+screening effort is spent. Duplicates arise when multiple keyword searches
+return overlapping result sets, or when the same work appears under different
 OpenAlex IDs.
-
-## Prototype scope
-
-Exact matching only. No fuzzy logic, no preprint-vs-published
-reconciliation. The goal is to wire stage 2 into the pipeline with correct
-input/output contracts. Tune the matching when we see how much duplication
-actually exists and what kinds of duplicates the naive approach misses.
 
 ## Matching rules
 
-Apply in order. If any rule matches, the later record is dropped.
+Three rules are applied in order. The first matching rule wins.
 
 ### 1. OpenAlex ID
 
-Exact match on `work.id`. This catches the trivial case where the same
-search returns the same record twice.
+Exact match on `work.id`. Catches the trivial case where the same search
+returns the same record twice.
 
-### 2. DOI
+### 2. Normalised DOI
 
-Exact match on normalised DOI (lowercase, strip `https://doi.org/`
-prefix). This catches the most common cross-search duplicates. Works
-without a DOI are never matched by this rule.
+Exact match on normalised DOI (lowercase, strip `https://doi.org/` prefix).
+Catches the most common cross-search duplicates. Works without a DOI are
+never matched by this rule.
 
 ### 3. Normalised title + first author + year
 
@@ -35,20 +28,28 @@ For works without a DOI, match on all three:
 - Year: `publication_year`.
 
 All three must match. This is conservative — it will miss duplicates with
-slightly different titles (e.g. preprint vs. published) but will not
-produce false merges.
+slightly different titles (e.g. preprint vs. published) but avoids false
+merges.
 
-## What gets kept
+## Tiebreak: completeness
 
-When duplicates are found, keep the record with the most complete metadata
-(prefer the one with a DOI, prefer the one with more `authorships`
-entries, break ties by keeping the first encountered). Log dropped records
-with the reason and the ID of the record they were merged into.
+When two records match, the one with more complete metadata survives:
+prefer the record with a DOI over one without, then prefer the one with more
+`authorships` entries, then keep the first encountered. The dropped record's
+`work_id`, the surviving record's `work_id`, and the matching rule are
+written to `dropped.jsonl` as a [`DroppedRecord`](../src/laglitsynth/catalogue_dedup/models.py).
 
-## Data model
+## Data models
 
-No new models needed. The output is a JSONL of `Work` records — same
-schema as the input, just fewer of them.
+### DroppedRecord
+
+```python
+class DroppedRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dropped_work_id: str
+    survived_work_id: str
+    rule: str    # "openalex_id" | "doi" | "title_author_year"
+```
 
 ### DeduplicationMeta
 
@@ -68,27 +69,35 @@ class DeduplicationMeta(BaseModel):
 data/catalogue-dedup/
   deduplicated.jsonl      # Work records after deduplication
   dedup-meta.json         # DeduplicationMeta
-  dropped.jsonl           # dropped records with merge reason
+  dropped.jsonl           # one DroppedRecord per dropped duplicate
 ```
 
 ## CLI interface
 
+`--input` accepts one or more paths or glob patterns. Multiple files are
+concatenated and deduplicated in a single pass.
+
 ```
 laglitsynth catalogue-dedup \
-    --input data/catalogue-fetch/combined.jsonl \
+    --input "data/catalogue-fetch/*.jsonl" \
     --output-dir data/catalogue-dedup/
 ```
 
-If multiple search result files need to be combined first, concatenate
-them before deduplication. The dedup stage does not handle multi-file
-input — that is a trivial `cat` operation.
+Multiple explicit paths also work:
 
-## What to defer
+```
+laglitsynth catalogue-dedup \
+    --input data/catalogue-fetch/search_a.jsonl \
+            data/catalogue-fetch/search_b.jsonl \
+    --output-dir data/catalogue-dedup/
+```
+
+## What is deferred
 
 - Fuzzy title matching (Levenshtein, n-gram similarity).
 - Preprint-vs-published reconciliation (matching arXiv IDs to DOIs).
 - OpenAlex entity merging (querying OpenAlex for canonical work IDs).
 - Human review of ambiguous matches.
 
-All of these can be added when the duplicate rate and miss rate on the
-actual corpus justify it.
+These can be added when the duplicate rate and miss rate on the actual
+corpus justify it.

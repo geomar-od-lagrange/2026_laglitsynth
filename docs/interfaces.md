@@ -6,7 +6,7 @@ each stage can be implemented independently.
 
 ## Design principle: flag, don't filter
 
-Gate stages (3, 4, 7) write verdict sidecars but never copy or split Work
+Gate stages (3, 7) write verdict sidecars but never copy or split Work
 records. The deduplicated catalogue (`data/catalogue-dedup/deduplicated.jsonl`) is
 the single source of Work records for the entire pipeline. Downstream
 stages determine their active work set at read time by joining the
@@ -24,15 +24,17 @@ times and combining results) is a planned optional extension; see
 
 ### Resolution
 
-A shared `resolve` module joins the deduplicated catalogue against verdict
-sidecars and caller-supplied thresholds to produce the active work set for
-a given pipeline stage. Every stage from 5 onward uses this module. The
-resolve logic lives in one place, not duplicated per stage.
+Stages 5, 7, and 8 each join the deduplicated catalogue against an upstream
+verdict sidecar at a caller-supplied threshold to determine their active work
+set. This logic lives in a small file-local `_active_works` helper in each
+stage's runner — three copies by design. A shared `laglitsynth.resolve`
+module is deferred until stage 9 adds a fourth consumer; see the
+[Resolve module](#resolve-module) note under "Gaps" below.
 
-Thresholds are CLI flags (e.g. `--screening-threshold 50`), passed through
-to the resolve module. Each run's threshold is recorded in the stage's meta
-sidecar for provenance. A pipeline-level config file may replace CLI flags
-once thresholds are tuned on real data.
+Thresholds are CLI flags (e.g. `--screening-threshold 50`). Each run's
+threshold is recorded in the stage's meta sidecar for provenance. A
+pipeline-level config file may replace CLI flags once thresholds are tuned
+on real data.
 
 ## Artifact map
 
@@ -47,40 +49,26 @@ Multiple search runs produce separate timestamped files. Only the JSONL
 records are concatenated for stage 2 (`cat data/catalogue-fetch/*.jsonl`).
 The meta files stay as per-run provenance records — they are not merged.
 
-### Stage 2 — catalogue-dedup *(exists, pass-all MVP)*
+### Stage 2 — catalogue-dedup *(exists)*
 
 | Path | Model | Description |
 |---|---|---|
 | `data/catalogue-dedup/deduplicated.jsonl` | [`Work`](../src/laglitsynth/catalogue_fetch/models.py) | Deduplicated catalogue — single source of Work records for the pipeline |
-| `data/catalogue-dedup/dropped.jsonl` | Work + merge reason (TBD) | Dropped duplicates with reason |
+| `data/catalogue-dedup/dropped.jsonl` | [`DroppedRecord`](../src/laglitsynth/catalogue_dedup/models.py) | Dropped duplicates with the matching rule and the surviving work's ID |
 | `data/catalogue-dedup/dedup-meta.json` | [`DeduplicationMeta`](../src/laglitsynth/catalogue_dedup/models.py) | Counts by matching rule |
 
 ### Stage 3 — screening-abstracts *(exists)*
 
 | Path | Model | Description |
 |---|---|---|
-| `data/screening-abstracts/verdicts.jsonl` | [`ScreeningVerdict`](../src/laglitsynth/screening_abstracts/models.py) | Relevance score and reason for every work |
-| `data/screening-abstracts/screening-meta.json` | [`ScreeningMeta`](../src/laglitsynth/screening_abstracts/models.py) | Prompt, model, threshold, counts |
+| `data/screening-abstracts/<run-id>/verdicts.jsonl` | [`ScreeningVerdict`](../src/laglitsynth/screening_abstracts/models.py) | Relevance score and reason for every work |
+| `data/screening-abstracts/<run-id>/screening-meta.json` | [`ScreeningMeta`](../src/laglitsynth/screening_abstracts/models.py) | Prompt, model, threshold, counts |
 
 Verdicts cover all works in the deduplicated catalogue, not just accepted
 ones. The accept/reject decision is derived from the relevance score and
-the threshold passed to stage 4's `--screening-threshold` flag. No
+the `--screening-threshold` flag passed to downstream stages. No
 `screened.jsonl` or `rejected.jsonl` — the verdict sidecar is the only
 output.
-
-### Stage 4 — screening-adjudication *(exists, pass-through MVP)*
-
-| Path | Model | Description |
-|---|---|---|
-| `data/screening-adjudication/verdicts.jsonl` | [`AdjudicationVerdict`](../src/laglitsynth/screening_adjudication/models.py) | Per-work adjudication decision (accept-only in MVP; reject/skip queued) |
-| `data/screening-adjudication/adjudication-meta.json` | [`AdjudicationMeta`](../src/laglitsynth/screening_adjudication/models.py) | Threshold applied, counts |
-| `data/screening-adjudication/included.jsonl` | [`Work`](../src/laglitsynth/catalogue_fetch/models.py) | Work records above threshold (convenience for stage 5) |
-
-Stage 4 reads stage 3's `verdicts.jsonl` and the deduplicated catalogue,
-applies `--screening-threshold`, and emits `AdjudicationVerdict` records
-plus a convenience `included.jsonl` of the accepted Work records for stage
-5. The pass-through MVP sets `decision="accept"` and `reviewer="pass-through"`
-for every above-threshold work.
 
 ### Stage 5 — fulltext-retrieval *(exists)*
 
@@ -91,8 +79,10 @@ for every above-threshold work.
 | `data/fulltext-retrieval/pdfs/<work_id>.pdf` | (binary) | Raw PDFs |
 | `data/fulltext-retrieval/unretrieved.txt` | (plain text) | DOIs for manual download |
 
+Stage 5 joins the deduplicated catalogue against stage 3's `verdicts.jsonl`
+at the `--screening-threshold` cutoff to determine the active work set.
 `RetrievalRecord` flags each work's retrieval status (success, failed,
-abstract-only) and the PDF path. Already follows the flag pattern.
+abstract-only) and the PDF path.
 
 ### Stage 6 — fulltext-extraction
 
@@ -106,13 +96,14 @@ abstract-only) and the PDF path. Already follows the flag pattern.
 
 | Path | Model | Description |
 |---|---|---|
-| `data/fulltext-eligibility/verdicts.jsonl` | [`EligibilityVerdict`](../src/laglitsynth/fulltext_eligibility/models.py) | Per-work eligibility decision (tri-state with sentinel reasons) |
-| `data/fulltext-eligibility/eligible.jsonl` | [`Work`](../src/laglitsynth/catalogue_fetch/models.py) | Work records where `verdict.eligible is True` (derived convenience for stage 8) |
-| `data/fulltext-eligibility/eligibility-meta.json` | [`EligibilityMeta`](../src/laglitsynth/fulltext_eligibility/models.py) | Counts by source basis, nested `run` + `llm` |
+| `data/fulltext-eligibility/<run-id>/verdicts.jsonl` | [`EligibilityVerdict`](../src/laglitsynth/fulltext_eligibility/models.py) | Per-work eligibility decision (tri-state with sentinel reasons) |
+| `data/fulltext-eligibility/<run-id>/eligibility-meta.json` | [`EligibilityMeta`](../src/laglitsynth/fulltext_eligibility/models.py) | Counts by source basis, nested `run` + `llm` |
+| `data/fulltext-eligibility/<run-id>/config.yaml` | (YAML) | Resolved CLI+config, criteria inlined |
 
-`verdicts.jsonl` is the source of truth; `eligible.jsonl` rebuilds each
-run from the catalogue join against the verdict sidecar, mirroring
-stage 4's [`included.jsonl`](screening-adjudication.md).
+Stage 7 joins the deduplicated catalogue against stage 3's `verdicts.jsonl`
+at the `--screening-threshold` cutoff to determine the active work set,
+then runs eligibility assessment on each active work. `verdicts.jsonl` is
+the source of truth and the sole output; there is no derived `eligible.jsonl`.
 
 ### Stage 8 — extraction-codebook *(exists)*
 
@@ -122,11 +113,11 @@ stage 4's [`included.jsonl`](screening-adjudication.md).
 | `<data-dir>/extraction-codebook/<run-id>/extraction-codebook-meta.json` | [`ExtractionCodebookMeta`](../src/laglitsynth/extraction_codebook/models.py) | Per-branch counts, nested `run` + `llm` |
 | `<data-dir>/extraction-codebook/<run-id>/config.yaml` | resolved CLI+config (codebook inlined) | Self-contained run snapshot; see [configs.md](configs.md) |
 
-Every input work produces exactly one record; sentinel records carry
-`None` in all content fields and a `reason` from the vocabulary in
-[extraction-codebook.md](extraction-codebook.md). There is no derived
-convenience file — stage 9 and stages 10–12 read `records.jsonl`
-directly.
+Stage 8 joins the deduplicated catalogue against stage 7's `verdicts.jsonl`
+to determine eligible works. Every input work produces exactly one record;
+sentinel records carry `None` in all content fields and a `reason` from the
+vocabulary in [extraction-codebook.md](extraction-codebook.md). Stage 9 and
+stages 10–12 read `records.jsonl` directly.
 
 ### Stage 9 — extraction-adjudication
 
@@ -167,7 +158,7 @@ laglitsynth catalogue-fetch QUERY --api-key KEY \
 
 # Stage 2 — catalogue-dedup
 laglitsynth catalogue-dedup \
-    --input data/catalogue-fetch/combined.jsonl \
+    --input "data/catalogue-fetch/*.jsonl" \
     --output-dir data/catalogue-dedup/
 
 # Stage 3 — screening-abstracts
@@ -179,20 +170,15 @@ laglitsynth screening-abstracts INPUT PROMPT \
 # Stage 3 — screening-abstracts-export (human review)
 laglitsynth screening-abstracts-export \
     --format csv|xlsx \
-    --verdicts data/screening-abstracts/verdicts.jsonl \
+    --verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
     --catalogue data/catalogue-dedup/deduplicated.jsonl \
     [--output PATH] [--n-subset N] [--subset-seed N]
 
-# Stage 4 — screening-adjudication
-laglitsynth screening-adjudication \
-    --input data/screening-abstracts/verdicts.jsonl \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    --screening-threshold 50 \
-    --output-dir data/screening-adjudication/
-
 # Stage 5 — fulltext-retrieval
 laglitsynth fulltext-retrieval \
-    --input data/screening-adjudication/included.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    --screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
+    --screening-threshold 50 \
     --output-dir data/fulltext-retrieval/ \
     --email EMAIL \
     [--manual-dir DIR] [--skip-existing] [--dry-run]
@@ -206,7 +192,9 @@ laglitsynth fulltext-extraction \
 
 # Stage 7 — fulltext-eligibility
 laglitsynth fulltext-eligibility \
-    --catalogue data/screening-adjudication/included.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    --screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
+    --screening-threshold 50 \
     --extractions data/fulltext-extraction/extraction.jsonl \
     [--extraction-output-dir data/fulltext-extraction/] \
     [--data-dir DIR] [--run-id ID] \
@@ -216,7 +204,8 @@ laglitsynth fulltext-eligibility \
 
 # Stage 8 — extraction-codebook
 laglitsynth extraction-codebook \
-    --eligible data/fulltext-eligibility/<run-id>/eligible.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    --eligibility-verdicts data/fulltext-eligibility/<run-id>/verdicts.jsonl \
     --extractions data/fulltext-extraction/extraction.jsonl \
     [--extraction-output-dir data/fulltext-extraction/] \
     [--data-dir DIR] [--run-id ID] \
@@ -283,30 +272,24 @@ laglitsynth catalogue-fetch "ocean tracer simulation" \
     --api-key "$OPENALEX_API_KEY" \
     -o data/catalogue-fetch/search_b.jsonl
 
-# Manual: concatenate search result records (not meta files)
-cat data/catalogue-fetch/search_*.jsonl > data/catalogue-fetch/combined.jsonl
-
-# 2. Catalogue dedup
+# 2. Catalogue dedup (--input accepts multiple paths or globs)
 laglitsynth catalogue-dedup \
-    --input data/catalogue-fetch/combined.jsonl \
+    --input "data/catalogue-fetch/*.jsonl" \
     --output-dir data/catalogue-dedup/
 
 # 3. Screening abstracts (writes to data/screening-abstracts/<run-id>/)
+# Note the run-id printed at the end — you need it for stages 5, 7, 8.
+RUN_ID="$(laglitsynth generate-run-id)"
 laglitsynth screening-abstracts \
     data/catalogue-dedup/deduplicated.jsonl \
     "Is this about computational Lagrangian methods in oceanography?" \
-    --screening-threshold 50
+    --run-id "$RUN_ID"
 
-# 4. Screening adjudication (pass-through in prototype)
-laglitsynth screening-adjudication \
-    --input data/screening-abstracts/verdicts.jsonl \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    --screening-threshold 50 \
-    --output-dir data/screening-adjudication/
-
-# 5. Fulltext retrieval
+# 5. Fulltext retrieval (inline-joins catalogue + stage 3 verdicts)
 laglitsynth fulltext-retrieval \
-    --input data/screening-adjudication/included.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    --screening-verdicts "data/screening-abstracts/$RUN_ID/verdicts.jsonl" \
+    --screening-threshold 50 \
     --output-dir data/fulltext-retrieval/ \
     --email user@example.com \
     --skip-existing
@@ -324,16 +307,20 @@ laglitsynth fulltext-extraction \
 
 # 7. Fulltext eligibility (writes to data/fulltext-eligibility/<run-id>/)
 laglitsynth fulltext-eligibility \
-    --catalogue data/screening-adjudication/included.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    --screening-verdicts "data/screening-abstracts/$RUN_ID/verdicts.jsonl" \
+    --screening-threshold 50 \
     --extractions data/fulltext-extraction/extraction.jsonl \
-    --extraction-output-dir data/fulltext-extraction/
+    --run-id "$RUN_ID"
 
 # 8. Extraction codebook (writes to data/extraction-codebook/<run-id>/)
-# Substitute <run-id> below with the run id printed by step 7.
 laglitsynth extraction-codebook \
-    --eligible data/fulltext-eligibility/<run-id>/eligible.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    --eligibility-verdicts "data/fulltext-eligibility/$RUN_ID/verdicts.jsonl" \
     --extractions data/fulltext-extraction/extraction.jsonl \
-    --extraction-output-dir data/fulltext-extraction/
+    --run-id "$RUN_ID"
+
+# Stages 9–12 are not yet implemented. Stop here for now.
 
 # 9. Extraction adjudication (pass-through in prototype)
 laglitsynth extraction-adjudication \
@@ -404,7 +391,7 @@ context-window change produces a different digest. Stage 8 also folds
 | Category | Policy | Models |
 |---|---|---|
 | OpenAlex-sourced | `extra="ignore"` — upstream may add fields | `Work`, `Author`, `Authorship`, `Institution`, `Source`, `Location`, `OpenAccess`, `Biblio`, `TopicHierarchy`, `Topic`, `Keyword` |
-| Internally owned | `extra="forbid"` — unexpected fields are bugs | All `*Meta`, `RunMeta`, `LlmMeta`, `ScreeningVerdict`, `AdjudicationVerdict`, `RetrievalRecord`, `RetrievalStatus`, `ExtractedDocument`, `Section`, `Figure`, `Citation`, `BibReference`, `EligibilityVerdict`, `ExtractionRecord` |
+| Internally owned | `extra="forbid"` — unexpected fields are bugs | All `*Meta`, `RunMeta`, `LlmMeta`, `ScreeningVerdict`, `DroppedRecord`, `RetrievalRecord`, `RetrievalStatus`, `ExtractedDocument`, `Section`, `Figure`, `Citation`, `BibReference`, `EligibilityVerdict`, `ExtractionRecord` |
 
 ## Model dependency graph
 
@@ -418,9 +405,8 @@ context-window change produces a different digest. Stage 8 also folds
 | [`FetchMeta`](../src/laglitsynth/catalogue_fetch/models.py) | `laglitsynth.catalogue_fetch.models` | 1 |
 | [`ScreeningVerdict`](../src/laglitsynth/screening_abstracts/models.py) | `laglitsynth.screening_abstracts.models` | 3 |
 | [`ScreeningMeta`](../src/laglitsynth/screening_abstracts/models.py) | `laglitsynth.screening_abstracts.models` | 3 |
+| [`DroppedRecord`](../src/laglitsynth/catalogue_dedup/models.py) | `laglitsynth.catalogue_dedup.models` | 2 |
 | [`DeduplicationMeta`](../src/laglitsynth/catalogue_dedup/models.py) | `laglitsynth.catalogue_dedup.models` | 2 |
-| [`AdjudicationVerdict`](../src/laglitsynth/screening_adjudication/models.py) | `laglitsynth.screening_adjudication.models` | 4 |
-| [`AdjudicationMeta`](../src/laglitsynth/screening_adjudication/models.py) | `laglitsynth.screening_adjudication.models` | 4 |
 | [`RetrievalStatus`](../src/laglitsynth/fulltext_retrieval/models.py) | `laglitsynth.fulltext_retrieval.models` | 5 |
 | [`RetrievalRecord`](../src/laglitsynth/fulltext_retrieval/models.py) | `laglitsynth.fulltext_retrieval.models` | 5 |
 | [`RetrievalMeta`](../src/laglitsynth/fulltext_retrieval/models.py) | `laglitsynth.fulltext_retrieval.models` | 5 |
@@ -447,13 +433,12 @@ context-window change produces a different digest. Stage 8 also folds
 | Stage | Reads | Writes |
 |---|---|---|
 | 1. catalogue-fetch | — | Work, FetchMeta |
-| 2. catalogue-dedup | Work | Work, DeduplicationMeta |
+| 2. catalogue-dedup | Work | Work, DroppedRecord, DeduplicationMeta |
 | 3. screening-abstracts | Work | ScreeningVerdict, ScreeningMeta |
-| 4. screening-adjudication | ScreeningVerdict, Work | AdjudicationVerdict, AdjudicationMeta, Work (included.jsonl) |
-| 5. fulltext-retrieval | Work (via resolve) | RetrievalRecord, RetrievalMeta |
+| 5. fulltext-retrieval | Work + ScreeningVerdict (inline join) | RetrievalRecord, RetrievalMeta |
 | 6. fulltext-extraction | (PDFs) | ExtractedDocument, ExtractionMeta |
-| 7. fulltext-eligibility | Work, ExtractedDocument (via resolve) | EligibilityVerdict, EligibilityMeta, Work (eligible.jsonl) |
-| 8. extraction-codebook | Work, ExtractedDocument (via resolve) | ExtractionRecord, ExtractionCodebookMeta |
+| 7. fulltext-eligibility | Work + ScreeningVerdict (inline join), ExtractedDocument | EligibilityVerdict, EligibilityMeta |
+| 8. extraction-codebook | Work + EligibilityVerdict (inline join), ExtractedDocument | ExtractionRecord, ExtractionCodebookMeta |
 | 9. extraction-adjudication | ExtractionRecord (via resolve) | ExtractionCorrection, ExtractionAdjudicationMeta |
 | 10. synthesis-quantitative | ExtractionRecord (via resolve) | SynthesisStatistics |
 | 11. synthesis-thematic | ExtractionRecord (via resolve) | RationaleTaxonomy |
@@ -481,7 +466,8 @@ context-window change produces a different digest. Stage 8 also folds
 
 ### Resolve module
 
-The `laglitsynth.resolve` module does not exist yet. It must join the
-deduplicated catalogue against verdict sidecars and caller-supplied
-thresholds. This is the single most important new piece of shared
-infrastructure — every stage from 5 onward depends on it.
+Stages 5, 7, and 8 each perform an inline join of the deduplicated catalogue
+against upstream verdict sidecars at a caller-supplied threshold. This logic
+is currently duplicated per stage. A shared `laglitsynth.resolve` module is
+planned to consolidate it once a fourth consumer would otherwise add another
+copy (expected when stage 9 lands).

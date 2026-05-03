@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 from collections import Counter
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote, urlparse
@@ -21,6 +22,7 @@ from laglitsynth.fulltext_retrieval.models import TOOL_NAME, RetrievalMeta, Retr
 from laglitsynth.ids import work_id_to_filename
 from laglitsynth.io import JsonlReadStats, append_jsonl, read_jsonl, write_meta
 from laglitsynth.models import RunMeta
+from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,35 @@ _STATUS_LABELS: dict[RetrievalStatus, str] = {
     RetrievalStatus.abstract_only: "Abstract-only",
     RetrievalStatus.failed: "Failed",
 }
+
+
+def _active_works(
+    catalogue_path: Path,
+    screening_verdicts_path: Path,
+    screening_threshold: float,
+    stats: JsonlReadStats | None = None,
+) -> Iterator[Work]:
+    """Yield Works that pass the screening threshold gate.
+
+    Works whose ``ScreeningVerdict.relevance_score`` is None (sentinels:
+    ``no-abstract``, ``llm-parse-failure``, ``llm-timeout``) are never
+    filtered — absence of a score is not evidence of irrelevance.  Only an
+    explicit numeric score strictly below ``screening_threshold`` excludes.
+
+    Works present in the catalogue but absent from the verdicts file are also
+    excluded (they were never screened).
+    """
+    verdicts = {
+        v.work_id: v
+        for v in read_jsonl(screening_verdicts_path, ScreeningVerdict, stats)
+    }
+    for w in read_jsonl(catalogue_path, Work, stats):
+        sv = verdicts.get(w.id)
+        if sv is None:
+            continue
+        if sv.relevance_score is not None and sv.relevance_score < screening_threshold:
+            continue
+        yield w
 
 
 class _RateLimiter:
@@ -293,7 +324,24 @@ def build_subparser(
         "fulltext-retrieval",
         help="Retrieve full-text PDFs for works.",
     )
-    parser.add_argument("--input", type=Path, required=True, help="Input JSONL file")
+    parser.add_argument(
+        "--catalogue",
+        type=Path,
+        required=True,
+        help="Deduplicated catalogue JSONL (data/catalogue-dedup/deduplicated.jsonl)",
+    )
+    parser.add_argument(
+        "--screening-verdicts",
+        type=Path,
+        required=True,
+        help="Stage 3 verdicts JSONL (data/screening-abstracts/<run-id>/verdicts.jsonl)",
+    )
+    parser.add_argument(
+        "--screening-threshold",
+        type=float,
+        default=50.0,
+        help="Relevance score cutoff, 0-100 (default: 50)",
+    )
     parser.add_argument(
         "--output-dir", type=Path, required=True, help="Output directory"
     )
@@ -351,7 +399,14 @@ def run(args: argparse.Namespace) -> None:
                 file=sys.stderr,
             )
 
-    works = list(read_jsonl(args.input, Work, stats))
+    works = list(
+        _active_works(
+            args.catalogue,
+            args.screening_verdicts,
+            args.screening_threshold,
+            stats,
+        )
+    )
     total = len(works)
     works_by_id: dict[str, Work] = {w.id: w for w in works}
     input_ids = {w.id for w in works}

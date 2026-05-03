@@ -65,7 +65,8 @@ the YAMLs it references — `sweeps/run-A.yaml` referencing
 ```bash
 # fresh run with defaults (auto run-id, default codebook YAML, etc.)
 laglitsynth extraction-codebook \
-    --eligible data/fulltext-eligibility/<run-id>/eligible.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    --eligibility-verdicts data/fulltext-eligibility/<run-id>/verdicts.jsonl \
     --extractions data/fulltext-extraction/extraction.jsonl
 
 # pin the run-id for reproducible directory placement
@@ -73,7 +74,8 @@ laglitsynth extraction-codebook ... --run-id 2026-05-03T14-30-00_abc123def456
 
 # rerun a saved snapshot from its config (fresh run-id; same config)
 laglitsynth extraction-codebook --config data/extraction-codebook/<run-id>/config.yaml \
-    --eligible data/fulltext-eligibility/<run-id>/eligible.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    --eligibility-verdicts data/fulltext-eligibility/<run-id>/verdicts.jsonl \
     --extractions data/fulltext-extraction/extraction.jsonl
 
 # alternative codebook

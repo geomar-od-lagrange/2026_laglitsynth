@@ -9,17 +9,63 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.fulltext_retrieval.models import RetrievalRecord, RetrievalStatus
 from laglitsynth.fulltext_retrieval.retrieve import (
     _DOI_PREFIX_RE,
     _RateLimiter,
+    _active_works,
     _retrieve_one,
     _validate_pdf,
     run,
 )
 from laglitsynth.ids import work_id_to_filename
+from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
 from conftest import _make_work, _write_works_jsonl
+
+
+def _write_verdicts_jsonl(path: Path, verdicts: list[ScreeningVerdict]) -> None:
+    with open(path, "w") as f:
+        for v in verdicts:
+            f.write(v.model_dump_json() + "\n")
+
+
+def _make_passthrough_args(
+    tmp_path: Path,
+    works: list[Work],
+    *,
+    threshold: float = 50.0,
+    score: int = 80,
+    output_subdir: str = "out",
+    email: str = "test@example.com",
+) -> MagicMock:
+    """Build a MagicMock args suitable for calling ``run()``.
+
+    Writes ``catalogue.jsonl`` and ``verdicts.jsonl`` under ``tmp_path``.
+    Every work in ``works`` gets a verdict with ``relevance_score=score``
+    (above ``threshold`` by default), so the inline join passes all works
+    through unchanged.
+    """
+    catalogue_path = tmp_path / "catalogue.jsonl"
+    verdicts_path = tmp_path / "verdicts.jsonl"
+    _write_works_jsonl(catalogue_path, works)
+    verdicts = [
+        ScreeningVerdict(work_id=w.id, relevance_score=score)
+        for w in works
+    ]
+    _write_verdicts_jsonl(verdicts_path, verdicts)
+
+    args = MagicMock()
+    args.catalogue = catalogue_path
+    args.screening_verdicts = verdicts_path
+    args.screening_threshold = threshold
+    args.output_dir = tmp_path / output_subdir
+    args.email = email
+    args.manual_dir = None
+    args.skip_existing = False
+    args.dry_run = False
+    return args
 
 
 def _pdf_content() -> bytes:
@@ -289,10 +335,18 @@ class TestSkipExisting:
             _make_work("https://openalex.org/W2", doi=None),
             _make_work("https://openalex.org/W3", doi=None),
         ]
-        _write_works_jsonl(tmp_path / "input.jsonl", works)
+        catalogue_path = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        _write_works_jsonl(catalogue_path, works)
+        _write_verdicts_jsonl(
+            verdicts_path,
+            [ScreeningVerdict(work_id=w.id, relevance_score=80) for w in works],
+        )
 
         args = MagicMock()
-        args.input = tmp_path / "input.jsonl"
+        args.catalogue = catalogue_path
+        args.screening_verdicts = verdicts_path
+        args.screening_threshold = 50.0
         args.output_dir = output_dir
         args.email = "test@example.com"
         args.manual_dir = None
@@ -325,15 +379,7 @@ class TestUnretrievedTxt:
             _make_work("https://openalex.org/W1", doi="https://doi.org/10.1/a"),
             _make_work("https://openalex.org/W2", doi=None),
         ]
-        _write_works_jsonl(tmp_path / "input.jsonl", works)
-
-        args = MagicMock()
-        args.input = tmp_path / "input.jsonl"
-        args.output_dir = tmp_path / "out"
-        args.email = "test@example.com"
-        args.manual_dir = None
-        args.skip_existing = False
-        args.dry_run = False
+        args = _make_passthrough_args(tmp_path, works)
 
         client_mock = MagicMock(spec=httpx.Client)
         # All downloads fail
@@ -359,14 +405,7 @@ class TestUnretrievedTxt:
             _make_work("https://openalex.org/W1", doi="https://doi.org/10.1/a"),
             _make_work("https://openalex.org/W2", doi=None),
         ]
-        _write_works_jsonl(tmp_path / "input.jsonl", works)
-
-        args = MagicMock()
-        args.input = tmp_path / "input.jsonl"
-        args.output_dir = tmp_path / "out"
-        args.email = "test@example.com"
-        args.manual_dir = None
-        args.skip_existing = False
+        args = _make_passthrough_args(tmp_path, works)
         args.dry_run = True
 
         # No network calls expected under dry_run.
@@ -412,10 +451,18 @@ class TestUnretrievedTxt:
             _make_work("https://openalex.org/W1", doi="https://doi.org/10.1/a"),
             _make_work("https://openalex.org/W2", doi=None),
         ]
-        _write_works_jsonl(tmp_path / "input.jsonl", works)
+        catalogue_path = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        _write_works_jsonl(catalogue_path, works)
+        _write_verdicts_jsonl(
+            verdicts_path,
+            [ScreeningVerdict(work_id=w.id, relevance_score=80) for w in works],
+        )
 
         args = MagicMock()
-        args.input = tmp_path / "input.jsonl"
+        args.catalogue = catalogue_path
+        args.screening_verdicts = verdicts_path
+        args.screening_threshold = 50.0
         args.output_dir = output_dir
         args.email = "test@example.com"
         args.manual_dir = None
@@ -447,15 +494,7 @@ class TestRetrievalJsonl:
             _make_work("https://openalex.org/W1", doi=None),
             _make_work("https://openalex.org/W2", doi=None),
         ]
-        _write_works_jsonl(tmp_path / "input.jsonl", works)
-
-        args = MagicMock()
-        args.input = tmp_path / "input.jsonl"
-        args.output_dir = tmp_path / "out"
-        args.email = "test@example.com"
-        args.manual_dir = None
-        args.skip_existing = False
-        args.dry_run = False
+        args = _make_passthrough_args(tmp_path, works)
 
         client_mock = MagicMock(spec=httpx.Client)
         client_mock.get.side_effect = httpx.ConnectError("connection refused")
@@ -492,10 +531,18 @@ class TestRetrievalJsonl:
             _make_work("https://openalex.org/W1", doi=None),
             _make_work("https://openalex.org/W2", doi=None),
         ]
-        _write_works_jsonl(tmp_path / "input.jsonl", works)
+        catalogue_path = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        _write_works_jsonl(catalogue_path, works)
+        _write_verdicts_jsonl(
+            verdicts_path,
+            [ScreeningVerdict(work_id=w.id, relevance_score=80) for w in works],
+        )
 
         args = MagicMock()
-        args.input = tmp_path / "input.jsonl"
+        args.catalogue = catalogue_path
+        args.screening_verdicts = verdicts_path
+        args.screening_threshold = 50.0
         args.output_dir = output_dir
         args.email = "test@example.com"
         args.manual_dir = None
@@ -588,13 +635,7 @@ class TestUnpaywallEmail:
     """Email passed via --email is plumbed into the User-Agent and Unpaywall URL."""
 
     def _base_args(self, tmp_path: Path, email: str = "test@example.com") -> MagicMock:
-        _write_works_jsonl(tmp_path / "input.jsonl", [])
-        args = MagicMock()
-        args.input = tmp_path / "input.jsonl"
-        args.output_dir = tmp_path / "out"
-        args.email = email
-        args.manual_dir = None
-        args.skip_existing = False
+        args = _make_passthrough_args(tmp_path, [], email=email)
         args.dry_run = True
         return args
 
@@ -612,15 +653,7 @@ class TestUnpaywallEmail:
         # URLs so the Unpaywall path is exercised.  Assert the URL the mock
         # client received contains email=<value>.
         work = _make_work(doi="https://doi.org/10.1234/test")
-        _write_works_jsonl(tmp_path / "input.jsonl", [work])
-
-        args = MagicMock()
-        args.input = tmp_path / "input.jsonl"
-        args.output_dir = tmp_path / "out"
-        args.email = "addr@example.com"
-        args.manual_dir = None
-        args.skip_existing = False
-        args.dry_run = False
+        args = _make_passthrough_args(tmp_path, [work], email="addr@example.com")
 
         unpaywall_response = httpx.Response(
             200,
@@ -640,3 +673,151 @@ class TestUnpaywallEmail:
 
         called_url = client_mock.get.call_args[0][0]
         assert "email=addr%40example.com" in called_url or "email=addr@example.com" in called_url
+
+
+class TestValidationSkipped:
+    def test_validation_skipped_counts_invalid_catalogue_lines(
+        self, tmp_path: Path
+    ) -> None:
+        """meta.run.validation_skipped reflects malformed lines in catalogue and verdicts."""
+        # One valid work with a matching valid verdict, plus one malformed
+        # line in each of catalogue and verdicts.  Two skipped total.
+        work = _make_work("https://openalex.org/W1", doi=None)
+        catalogue_path = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+
+        # Write catalogue: one valid Work + one malformed line (wrong field names).
+        with open(catalogue_path, "w") as f:
+            f.write(work.model_dump_json() + "\n")
+            f.write('{"not_a_real_field": "x"}\n')
+
+        # Write verdicts: one valid ScreeningVerdict + one malformed line.
+        verdict = ScreeningVerdict(work_id="https://openalex.org/W1", relevance_score=80)
+        with open(verdicts_path, "w") as f:
+            f.write(verdict.model_dump_json() + "\n")
+            f.write('{"not_a_real_field": "y"}\n')
+
+        args = MagicMock()
+        args.catalogue = catalogue_path
+        args.screening_verdicts = verdicts_path
+        args.screening_threshold = 50.0
+        args.output_dir = tmp_path / "out"
+        args.email = "test@example.com"
+        args.manual_dir = None
+        args.skip_existing = False
+        args.dry_run = False
+
+        client_mock = MagicMock(spec=httpx.Client)
+        client_mock.get.side_effect = httpx.ConnectError("connection refused")
+
+        rl = _RateLimiter()
+        with (
+            patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client", return_value=client_mock),
+            patch("laglitsynth.fulltext_retrieval.retrieve._RateLimiter", return_value=rl),
+        ):
+            run(args)
+
+        import json as _json
+
+        meta_path = tmp_path / "out" / "retrieval-meta.json"
+        meta = _json.loads(meta_path.read_text())
+        assert meta["run"]["validation_skipped"] == 2
+
+
+class TestActiveWorksJoin:
+    """Unit tests for the _active_works inline-join helper."""
+
+    def test_active_works_threshold(self, tmp_path: Path) -> None:
+        """Works with a score at or above the threshold pass; those below are filtered."""
+        works = [
+            _make_work("https://openalex.org/W1"),
+            _make_work("https://openalex.org/W2"),
+            _make_work("https://openalex.org/W3"),
+        ]
+        verdicts = [
+            ScreeningVerdict(work_id="https://openalex.org/W1", relevance_score=80),
+            ScreeningVerdict(work_id="https://openalex.org/W2", relevance_score=49),
+            ScreeningVerdict(work_id="https://openalex.org/W3", relevance_score=50),
+        ]
+        catalogue_path = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        _write_works_jsonl(catalogue_path, works)
+        _write_verdicts_jsonl(verdicts_path, verdicts)
+
+        result = list(_active_works(catalogue_path, verdicts_path, screening_threshold=50.0))
+        ids = {w.id for w in result}
+        assert ids == {
+            "https://openalex.org/W1",
+            "https://openalex.org/W3",
+        }
+        assert "https://openalex.org/W2" not in ids
+
+    def test_null_score_sentinels_ride_through(self, tmp_path: Path) -> None:
+        """Works with relevance_score=None (sentinel reasons) always pass, regardless of threshold."""
+        works = [
+            _make_work("https://openalex.org/W1"),
+            _make_work("https://openalex.org/W2"),
+            _make_work("https://openalex.org/W3"),
+            _make_work("https://openalex.org/W4"),
+            _make_work("https://openalex.org/W5"),
+        ]
+        verdicts = [
+            ScreeningVerdict(
+                work_id="https://openalex.org/W1",
+                relevance_score=None,
+                reason="no-abstract",
+            ),
+            ScreeningVerdict(
+                work_id="https://openalex.org/W2",
+                relevance_score=None,
+                reason="llm-parse-failure",
+            ),
+            ScreeningVerdict(
+                work_id="https://openalex.org/W3",
+                relevance_score=None,
+                reason="llm-timeout",
+            ),
+            ScreeningVerdict(
+                work_id="https://openalex.org/W4",
+                relevance_score=80,
+            ),
+            ScreeningVerdict(
+                work_id="https://openalex.org/W5",
+                relevance_score=10,
+            ),
+        ]
+        catalogue_path = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        _write_works_jsonl(catalogue_path, works)
+        _write_verdicts_jsonl(verdicts_path, verdicts)
+
+        result = list(_active_works(catalogue_path, verdicts_path, screening_threshold=50.0))
+        ids = {w.id for w in result}
+        # W1, W2, W3 have None score → always pass through.
+        # W4 has score 80 ≥ 50 → passes.
+        # W5 has score 10 < 50 → filtered out.
+        assert ids == {
+            "https://openalex.org/W1",
+            "https://openalex.org/W2",
+            "https://openalex.org/W3",
+            "https://openalex.org/W4",
+        }
+        assert "https://openalex.org/W5" not in ids
+
+    def test_works_without_verdicts_are_excluded(self, tmp_path: Path) -> None:
+        """Works present in the catalogue but absent from verdicts are excluded."""
+        works = [
+            _make_work("https://openalex.org/W1"),
+            _make_work("https://openalex.org/W2"),
+        ]
+        verdicts = [
+            ScreeningVerdict(work_id="https://openalex.org/W1", relevance_score=90),
+        ]
+        catalogue_path = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        _write_works_jsonl(catalogue_path, works)
+        _write_verdicts_jsonl(verdicts_path, verdicts)
+
+        result = list(_active_works(catalogue_path, verdicts_path, screening_threshold=50.0))
+        assert len(result) == 1
+        assert result[0].id == "https://openalex.org/W1"

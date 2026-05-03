@@ -4,9 +4,10 @@ Combined pipeline design, synthesized from proposals A, B, and C. Uses C's
 backbone (split synthesis stages) with additions from the comparative review:
 deduplication and eligibility as distinct stages.
 
-Stages 1–4 operate on the **catalogue** (metadata + abstracts, no full text).
+Stages 1–3 operate on the **catalogue** (metadata + abstracts, no full text).
 Stage 5 retrieves PDFs; stage 6 extracts structured text from them. From
-stage 6 onward we work with the **corpus**.
+stage 6 onward we work with the **corpus**. Stage 4 is not implemented;
+stages are still referenced by their original numbers throughout the pipeline.
 
 ## Stages
 
@@ -15,7 +16,6 @@ stage 6 onward we work with the **corpus**.
 | 1 | [catalogue-fetch](#1-catalogue-fetch) | catalogue |
 | 2 | [catalogue-dedup](#2-catalogue-dedup) | catalogue |
 | 3 | [screening-abstracts](#3-screening-abstracts) | catalogue |
-| 4 | [screening-adjudication](#4-screening-adjudication) | catalogue |
 | 5 | [fulltext-retrieval](#5-fulltext-retrieval) | catalogue → corpus |
 | 6 | [fulltext-extraction](#6-fulltext-extraction) | corpus |
 | 7 | [fulltext-eligibility](#7-fulltext-eligibility) | corpus |
@@ -56,19 +56,6 @@ auditing of borderline cases.
 - **Consumes:** deduplicated catalogue
 - **Produces:** screened catalogue, rejected records
 
-### 4. screening-adjudication
-
-A human reviewer inspects a stratified sample of accepted and rejected records
-to validate screening quality and adjust thresholds. Borderline-scored records
-receive priority attention. Produces a reconciled, human-approved catalogue.
-
-- **Consumes:** screened catalogue, rejected records
-- **Produces:** included catalogue — reconciled, human-approved records
-
-*Optional: findings from adjudication may feed back to stage 1 (refined
-keywords) or stage 3 (screening calibration). See [Optional
-extensions](#optional-extensions).*
-
 ### 5. fulltext-retrieval
 
 Retrieves PDFs via open-access sources, DOI resolution, preprint servers,
@@ -78,7 +65,8 @@ abstract-only. Full text is essential for RQ1.1 (Reproducibility),
 RQ1.2 (Prevalence), and RQ1.3 (Rationale). Numerical choices are
 rarely stated in abstracts.
 
-- **Consumes:** included catalogue (DOIs, URLs)
+- **Consumes:** deduplicated catalogue, stage 3 screening verdict sidecar,
+  screening threshold
 - **Produces:** PDFs on disk, retrieval status records (per-work retrieval
   outcome and source)
 
@@ -105,10 +93,10 @@ records a sentinel verdict when neither source exists or the TEI is
 malformed. See [eligibility.md](eligibility.md) for the verdict shape
 and sentinel reasons.
 
-- **Consumes:** included catalogue, full-text corpus, eligibility
-  criteria (defined in the protocol)
-- **Produces:** per-work `EligibilityVerdict` sidecar plus an
-  `eligible.jsonl` of works confirmed for data extraction
+- **Consumes:** deduplicated catalogue, stage 3 screening verdict sidecar,
+  screening threshold, full-text corpus, eligibility criteria (defined in
+  the protocol)
+- **Produces:** per-work `EligibilityVerdict` sidecar
 
 ### 8. extraction-codebook
 
@@ -123,7 +111,8 @@ or the LLM response fails to validate. See
 [extraction-codebook.md](extraction-codebook.md) for the record shape and
 sentinel reasons, and [codebook.md](codebook.md) for the seed field list.
 
-- **Consumes:** eligible corpus, full texts, codebook
+- **Consumes:** deduplicated catalogue, stage 7 eligibility verdict sidecar,
+  full-text corpus, codebook
 - **Produces:** extraction records — one structured record per paper
 
 ### 9. extraction-adjudication
@@ -203,10 +192,10 @@ These are not core pipeline stages but may be added if they prove valuable.
 
 ### Search–screening feedback loop
 
-Adjudication findings (stage 4) feed back to refine the search strategy (stage 1) or
-screening calibration (stage 3). Useful when systematic misses or false
-positives reveal gaps in the search strategy. Requires convergence criteria
-to avoid endless iteration.
+Human review of screening verdicts feeds back to refine the search strategy
+(stage 1) or screening calibration (stage 3). Useful when systematic misses
+or false positives reveal gaps in the search strategy. Requires convergence
+criteria to avoid endless iteration.
 
 ### Extract–codebook feedback loop
 
@@ -239,12 +228,10 @@ graph TD
     OA[(OpenAlex API)]
     RCAT[(retrieved catalogue)]
     DCAT[(deduplicated catalogue)]
-    SCAT[(screened catalogue)]
-    REJ[(rejected records)]
-    ICAT[(included catalogue)]
+    SVERD[(screening verdicts)]
+    EVERD[(eligibility verdicts)]
     PDFS[(PDFs on disk)]
     FTC[(full-text corpus)]
-    ECORP[(eligible corpus)]
     EXT[(extraction records)]
     EXTV[(validated extraction records)]
     STAT[(statistics.json)]
@@ -254,7 +241,6 @@ graph TD
     FETCH[catalogue-fetch]
     DEDUP[catalogue-dedup]
     SCREEN[screening-abstracts]
-    ADJUD[screening-adjudication]
     RETRIEVE[fulltext-retrieval]
     GROBID[fulltext-extraction]
     ELIG[fulltext-eligibility]
@@ -270,18 +256,18 @@ graph TD
     RCAT --> DEDUP
     DEDUP --> DCAT
     DCAT --> SCREEN
-    SCREEN --> SCAT
-    SCREEN --> REJ
-    SCAT --> ADJUD
-    REJ --> ADJUD
-    ADJUD --> ICAT
-    ICAT --> RETRIEVE
+    SCREEN --> SVERD
+    DCAT --> RETRIEVE
+    SVERD --> RETRIEVE
     RETRIEVE --> PDFS
     PDFS --> GROBID
     GROBID --> FTC
+    DCAT --> ELIG
+    SVERD --> ELIG
     FTC --> ELIG
-    ELIG --> ECORP
-    ECORP --> EXTRACT
+    ELIG --> EVERD
+    DCAT --> EXTRACT
+    EVERD --> EXTRACT
     FTC --> EXTRACT
     EXTRACT --> EXT
     EXT --> ADJUD2

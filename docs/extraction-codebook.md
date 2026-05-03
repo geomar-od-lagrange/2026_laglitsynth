@@ -2,11 +2,11 @@
 
 One LLM pass per paper that fills a structured codebook record
 capturing numerical choices, reproducibility indicators, and
-sub-discipline tags. The stage joins [`eligible.jsonl`](eligibility.md)
-from stage 7 against stage 6's extractions, prefers the full text,
-falls back to the abstract, and emits a record sidecar in the same
-flag-don't-filter shape as [screening](screening-abstracts.md) and
-[eligibility](eligibility.md).
+sub-discipline tags. The stage joins the deduplicated catalogue against
+the stage 7 eligibility verdict sidecar to determine eligible works,
+prefers the full text, falls back to the abstract, and emits a record
+sidecar in the same flag-don't-filter shape as [screening](screening-abstracts.md)
+and [eligibility](eligibility.md).
 
 This is the first real run of phase 2 of the codebook: a best-guess
 schema populated by the LLM against real papers. Records feed stage 9
@@ -42,9 +42,14 @@ any one component.
 
 The stage consumes:
 
-- The eligibility-filtered catalogue
+- The deduplicated catalogue
   ([`Work`](../src/laglitsynth/catalogue_fetch/models.py) records
-  produced by [stage 7](eligibility.md) as `eligible.jsonl`).
+  from [stage 2](catalogue-dedup.md)).
+- The stage 7 eligibility verdict sidecar
+  ([`EligibilityVerdict`](../src/laglitsynth/fulltext_eligibility/models.py)
+  records). The stage joins this against the catalogue to obtain the
+  eligible work set; the full `Work` record is retained to support the
+  abstract fallback path.
 - The extraction JSONL
   ([`ExtractedDocument`](../src/laglitsynth/fulltext_extraction/models.py)
   records from [stage 6](fulltext-extraction.md)).
@@ -90,6 +95,7 @@ class ExtractionCodebookMeta(BaseModel):
     run: RunMeta
     llm: LlmMeta
     input_catalogue: str
+    input_eligibility_verdicts: str
     input_extractions: str
     input_count: int
     full_text_count: int
@@ -195,7 +201,8 @@ from attention dilution.
 
 ```
 laglitsynth extraction-codebook \
-    --eligible data/fulltext-eligibility/eligible.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    --eligibility-verdicts data/fulltext-eligibility/<run-id>/verdicts.jsonl \
     --extractions data/fulltext-extraction/extraction.jsonl \
     [--extraction-output-dir data/fulltext-extraction/] \
     [--data-dir data/] [--run-id <iso>_<12hex>] \
@@ -209,8 +216,12 @@ The resolved output directory is `<data-dir>/extraction-codebook/<run-id>/`.
 
 ### Arguments
 
-- `--eligible`: eligibility-filtered catalogue (`Work` records from
-  [stage 7](eligibility.md)).
+- `--catalogue`: the deduplicated catalogue (`Work` records from stage 2).
+  Required for the abstract fallback path: when TEI is missing, stage 8
+  falls back to `Work.abstract`, so the full `Work` record is needed.
+- `--eligibility-verdicts`: the stage 7 verdict sidecar (`EligibilityVerdict`
+  records). The stage joins this against the catalogue to build the eligible
+  work set. Path pattern: `data/fulltext-eligibility/<run-id>/verdicts.jsonl`.
 - `--extractions`: the extraction JSONL (`ExtractedDocument` records).
   Works without a matching record fall back to the abstract.
 - `--extraction-output-dir`: directory that

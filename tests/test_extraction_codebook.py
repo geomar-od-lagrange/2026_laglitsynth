@@ -18,11 +18,14 @@ import pytest
 from openai import APIConnectionError, APITimeoutError
 from pydantic import BaseModel
 
+from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.extraction_codebook.codebook import CodebookContext
 from laglitsynth.extraction_codebook.extract import (
+    _active_eligible_works,
     extract_codebook,
     extract_works,
 )
+from laglitsynth.fulltext_eligibility.models import EligibilityVerdict
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
 
 from conftest import (
@@ -35,6 +38,14 @@ from conftest import (
 )
 
 DEFAULT_CODEBOOK_PATH = Path("examples/codebooks/lagrangian-oceanography.yaml")
+
+
+def _write_eligibility_verdicts_jsonl(
+    path: Path, verdicts: list[EligibilityVerdict]
+) -> None:
+    with open(path, "w") as f:
+        for v in verdicts:
+            f.write(v.model_dump_json() + "\n")
 
 
 @pytest.fixture(scope="module")
@@ -73,7 +84,7 @@ def _call_extract(
 
 def _call_extract_works(
     ctx: CodebookContext,
-    catalogue: Path,
+    works: list[Work],
     extractions: dict[str, ExtractedDocument],
     extraction_output_dir: Path,
     *,
@@ -82,7 +93,7 @@ def _call_extract_works(
 ) -> list[BaseModel]:
     return list(
         extract_works(  # type: ignore[arg-type]
-            catalogue,
+            works,
             extractions,
             extraction_output_dir,
             client=client,
@@ -207,11 +218,10 @@ class TestExtractCodebook:
 
 class TestExtractWorksCascade:
     def test_full_text_branch(self, tmp_path: Path, ctx: CodebookContext) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
         extractions_path = tmp_path / "extraction.jsonl"
         ext_out = tmp_path / "ext_out"
 
-        _write_works_jsonl(catalogue, [_make_work("W1", abstract="The abstract.")])
+        work = _make_work("W1", abstract="The abstract.")
 
         tei_path = "tei/W1.tei.xml"
         _write_tei(
@@ -234,7 +244,7 @@ class TestExtractWorksCascade:
 
         records = _call_extract_works(
             ctx,
-            catalogue,
+            [work],
             {extracted.work_id: extracted},
             ext_out,
             client=client,
@@ -253,9 +263,8 @@ class TestExtractWorksCascade:
     def test_abstract_only_branch_when_extraction_missing(
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
         ext_out = tmp_path / "ext_out"
-        _write_works_jsonl(catalogue, [_make_work("W1", abstract="Paper abstract text.")])
+        work = _make_work("W1", abstract="Paper abstract text.")
 
         resp = _mock_openai_response(
             _valid_payload_json(ctx.payload_field_names)
@@ -264,7 +273,7 @@ class TestExtractWorksCascade:
         client.chat.completions.create.return_value = resp
 
         records = _call_extract_works(
-            ctx, catalogue, {}, ext_out, client=client
+            ctx, [work], {}, ext_out, client=client
         )
         assert len(records) == 1
         assert records[0].source_basis == "abstract_only"  # type: ignore[attr-defined]
@@ -273,13 +282,12 @@ class TestExtractWorksCascade:
     def test_no_source_sentinel_no_llm_call(
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
         ext_out = tmp_path / "ext_out"
-        _write_works_jsonl(catalogue, [_make_work("W1", abstract=None)])
+        work = _make_work("W1", abstract=None)
 
         client = MagicMock()
         records = _call_extract_works(
-            ctx, catalogue, {}, ext_out, client=client
+            ctx, [work], {}, ext_out, client=client
         )
         assert len(records) == 1
         assert records[0].source_basis == "none"  # type: ignore[attr-defined]
@@ -289,9 +297,8 @@ class TestExtractWorksCascade:
     def test_malformed_tei_no_abstract_fallback(
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
         ext_out = tmp_path / "ext_out"
-        _write_works_jsonl(catalogue, [_make_work("W1", abstract="Paper abstract.")])
+        work = _make_work("W1", abstract="Paper abstract.")
 
         tei_path = "tei/W1.tei.xml"
         _write_malformed_tei(ext_out / tei_path)
@@ -304,7 +311,7 @@ class TestExtractWorksCascade:
         client = MagicMock()
         records = _call_extract_works(
             ctx,
-            catalogue,
+            [work],
             {extracted.work_id: extracted},
             ext_out,
             client=client,
@@ -317,10 +324,9 @@ class TestExtractWorksCascade:
     def test_truncation_flag_on_over_budget_body(
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
         extractions_path = tmp_path / "extraction.jsonl"
         ext_out = tmp_path / "ext_out"
-        _write_works_jsonl(catalogue, [_make_work("W1", abstract=None)])
+        work = _make_work("W1", abstract=None)
 
         big_section = (
             f'<div xmlns="{TEI_NS}"><head>H{i}</head><p>{"x" * 20_000}</p></div>'
@@ -343,7 +349,7 @@ class TestExtractWorksCascade:
 
         records = _call_extract_works(
             ctx,
-            catalogue,
+            [work],
             {extracted.work_id: extracted},
             ext_out,
             client=client,
@@ -378,7 +384,8 @@ class TestPreflight:
 def _make_run_args(
     tmp_path: Path,
     *,
-    eligible: Path,
+    catalogue: Path,
+    eligibility_verdicts: Path,
     extractions: Path,
     dry_run: bool = False,
     skip_existing: bool = False,
@@ -387,7 +394,8 @@ def _make_run_args(
     extraction_output_dir: Path | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
-        eligible=eligible,
+        catalogue=catalogue,
+        eligibility_verdicts=eligibility_verdicts,
         extractions=extractions,
         extraction_output_dir=extraction_output_dir
         if extraction_output_dir is not None
@@ -420,14 +428,20 @@ class TestRun:
     def test_dry_run_writes_nothing(
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
-        eligible = tmp_path / "eligible.jsonl"
+        catalogue = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
         extractions_path = tmp_path / "extraction.jsonl"
-        _write_works_jsonl(eligible, [_make_work("W1", abstract="abs")])
+        _write_works_jsonl(catalogue, [_make_work("W1", abstract="abs")])
+        _write_eligibility_verdicts_jsonl(
+            verdicts_path,
+            [EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only")],
+        )
         extractions_path.write_text("")
 
         args = _make_run_args(
             tmp_path,
-            eligible=eligible,
+            catalogue=catalogue,
+            eligibility_verdicts=verdicts_path,
             extractions=extractions_path,
             dry_run=True,
         )
@@ -452,7 +466,8 @@ class TestRun:
     def test_writes_expected_files(
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
-        eligible = tmp_path / "eligible.jsonl"
+        catalogue = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
         extractions_path = tmp_path / "extraction.jsonl"
 
         works = [
@@ -460,12 +475,21 @@ class TestRun:
             _make_work("W2", abstract="not relevant"),
             _make_work("W3", abstract=None),
         ]
-        _write_works_jsonl(eligible, works)
+        _write_works_jsonl(catalogue, works)
+        _write_eligibility_verdicts_jsonl(
+            verdicts_path,
+            [
+                EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only"),
+                EligibilityVerdict(work_id="W2", eligible=True, source_basis="abstract_only"),
+                EligibilityVerdict(work_id="W3", eligible=True, source_basis="none"),
+            ],
+        )
         extractions_path.write_text("")
 
         args = _make_run_args(
             tmp_path,
-            eligible=eligible,
+            catalogue=catalogue,
+            eligibility_verdicts=verdicts_path,
             extractions=extractions_path,
         )
 
@@ -511,14 +535,20 @@ class TestRun:
     def test_config_yaml_inlines_codebook(
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
-        eligible = tmp_path / "eligible.jsonl"
+        catalogue = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
         extractions_path = tmp_path / "extraction.jsonl"
-        _write_works_jsonl(eligible, [_make_work("W1", abstract="abs")])
+        _write_works_jsonl(catalogue, [_make_work("W1", abstract="abs")])
+        _write_eligibility_verdicts_jsonl(
+            verdicts_path,
+            [EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only")],
+        )
         extractions_path.write_text("")
 
         args = _make_run_args(
             tmp_path,
-            eligible=eligible,
+            catalogue=catalogue,
+            eligibility_verdicts=verdicts_path,
             extractions=extractions_path,
         )
 
@@ -553,9 +583,14 @@ class TestRun:
     def test_skip_existing_refuses_when_prompt_sha256_differs(
         self, tmp_path: Path
     ) -> None:
-        eligible = tmp_path / "eligible.jsonl"
+        catalogue = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
         extractions_path = tmp_path / "extraction.jsonl"
-        _write_works_jsonl(eligible, [_make_work("W1", abstract="first abstract")])
+        _write_works_jsonl(catalogue, [_make_work("W1", abstract="first abstract")])
+        _write_eligibility_verdicts_jsonl(
+            verdicts_path,
+            [EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only")],
+        )
         extractions_path.write_text("")
 
         run_id = "stale-run"
@@ -574,21 +609,29 @@ class TestRun:
                 "temperature": 0.8,
                 "prompt_sha256": "0" * 64,
             },
-            "input_catalogue": str(eligible),
+            "input_catalogue": str(catalogue),
+            "input_eligibility_verdicts": str(verdicts_path),
             "input_extractions": str(extractions_path),
             "input_count": 1,
             "full_text_count": 0,
             "abstract_only_count": 1,
             "skipped_count": 0,
             "llm_parse_failure_count": 0,
+            "llm_timeout_count": 0,
             "truncated_count": 0,
             "by_source_basis": {"abstract_only": 1},
         }
+        # Validate the dict is a real valid ExtractionCodebookMeta shape; if the
+        # model changes, this assertion fails loudly instead of silently.
+        from laglitsynth.extraction_codebook.models import ExtractionCodebookMeta
+
+        ExtractionCodebookMeta.model_validate(stale_meta)
         (out_dir / "extraction-codebook-meta.json").write_text(json.dumps(stale_meta))
 
         args = _make_run_args(
             tmp_path,
-            eligible=eligible,
+            catalogue=catalogue,
+            eligibility_verdicts=verdicts_path,
             extractions=extractions_path,
             skip_existing=True,
             run_id=run_id,
@@ -603,16 +646,73 @@ class TestRun:
             with pytest.raises(SystemExit, match="prompt_sha256"):
                 run(args)
 
+    def test_validation_skipped_counts_invalid_catalogue_lines(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        """meta.run.validation_skipped reflects malformed lines in catalogue and verdicts."""
+        # One valid work with a valid eligibility verdict; one malformed line in
+        # each of catalogue and verdicts.  Two skipped total.
+        catalogue = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        extractions_path = tmp_path / "extraction.jsonl"
+
+        work = _make_work("W1", abstract="about oceans")
+
+        with open(catalogue, "w") as f:
+            f.write(work.model_dump_json() + "\n")
+            f.write('{"not_a_real_field": "x"}\n')
+
+        valid_verdict = EligibilityVerdict(
+            work_id="W1", eligible=True, source_basis="abstract_only"
+        )
+        with open(verdicts_path, "w") as f:
+            f.write(valid_verdict.model_dump_json() + "\n")
+            f.write('{"not_a_real_field": "y"}\n')
+
+        extractions_path.write_text("")
+
+        args = _make_run_args(
+            tmp_path,
+            catalogue=catalogue,
+            eligibility_verdicts=verdicts_path,
+            extractions=extractions_path,
+            run_id="skipped-test-run",
+        )
+
+        mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
+        with (
+            patch("laglitsynth.extraction_codebook.extract._preflight"),
+            patch(
+                "laglitsynth.extraction_codebook.extract.OpenAI",
+                return_value=mock_client,
+            ),
+        ):
+            from laglitsynth.extraction_codebook.extract import run
+
+            run(args)
+
+        out_dir = _resolved_out_dir(args)
+        meta = json.loads((out_dir / "extraction-codebook-meta.json").read_text())
+        assert meta["run"]["validation_skipped"] == 2
+
     def test_skip_existing_processes_only_delta(
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
-        eligible = tmp_path / "eligible.jsonl"
+        catalogue = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
         extractions_path = tmp_path / "extraction.jsonl"
         works = [
             _make_work("W1", abstract="first abstract"),
             _make_work("W2", abstract="second abstract"),
         ]
-        _write_works_jsonl(eligible, works)
+        _write_works_jsonl(catalogue, works)
+        _write_eligibility_verdicts_jsonl(
+            verdicts_path,
+            [
+                EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only"),
+                EligibilityVerdict(work_id="W2", eligible=True, source_basis="abstract_only"),
+            ],
+        )
         extractions_path.write_text("")
 
         run_id = "resume-run"
@@ -634,7 +734,8 @@ class TestRun:
 
         args = _make_run_args(
             tmp_path,
-            eligible=eligible,
+            catalogue=catalogue,
+            eligibility_verdicts=verdicts_path,
             extractions=extractions_path,
             skip_existing=True,
             run_id=run_id,
@@ -686,14 +787,17 @@ class TestCliWiring:
         parsed = parser.parse_args(
             [
                 "extraction-codebook",
-                "--eligible",
-                "/tmp/e.jsonl",
+                "--catalogue",
+                "/tmp/cat.jsonl",
+                "--eligibility-verdicts",
+                "/tmp/ev.jsonl",
                 "--extractions",
                 "/tmp/x.jsonl",
             ]
         )
         assert parsed.command == "extraction-codebook"
-        assert parsed.eligible == Path("/tmp/e.jsonl")
+        assert parsed.catalogue == Path("/tmp/cat.jsonl")
+        assert parsed.eligibility_verdicts == Path("/tmp/ev.jsonl")
         assert parsed.extractions == Path("/tmp/x.jsonl")
 
     def test_main_cli_includes_subparser(self) -> None:
@@ -703,10 +807,121 @@ class TestCliWiring:
             main(
                 [
                     "extraction-codebook",
-                    "--eligible",
-                    "/tmp/e.jsonl",
+                    "--catalogue",
+                    "/tmp/cat.jsonl",
+                    "--eligibility-verdicts",
+                    "/tmp/ev.jsonl",
                     "--extractions",
                     "/tmp/x.jsonl",
                 ]
             )
         assert mock_run.called
+
+
+# --- _active_eligible_works join ---
+
+
+class TestActiveEligibleWorks:
+    """Unit tests for the stage-8 eligibility inline-join helper."""
+
+    def test_eligibility_gate_filters_to_eligible_true(
+        self, tmp_path: Path
+    ) -> None:
+        """Only works with eligible=True flow through; False and None are excluded."""
+        works = [
+            _make_work("W1", abstract="First"),
+            _make_work("W2", abstract="Second"),
+            _make_work("W3", abstract="Third"),
+        ]
+        verdicts = [
+            EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only"),
+            EligibilityVerdict(work_id="W2", eligible=False, source_basis="abstract_only"),
+            EligibilityVerdict(work_id="W3", eligible=None, source_basis="none", reason="no-source"),
+        ]
+        catalogue_path = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        _write_works_jsonl(catalogue_path, works)
+        _write_eligibility_verdicts_jsonl(verdicts_path, verdicts)
+
+        result = list(_active_eligible_works(catalogue_path, verdicts_path))
+        assert len(result) == 1
+        assert result[0].id == "W1"
+
+    def test_non_eligible_works_are_skipped(self, tmp_path: Path) -> None:
+        """Works with eligible=False are excluded."""
+        works = [
+            _make_work("W1", abstract="First"),
+            _make_work("W2", abstract="Second"),
+        ]
+        verdicts = [
+            EligibilityVerdict(work_id="W1", eligible=False, source_basis="abstract_only"),
+            EligibilityVerdict(work_id="W2", eligible=False, source_basis="abstract_only"),
+        ]
+        catalogue_path = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        _write_works_jsonl(catalogue_path, works)
+        _write_eligibility_verdicts_jsonl(verdicts_path, verdicts)
+
+        result = list(_active_eligible_works(catalogue_path, verdicts_path))
+        assert result == []
+
+    def test_catalogue_miss_raises_key_error(self, tmp_path: Path) -> None:
+        """A verdict for a work_id absent from the catalogue raises KeyError."""
+        works = [_make_work("W1", abstract="First")]
+        verdicts = [
+            EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only"),
+            # W2 is eligible but not in the catalogue — data inconsistency.
+            EligibilityVerdict(work_id="W2", eligible=True, source_basis="abstract_only"),
+        ]
+        catalogue_path = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        _write_works_jsonl(catalogue_path, works)
+        _write_eligibility_verdicts_jsonl(verdicts_path, verdicts)
+
+        with pytest.raises(KeyError, match="W2"):
+            list(_active_eligible_works(catalogue_path, verdicts_path))
+
+
+# --- run() stderr output ---
+
+
+def test_run_dir_printed_to_stderr_at_end(
+    tmp_path: Path, ctx: CodebookContext, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """run() prints 'Run dir: <output_dir>' to stderr at the end of a normal (non-dry) run."""
+    catalogue = tmp_path / "catalogue.jsonl"
+    verdicts_path = tmp_path / "verdicts.jsonl"
+    extractions_path = tmp_path / "extraction.jsonl"
+    _write_works_jsonl(catalogue, [_make_work("W1", abstract="abs")])
+    _write_eligibility_verdicts_jsonl(
+        verdicts_path,
+        [EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only")],
+    )
+    extractions_path.write_text("")
+
+    args = _make_run_args(
+        tmp_path,
+        catalogue=catalogue,
+        eligibility_verdicts=verdicts_path,
+        extractions=extractions_path,
+        run_id="test-stderr-run",
+    )
+    expected_dir = tmp_path / "extraction-codebook" / "test-stderr-run"
+
+    mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
+    with (
+        patch("laglitsynth.extraction_codebook.extract._preflight"),
+        patch(
+            "laglitsynth.extraction_codebook.extract.OpenAI",
+            return_value=mock_client,
+        ),
+    ):
+        from laglitsynth.extraction_codebook.extract import run
+
+        run(args)
+
+    err = capsys.readouterr().err
+    assert f"Output dir: {expected_dir}" in err
+    # The end-of-run line must appear at the end (last non-empty line).
+    last_line = [line for line in err.splitlines() if line.strip()][-1]
+    assert last_line == f"Run dir: {expected_dir}"

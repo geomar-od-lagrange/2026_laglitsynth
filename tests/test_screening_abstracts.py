@@ -873,3 +873,33 @@ def test_config_seeds_defaults_explicit_cli_wins(tmp_path: Path) -> None:
     assert args.model == "from-cli"  # CLI wins
     assert args.screening_threshold == 75  # config seeded
     assert args.concurrency == 4  # config seeded
+
+
+def test_run_dir_printed_to_stderr_at_end(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """run() prints 'Run dir: <output_dir>' to stderr at the end of a normal (non-dry) run."""
+    works = [_make_work("W1", abstract="Ocean currents.")]
+    _write_works_jsonl(tmp_path / "input.jsonl", works)
+
+    classify_results = {"W1": {"relevance_score": 80, "reason": "yes"}}
+    args = _run_args(tmp_path)
+    expected_dir = tmp_path / "screening-abstracts" / "test-run-id"
+
+    with (
+        patch("laglitsynth.screening_abstracts.screen._preflight"),
+        patch(
+            "laglitsynth.screening_abstracts.screen.classify_abstract",
+            side_effect=_mock_classify(classify_results),
+        ),
+        patch("laglitsynth.screening_abstracts.screen.OpenAI"),
+    ):
+        from laglitsynth.screening_abstracts.screen import run
+
+        run(args)
+
+    err = capsys.readouterr().err
+    assert f"Run dir: {expected_dir}" in err
+    # The line must appear at the end (last non-empty line).
+    last_line = [line for line in err.splitlines() if line.strip()][-1]
+    assert last_line == f"Run dir: {expected_dir}"

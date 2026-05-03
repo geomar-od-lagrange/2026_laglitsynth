@@ -5,6 +5,13 @@ from laglitsynth.models import RunMeta
 TOOL_NAME = "laglitsynth.catalogue_dedup.dedup"
 
 
+class DroppedRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dropped_work_id: str
+    survived_work_id: str
+    rule: str
+
+
 class DeduplicationMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run: RunMeta

@@ -68,6 +68,7 @@ class EligibilityMeta(BaseModel):
     run: RunMeta
     llm: LlmMeta
     input_catalogue: str
+    input_screening_verdicts: str
     input_extractions: str
     input_count: int
     eligible_count: int
