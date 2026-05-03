@@ -11,10 +11,21 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from laglitsynth.catalogue_fetch.models import Work
+from laglitsynth.catalogue_fetch.models import Author, Authorship, Work
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
 
 TEI_NS = "http://www.tei-c.org/ns/1.0"
+
+
+def _make_authorship(display_name: str) -> Authorship:
+    """Return a minimal ``Authorship`` for the given author display name."""
+    return Authorship(
+        author_position="first",
+        author=Author(display_name=display_name),
+        institutions=[],
+        countries=[],
+        raw_affiliation_strings=[],
+    )
 
 
 def _make_work(
@@ -25,6 +36,7 @@ def _make_work(
     publication_year: int | None = None,
     pdf_url: str | None = None,
     oa_url: str | None = None,
+    authorships: list[Authorship] | None = None,
 ) -> Work:
     """Return a minimal valid ``Work`` for testing.
 
@@ -43,7 +55,7 @@ def _make_work(
         abstract=abstract,
         doi=doi,
         publication_year=publication_year,
-        authorships=[],
+        authorships=authorships if authorships is not None else [],
         biblio={},
         cited_by_count=0,
         referenced_works=[],
