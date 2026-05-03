@@ -166,21 +166,24 @@ done
 # Synthesise per-stage tags with PARAMETER num_ctx baked in. The
 # per-request num_ctx hint via OpenAI extra_body does not reliably
 # size the runner — only Modelfile-baked num_ctx does. Each Modelfile
-# is two lines, written to a tempfile because `ollama create -f -`
-# (stdin) is not supported by the Ollama version on NESH ("no
-# Modelfile or safetensors files found"). See
-# plans/done/ollama-num-ctx-per-model.md.
+# is two lines, written under data/nesh/modelfiles/ on $WORK rather
+# than via `mktemp` because /tmp on NESH compute nodes is not always
+# usable, and `ollama create -f -` (stdin) errors with "no Modelfile
+# or safetensors files found" on the installed Ollama version. The
+# files are kept for post-mortem ("what num_ctx did this job bake?").
+# See plans/done/ollama-num-ctx-per-model.md.
+MODELFILES_DIR="data/nesh/modelfiles"
+mkdir -p "$MODELFILES_DIR"
+
 create_tag() {
     local tag="$1" base="$2" num_ctx="$3"
-    local mf
-    mf=$(mktemp)
+    local mf="$MODELFILES_DIR/${tag}.Modelfile"
     cat >"$mf" <<EOF
 FROM $base
 PARAMETER num_ctx $num_ctx
 EOF
     echo "==> ollama create $tag (num_ctx=$num_ctx, FROM $base)"
     "$OLLAMA_DIR/bin/ollama" create "$tag" -f "$mf"
-    rm -f "$mf"
 }
 
 create_tag laglit-screen       "$SCREENING_MODEL"   "$SCREENING_NUM_CTX"
