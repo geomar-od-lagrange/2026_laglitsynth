@@ -1,9 +1,10 @@
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pyalex
 import pytest
 
-from laglitsynth.catalogue_fetch.fetch import _reconstruct_abstract, search_openalex
+from laglitsynth.catalogue_fetch.fetch import _reconstruct_abstract, run, search_openalex
 from laglitsynth.io import JsonlReadStats
 
 
@@ -129,3 +130,68 @@ def test_validation_skipped_counts_drops():
 
     assert len(works) == 1
     assert stats.skipped == 1
+
+
+class TestApiKeyDotenvFallback:
+    """Tests for the .env fallback behaviour of --api-key."""
+
+    def _make_args(self, tmp_path: Path, api_key: str | None) -> MagicMock:
+        import argparse
+
+        args = argparse.Namespace(
+            query="ocean drift",
+            output=tmp_path / "out.jsonl",
+            from_year=None,
+            to_year=None,
+            max_records=None,
+            api_key=api_key,
+        )
+        return args  # type: ignore[return-value]
+
+    def test_explicit_flag_wins_over_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--api-key from CLI wins; .env value is not used."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("OPENALEX_API_KEY=from-env\n")
+
+        raw = _make_raw_work()
+        mock_query = _mock_works_query([[raw]])
+        args = self._make_args(tmp_path, api_key="from-flag")
+
+        with patch("laglitsynth.catalogue_fetch.fetch.pyalex.Works", return_value=mock_query):
+            run(args)  # type: ignore[arg-type]
+
+        assert pyalex.config.api_key == "from-flag"
+
+    def test_missing_flag_loads_from_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """No --api-key flag: value is read from .env with a stderr notice."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("OPENALEX_API_KEY=from-env\n")
+
+        raw = _make_raw_work()
+        mock_query = _mock_works_query([[raw]])
+        args = self._make_args(tmp_path, api_key=None)
+
+        with patch("laglitsynth.catalogue_fetch.fetch.pyalex.Works", return_value=mock_query):
+            run(args)  # type: ignore[arg-type]
+
+        assert pyalex.config.api_key == "from-env"
+        captured = capsys.readouterr()
+        assert "Loaded OPENALEX_API_KEY from .env" in captured.err
+
+    def test_missing_both_fails_with_clear_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No flag and no .env: SystemExit with a clear message."""
+        monkeypatch.chdir(tmp_path)
+        # No .env file at all.
+        args = self._make_args(tmp_path, api_key=None)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run(args)  # type: ignore[arg-type]
+
+        assert "OPENALEX_API_KEY" in str(exc_info.value)
+        assert ".env" in str(exc_info.value)

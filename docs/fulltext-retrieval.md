@@ -162,8 +162,10 @@ laglitsynth fulltext-retrieval \
 - `--screening-threshold`: relevance score cutoff 0–100 (default: 50).
   Works at or above the threshold are retrieved.
 - `--output-dir`: where to write retrieval records, metadata, and PDFs.
-- `--email`: contact email for Unpaywall API requests. Required. Scripts
-  source `.env` and pass `--email $UNPAYWALL_EMAIL`.
+- `--email`: contact email for Unpaywall API requests. When omitted the tool
+  reads `UNPAYWALL_EMAIL` from `.env` in the working directory and emits
+  `Loaded UNPAYWALL_EMAIL from .env` to stderr. The explicit flag takes
+  precedence when both are present.
 - `--manual-dir`: directory to scan for manually placed PDFs. Defaults to
   `<output-dir>/manual/`.
 - `--skip-existing`: do not re-retrieve works that already have a

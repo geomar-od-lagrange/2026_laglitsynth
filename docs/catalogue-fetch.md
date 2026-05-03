@@ -16,7 +16,7 @@ laglitsynth catalogue-fetch "submesoscale dynamics" --api-key $OPENALEX_API_KEY 
 | Argument | Description |
 |---|---|
 | `QUERY` (positional) | Search query string (required). |
-| `--api-key` | OpenAlex API key (required). Pass `$OPENALEX_API_KEY` from your environment. |
+| `--api-key` | OpenAlex API key. Falls back to `OPENALEX_API_KEY` in `.env` when omitted. |
 | `-o` / `--output` | Output JSONL path. Default: `data/catalogue-fetch/<slug>_<timestamp>.jsonl`. |
 | `--from-year` | Filter publications from this year onward. |
 | `--to-year` | Filter publications up to this year. |
@@ -38,8 +38,12 @@ lowercased with non-alphanumeric runs replaced by underscores.
 ## Authentication
 
 OpenAlex requires a free API key. Register at
-<https://openalex.org/settings/api>. Pass the key via `--api-key`; scripts
-should source `.env` and pass `--api-key "$OPENALEX_API_KEY"`.
+<https://openalex.org/settings/api>. When `--api-key` is not passed on the
+command line the tool reads `OPENALEX_API_KEY` from `.env` in the working
+directory and emits `Loaded OPENALEX_API_KEY from .env` to stderr. Wrapper
+scripts (`run-pipeline.sh`, `nesh-pipeline.sbatch`) source `.env` and pass
+`--api-key "$OPENALEX_API_KEY"` explicitly — the flag still takes precedence
+over any `.env` value.
 
 ## Abstract reconstruction
 
@@ -49,7 +53,7 @@ Downstream tools never see the inverted index format.
 
 ## Error handling
 
-- `--api-key` is required; argparse exits immediately if it is absent.
+- `--api-key` is required (either as a CLI flag or via `OPENALEX_API_KEY` in `.env`); the tool exits with a clear error if neither is present.
 - Invalid records are logged and skipped (OpenAlex data quality issue
   affecting a small fraction of records); the count is written to
   `validation_skipped` in the meta sidecar.

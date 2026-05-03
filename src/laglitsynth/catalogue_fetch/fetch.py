@@ -14,6 +14,7 @@ from pathlib import Path
 import pyalex
 from pydantic import ValidationError
 
+from laglitsynth.dotenv import load_env_var
 from laglitsynth.io import JsonlReadStats, write_jsonl, write_meta
 from laglitsynth.catalogue_fetch.models import TOOL_NAME, FetchMeta, Work
 from laglitsynth.models import RunMeta
@@ -151,8 +152,11 @@ def build_subparser(
     )
     parser.add_argument(
         "--api-key",
-        required=True,
-        help="OpenAlex API key (register at https://openalex.org/settings/api).",
+        default=None,
+        help=(
+            "OpenAlex API key (register at https://openalex.org/settings/api). "
+            "Falls back to OPENALEX_API_KEY in .env when omitted."
+        ),
     )
     parser.set_defaults(run=run)
     return parser
@@ -161,7 +165,18 @@ def build_subparser(
 def run(args: argparse.Namespace) -> None:
     _preflight()
 
-    pyalex.config.api_key = args.api_key
+    api_key: str | None = args.api_key
+    if api_key is None:
+        api_key = load_env_var("OPENALEX_API_KEY")
+        if api_key is not None:
+            print("Loaded OPENALEX_API_KEY from .env", file=sys.stderr)
+    if api_key is None:
+        raise SystemExit(
+            "OPENALEX_API_KEY not set: pass --api-key or add "
+            "OPENALEX_API_KEY=... to .env"
+        )
+
+    pyalex.config.api_key = api_key
 
     output = args.output or _default_output_path(args.query)
     meta_path = output.with_suffix(".meta.json")

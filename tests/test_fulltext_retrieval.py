@@ -821,3 +821,65 @@ class TestActiveWorksJoin:
         result = list(_active_works(catalogue_path, verdicts_path, screening_threshold=50.0))
         assert len(result) == 1
         assert result[0].id == "https://openalex.org/W1"
+
+
+class TestEmailDotenvFallback:
+    """Tests for the .env fallback behaviour of --email."""
+
+    def _make_args(self, tmp_path: Path, email: str | None) -> MagicMock:
+        args = _make_passthrough_args(tmp_path, [], email="placeholder@example.com")
+        # Override email after construction; _make_passthrough_args always sets it.
+        args.email = email
+        args.dry_run = True
+        return args
+
+    def test_explicit_flag_wins_over_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--email from CLI wins; .env value is not used."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("UNPAYWALL_EMAIL=from-env@example.com\n")
+
+        args = _make_passthrough_args(tmp_path, [], email="from-flag@example.com")
+        args.dry_run = True
+
+        with patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client") as client_cls:
+            run(args)
+
+        ua = client_cls.call_args.kwargs["headers"]["User-Agent"]
+        assert "from-flag@example.com" in ua
+        assert "from-env" not in ua
+
+    def test_missing_flag_loads_from_env(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """No --email flag: value is read from .env with a stderr notice."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("UNPAYWALL_EMAIL=env-user@example.com\n")
+
+        args = self._make_args(tmp_path, email=None)
+
+        with patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client") as client_cls:
+            run(args)
+
+        ua = client_cls.call_args.kwargs["headers"]["User-Agent"]
+        assert "env-user@example.com" in ua
+        captured = capsys.readouterr()
+        assert "Loaded UNPAYWALL_EMAIL from .env" in captured.err
+
+    def test_missing_both_fails_with_clear_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No flag and no .env: SystemExit with a clear message."""
+        monkeypatch.chdir(tmp_path)
+        # No .env file at all.
+        args = self._make_args(tmp_path, email=None)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run(args)
+
+        assert "UNPAYWALL_EMAIL" in str(exc_info.value)
+        assert ".env" in str(exc_info.value)
