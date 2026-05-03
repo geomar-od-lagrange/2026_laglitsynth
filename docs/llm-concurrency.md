@@ -1,9 +1,10 @@
 # LLM-stage concurrency
 
-The LLM-driven stages (currently only
-[screening-abstracts](screening-abstracts.md); eligibility and
-extraction will follow) can dispatch multiple in-flight LLM requests
-against a single Ollama server. Throughput is shaped by two knobs —
+The LLM-driven stages
+([screening-abstracts](screening-abstracts.md),
+[fulltext-eligibility](fulltext-eligibility.md), and
+[extraction-codebook](extraction-codebook.md)) can dispatch multiple
+in-flight LLM requests against a single Ollama server. Throughput is shaped by two knobs —
 **client-side concurrency** and **server-side `OLLAMA_NUM_PARALLEL`**
 — and the right relationship between them is not 1:1.
 
@@ -78,24 +79,23 @@ time — `LLM_CONCURRENCY` follows automatically.
 [`scripts/nesh-pipeline.sbatch`](../scripts/nesh-pipeline.sbatch)
 exports both before launching `ollama serve` and the runner.
 [`scripts/run-pipeline.sh`](../scripts/run-pipeline.sh) forwards
-`LLM_CONCURRENCY` to the stage-3 CLI as `--concurrency`. Override
-either env var at `sbatch --export=...` time.
+`LLM_CONCURRENCY` to stages 3 and 7 as `--concurrency` via
+`ELIGIBILITY_CONCURRENCY` (which defaults to `LLM_CONCURRENCY`).
+Stage 8 uses a separate `EXTRACTION_CONCURRENCY` variable that
+defaults to 1 regardless of `LLM_CONCURRENCY` — see below.
+Override either env var at `sbatch --export=...` time.
 
-## Stages 7 and 8 do not yet honour `LLM_CONCURRENCY`
+## Stage 8 default is 1
 
-Only `screening-abstracts` (stage 3) currently has a `--concurrency`
-flag. `fulltext-eligibility` (stage 7) and `extraction-codebook`
-(stage 8) call Ollama sequentially. The runner forwards
-`LLM_CONCURRENCY` only to stage 3 — extending the same
-ThreadPoolExecutor pattern to stages 7 and 8 is a follow-up.
-
-For stage 8 in particular, the speedup from client-side concurrency
-is bounded: prefill dominates the call (~90% of wall time on the
-TEI prompt) and Ollama serialises prefill across requests. See
+All three stages accept `--concurrency`; the implementation is shared
+via `laglitsynth.concurrency.map_concurrent`. Stage 8's default is 1
+because prefill dominates the call (~90% of wall time on the TEI
+prompt) and Ollama serialises prefill across requests. See
 [ollama-throughput.md](explorations/ollama-throughput.md) for the
 flat throughput grid and the architectural reason. Real speedup on
 stage 8 needs a continuous-batching engine (vLLM, SGLang), not more
-client threads.
+client threads. Users who have switched to vLLM or SGLang can set
+`EXTRACTION_CONCURRENCY` or pass `--concurrency` directly.
 
 ## Ordering
 

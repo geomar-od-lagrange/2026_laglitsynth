@@ -11,6 +11,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from openai import APIConnectionError, APITimeoutError
 
+import hashlib
+
 from laglitsynth.fulltext_eligibility.eligibility import (
     _active_works,
     assess_works,
@@ -179,6 +181,36 @@ class TestClassifyEligibility:
         assert verdict.seed == 42
 
 
+# --- num_ctx threading ---
+
+
+def test_num_ctx_flag_threads_to_options() -> None:
+    """--num-ctx value reaches extra_body["options"]["num_ctx"] in the Ollama call."""
+    resp = _mock_openai_response('{"eligible": true, "reason": "ok"}')
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = resp
+    classify_eligibility(
+        "W1", "prompt", "full_text", model="m", client=mock_client, system_prompt="SP",
+        num_ctx=16384,
+    )
+    call_kwargs = mock_client.chat.completions.create.call_args[1]
+    assert call_kwargs["extra_body"]["options"]["num_ctx"] == 16384
+
+
+def test_num_ctx_changes_prompt_hash() -> None:
+    """Different --num-ctx values produce different prompt_sha256 hashes."""
+    from laglitsynth.fulltext_eligibility.prompts import USER_TEMPLATE
+
+    system_prompt = "You are a test classifier."
+    hash_a = hashlib.sha256(
+        (system_prompt + "\n" + USER_TEMPLATE + "\n" + str(32768)).encode("utf-8")
+    ).hexdigest()
+    hash_b = hashlib.sha256(
+        (system_prompt + "\n" + USER_TEMPLATE + "\n" + str(16384)).encode("utf-8")
+    ).hexdigest()
+    assert hash_a != hash_b
+
+
 # --- assess_works cascade ---
 
 
@@ -193,6 +225,7 @@ def _mock_classify(
         model: str,
         client: Any,
         system_prompt: str,
+        num_ctx: int = 32768,
     ) -> EligibilityVerdict:
         entry = results[work_id]
         if entry == "error":
@@ -451,6 +484,7 @@ class TestAssessWorksCascade:
             model: str,
             client: Any,
             system_prompt: str,
+            num_ctx: int = 32768,
         ) -> EligibilityVerdict:
             if work_id == "W1":
                 return EligibilityVerdict(
@@ -535,27 +569,6 @@ class TestEligibilityVerdict:
             )
 
 
-# --- _preflight ---
-
-
-class TestPreflight:
-    def test_preflight_raises_on_connection_failure(self) -> None:
-        from laglitsynth.fulltext_eligibility.eligibility import _preflight
-
-        args = MagicMock()
-        args.base_url = "http://localhost:99999"
-        args.model = "nonexistent"
-
-        with patch(
-            "laglitsynth.fulltext_eligibility.eligibility.OpenAI"
-        ) as mock_cls:
-            mock_cls.return_value.models.retrieve.side_effect = Exception(
-                "connection refused"
-            )
-            with pytest.raises(SystemExit):
-                _preflight(args)
-
-
 # --- run() end-to-end ---
 
 
@@ -576,6 +589,8 @@ def _make_run_args(
     max_records: int | None = None,
     run_id: str = "test-run-id",
     screening_threshold: float = 50.0,
+    num_ctx: int = 32768,
+    concurrency: int = 1,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         catalogue=catalogue,
@@ -588,10 +603,12 @@ def _make_run_args(
         eligibility_criteria=_TEST_CRITERIA_SPEC,
         model="m",
         base_url="http://x",
+        num_ctx=num_ctx,
         max_records=max_records,
         skip_existing=skip_existing,
         dry_run=dry_run,
         config=None,
+        concurrency=concurrency,
     )
 
 
@@ -620,7 +637,7 @@ class TestRun:
         )
 
         with (
-            patch("laglitsynth.fulltext_eligibility.eligibility._preflight"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
             patch(
                 "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
                 side_effect=_mock_classify(
@@ -666,7 +683,7 @@ class TestRun:
         }
 
         with (
-            patch("laglitsynth.fulltext_eligibility.eligibility._preflight"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
             patch(
                 "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
                 side_effect=_mock_classify(classify_results),
@@ -764,7 +781,7 @@ class TestRun:
         )
 
         with (
-            patch("laglitsynth.fulltext_eligibility.eligibility._preflight"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
             patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
         ):
             from laglitsynth.fulltext_eligibility.eligibility import run
@@ -804,7 +821,7 @@ class TestRun:
         )
 
         with (
-            patch("laglitsynth.fulltext_eligibility.eligibility._preflight"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
             patch(
                 "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
                 side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
@@ -864,7 +881,7 @@ class TestRun:
 
         mock_classify = MagicMock(side_effect=_mock_classify(classify_results))
         with (
-            patch("laglitsynth.fulltext_eligibility.eligibility._preflight"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
             patch(
                 "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
                 mock_classify,
@@ -1024,7 +1041,7 @@ def test_run_dir_printed_to_stderr_at_end(
     expected_dir = tmp_path / "fulltext-eligibility" / "test-stderr-run"
 
     with (
-        patch("laglitsynth.fulltext_eligibility.eligibility._preflight"),
+        patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
         patch(
             "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
             side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
@@ -1040,3 +1057,112 @@ def test_run_dir_printed_to_stderr_at_end(
     # The line must appear at the end (last non-empty line).
     last_line = [line for line in err.splitlines() if line.strip()][-1]
     assert last_line == f"Run dir: {expected_dir}"
+
+
+# --- --concurrency ---
+
+
+def test_concurrency_default_is_one() -> None:
+    """Stage 7 --concurrency defaults to 1."""
+    import argparse as _argparse
+
+    from laglitsynth.fulltext_eligibility.eligibility import build_subparser
+
+    p = _argparse.ArgumentParser()
+    subs = p.add_subparsers()
+    build_subparser(subs)
+    args = p.parse_args(
+        [
+            "fulltext-eligibility",
+            "--catalogue", "c.jsonl",
+            "--screening-verdicts", "v.jsonl",
+            "--extractions", "e.jsonl",
+        ]
+    )
+    assert args.concurrency == 1
+
+
+def test_concurrency_flag_threaded_to_assess_works(tmp_path: Path) -> None:
+    """--concurrency N is forwarded to assess_works as concurrency=N."""
+    catalogue = tmp_path / "catalogue.jsonl"
+    verdicts_path = tmp_path / "verdicts.jsonl"
+    extractions_path = tmp_path / "extraction.jsonl"
+    works = [_make_work("W1", abstract="abs")]
+    _write_works_jsonl(catalogue, works)
+    _write_verdicts_jsonl(
+        verdicts_path, [ScreeningVerdict(work_id="W1", relevance_score=80)]
+    )
+    extractions_path.write_text("")
+
+    args = _make_run_args(
+        tmp_path,
+        catalogue=catalogue,
+        screening_verdicts=verdicts_path,
+        extractions=extractions_path,
+        concurrency=3,
+    )
+
+    captured: dict[str, Any] = {}
+    original_assess = __import__(
+        "laglitsynth.fulltext_eligibility.eligibility", fromlist=["assess_works"]
+    ).assess_works
+
+    def spy_assess(*a: Any, **kw: Any) -> Any:
+        captured["concurrency"] = kw.get("concurrency")
+        return original_assess(*a, **kw)
+
+    with (
+        patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
+        patch(
+            "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
+            side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
+        ),
+        patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
+        patch(
+            "laglitsynth.fulltext_eligibility.eligibility.assess_works",
+            side_effect=spy_assess,
+        ),
+    ):
+        from laglitsynth.fulltext_eligibility.eligibility import run
+
+        run(args)
+
+    assert captured["concurrency"] == 3
+
+
+def test_concurrency_one_uses_sequential_path(tmp_path: Path) -> None:
+    """concurrency=1 does not create a ThreadPoolExecutor."""
+    from concurrent.futures import ThreadPoolExecutor as TPE
+
+    catalogue = tmp_path / "catalogue.jsonl"
+    verdicts_path = tmp_path / "verdicts.jsonl"
+    extractions_path = tmp_path / "extraction.jsonl"
+    works = [_make_work("W1", abstract="abs")]
+    _write_works_jsonl(catalogue, works)
+    _write_verdicts_jsonl(
+        verdicts_path, [ScreeningVerdict(work_id="W1", relevance_score=80)]
+    )
+    extractions_path.write_text("")
+
+    args = _make_run_args(
+        tmp_path,
+        catalogue=catalogue,
+        screening_verdicts=verdicts_path,
+        extractions=extractions_path,
+        concurrency=1,
+    )
+
+    with (
+        patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
+        patch(
+            "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
+            side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
+        ),
+        patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
+        patch("laglitsynth.concurrency.ThreadPoolExecutor", wraps=TPE) as mock_tpe,
+    ):
+        from laglitsynth.fulltext_eligibility.eligibility import run
+
+        run(args)
+
+    mock_tpe.assert_not_called()

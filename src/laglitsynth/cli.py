@@ -6,6 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from laglitsynth.bake_model import build_subparser as build_bake_model_subparser
 from laglitsynth.catalogue_dedup.dedup import build_subparser as build_dedup_subparser
 from laglitsynth.catalogue_fetch.fetch import build_subparser as build_fetch_subparser
 from laglitsynth.config import load_config
@@ -18,6 +19,7 @@ from laglitsynth.screening_abstracts.export import build_subparser as build_scre
 from laglitsynth.screening_abstracts.screen import build_subparser as build_screening_subparser
 
 _BUILDERS = (
+    build_bake_model_subparser,
     build_fetch_subparser,
     build_dedup_subparser,
     build_screening_subparser,

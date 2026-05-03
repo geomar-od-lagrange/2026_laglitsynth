@@ -18,6 +18,7 @@ from urllib.parse import quote, urlparse
 import httpx
 
 from laglitsynth.catalogue_fetch.models import Work
+from laglitsynth.dotenv import load_env_var
 from laglitsynth.fulltext_retrieval.models import TOOL_NAME, RetrievalMeta, RetrievalRecord, RetrievalStatus
 from laglitsynth.ids import work_id_to_filename
 from laglitsynth.io import JsonlReadStats, append_jsonl, read_jsonl, write_meta
@@ -347,8 +348,11 @@ def build_subparser(
     )
     parser.add_argument(
         "--email",
-        required=True,
-        help="Contact email for Unpaywall API requests (required)",
+        default=None,
+        help=(
+            "Contact email for Unpaywall API requests. "
+            "Falls back to UNPAYWALL_EMAIL in .env when omitted."
+        ),
     )
     parser.add_argument("--manual-dir", type=Path, default=None, help="Manual PDF dir")
     parser.add_argument(
@@ -366,7 +370,16 @@ def build_subparser(
 
 
 def run(args: argparse.Namespace) -> None:
-    email: str = args.email
+    email: str | None = args.email
+    if email is None:
+        email = load_env_var("UNPAYWALL_EMAIL")
+        if email is not None:
+            print("Loaded UNPAYWALL_EMAIL from .env", file=sys.stderr)
+    if email is None:
+        raise SystemExit(
+            "UNPAYWALL_EMAIL not set: pass --email or add "
+            "UNPAYWALL_EMAIL=... to .env"
+        )
 
     output_dir: Path = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)

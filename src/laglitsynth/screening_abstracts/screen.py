@@ -10,13 +10,13 @@ import random
 import sys
 import time
 from collections.abc import Iterator
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 
 from openai import APIConnectionError, APITimeoutError, OpenAI
 
 from laglitsynth.catalogue_fetch.models import Work
+from laglitsynth.concurrency import map_concurrent
 from laglitsynth.config import register_config_arg, save_resolved_config
 from laglitsynth.ids import generate_run_id
 from laglitsynth.io import (
@@ -26,6 +26,7 @@ from laglitsynth.io import (
     write_meta,
 )
 from laglitsynth.models import LlmMeta, RunMeta
+from laglitsynth.ollama import preflight
 from laglitsynth.screening_abstracts.models import TOOL_NAME, ScreeningMeta, ScreeningVerdict
 
 STAGE_SUBDIR = "screening-abstracts"
@@ -154,8 +155,8 @@ def screen_works(
 ) -> Iterator[ScreeningVerdict]:
     """Yield a verdict per input work.
 
-    LLM calls are dispatched through a ``ThreadPoolExecutor`` of
-    ``concurrency`` workers (default 1, giving ordered sequential dispatch).
+    LLM calls are dispatched through ``map_concurrent`` with
+    ``concurrency`` workers (default 1, giving sequential dispatch).
     Works without an abstract yield a ``no-abstract`` sentinel immediately;
     abstract-backed verdicts are yielded in completion order.
     The server's ``OLLAMA_NUM_PARALLEL`` must be at least ``concurrency``
@@ -174,36 +175,26 @@ def screen_works(
             break
         works.append(work)
 
-    with ThreadPoolExecutor(max_workers=concurrency) as pool:
-        futures: dict[Future[ScreeningVerdict], str] = {}
-        for work in works:
-            if work.abstract is None:
-                logger.warning("Skipping work %s: no abstract", work.id)
-                yield _no_abstract_verdict(work.id)
-                continue
-            fut = pool.submit(
-                classify_abstract,
-                work.id,
-                format_screening_input(work),
-                prompt,
-                model=model,
-                base_url=base_url,
-                client=client,
-            )
-            futures[fut] = work.id
+    # Sentinels first (no LLM call); collect works that need an LLM call.
+    llm_works: list[Work] = []
+    for work in works:
+        if work.abstract is None:
+            logger.warning("Skipping work %s: no abstract", work.id)
+            yield _no_abstract_verdict(work.id)
+        else:
+            llm_works.append(work)
 
-        for fut in as_completed(futures):
-            yield fut.result()
-
-
-def _preflight(args: argparse.Namespace) -> None:
-    try:
-        client = OpenAI(base_url=f"{args.base_url}/v1", api_key="ollama")
-        client.models.retrieve(args.model)
-    except Exception:
-        raise SystemExit(
-            f"Cannot reach Ollama at {args.base_url}. Is `ollama serve` running?"
+    def _call_one(work: Work) -> ScreeningVerdict:
+        return classify_abstract(
+            work.id,
+            format_screening_input(work),
+            prompt,
+            model=model,
+            base_url=base_url,
+            client=client,
         )
+
+    yield from map_concurrent(_call_one, llm_works, max_workers=concurrency)
 
 
 def build_subparser(
@@ -267,7 +258,7 @@ def build_subparser(
 
 
 def run(args: argparse.Namespace) -> None:
-    _preflight(args)
+    preflight(base_url=args.base_url, model=args.model)
 
     if args.run_id is None:
         args.run_id = generate_run_id()

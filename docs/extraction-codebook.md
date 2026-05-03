@@ -13,6 +13,11 @@ schema populated by the LLM against real papers. Records feed stage 9
 (human adjudication) and stages 10–12 (synthesis). Schema churn is
 expected once phase 3 human review begins.
 
+## Prerequisites
+
+See [external-services.md](external-services.md) for Ollama setup. Pull
+the default model before the first run: `ollama pull llama3.1:8b` (~5 GB).
+
 ## Prototype scope
 
 A single LLM call per paper over the flattened body (or the abstract
@@ -209,7 +214,8 @@ laglitsynth extraction-codebook \
     [--codebook examples/codebooks/lagrangian-oceanography.yaml] \
     [--config <run-dir>/config.yaml] \
     [--skip-existing] [--max-records N] [--dry-run] \
-    [--model gemma3:4b] [--base-url http://localhost:11434]
+    [--model llama3.1:8b] [--base-url http://localhost:11434] \
+    [--concurrency 1] [--num-ctx 32768]
 ```
 
 The resolved output directory is `<data-dir>/extraction-codebook/<run-id>/`.
@@ -257,14 +263,22 @@ The resolved output directory is `<data-dir>/extraction-codebook/<run-id>/`.
 - `--model`, `--base-url`: Ollama configuration. `--base-url` is
   checked at startup with the same preflight pattern as
   [eligibility](eligibility.md).
+- `--num-ctx`: context window size passed to the model via `extra_body`
+  (default: `32768`). For a guaranteed context window, bake the model
+  first with [`bake-model`](bake-model.md) and pass the baked tag via
+  `--model`. See [external-services.md](external-services.md) for the
+  bake-vs-flag tradeoff and [bake-model.md](bake-model.md) for the
+  bake recipe.
+- `--concurrency`: number of in-flight LLM requests (default: `1`).
+  The codebook payload is large, so keep concurrency low unless Ollama
+  is running on a dedicated multi-GPU host.
+  See [llm-concurrency.md](llm-concurrency.md).
 
 ### Model sizing
 
-The CLI default is `gemma3:4b` for consistency with stages 3 and 7,
-but **gemma3:4b does not reliably handle stage 8's full codebook
-structured JSON on typical paper bodies** — in smoke runs it returned
-`{}` (empty object) on most full-text inputs. Pass a bigger model via
-`--model`.
+The CLI default is `llama3.1:8b`. Smaller models (e.g. `gemma3:4b`)
+return empty JSON on the full codebook payload — pick `--model gemma3:4b`
+only for testing.
 
 Pick the model once and carry `--model` through to all stage 8
 invocations; the `prompt_sha256` covers `num_ctx` + `CHAR_BUDGET` but
@@ -329,7 +343,10 @@ User: <source_basis>:
 
 `response_format={"type": "json_object"}`, `temperature=0.8`, per-call
 random seed recorded on the record. Same shape as
-[eligibility](eligibility.md).
+[eligibility](eligibility.md). The same temperature/seed variance that
+applies to stage 3 applies here — see
+[screening-abstracts.md § Reproducibility](screening-abstracts.md#reproducibility)
+for the full explanation.
 
 ## Changing the codebook
 

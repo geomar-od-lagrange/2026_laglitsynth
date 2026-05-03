@@ -400,22 +400,6 @@ def test_screening_meta_serialization() -> None:
     assert data["llm"]["temperature"] == 0.8
 
 
-# --- _preflight ---
-
-
-def test_preflight_raises_on_connection_failure() -> None:
-    from laglitsynth.screening_abstracts.screen import _preflight
-
-    args = MagicMock()
-    args.base_url = "http://localhost:99999"
-    args.model = "nonexistent"
-
-    with patch("laglitsynth.screening_abstracts.screen.OpenAI") as mock_cls:
-        mock_cls.return_value.models.retrieve.side_effect = Exception("connection refused")
-        with pytest.raises(SystemExit):
-            _preflight(args)
-
-
 # --- run() end-to-end with mocked LLM ---
 
 
@@ -454,7 +438,7 @@ def test_run_dry_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None
     out_dir = tmp_path / "screening-abstracts" / "test-run-id"
 
     with (
-        patch("laglitsynth.screening_abstracts.screen._preflight"),
+        patch("laglitsynth.screening_abstracts.screen.preflight"),
         patch(
             "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=_mock_classify(classify_results),
@@ -488,7 +472,7 @@ def test_run_writes_output_files(tmp_path: Path) -> None:
     out_dir = tmp_path / "screening-abstracts" / "test-run-id"
 
     with (
-        patch("laglitsynth.screening_abstracts.screen._preflight"),
+        patch("laglitsynth.screening_abstracts.screen.preflight"),
         patch(
             "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=_mock_classify(classify_results),
@@ -605,7 +589,7 @@ def test_prompt_sha256_matches(tmp_path: Path) -> None:
     out_dir = tmp_path / "screening-abstracts" / "test-run-id"
 
     with (
-        patch("laglitsynth.screening_abstracts.screen._preflight"),
+        patch("laglitsynth.screening_abstracts.screen.preflight"),
         patch(
             "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=_mock_classify(classify_results),
@@ -709,7 +693,7 @@ def test_run_writes_meta_before_loop_starts(tmp_path: Path) -> None:
     args = _run_args(tmp_path, prompt="the criterion")
 
     with (
-        patch("laglitsynth.screening_abstracts.screen._preflight"),
+        patch("laglitsynth.screening_abstracts.screen.preflight"),
         patch(
             "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=side_effect,
@@ -761,7 +745,7 @@ def test_run_streaming_append_partial_is_valid(tmp_path: Path) -> None:
     args = _run_args(tmp_path, prompt="p")
 
     with (
-        patch("laglitsynth.screening_abstracts.screen._preflight"),
+        patch("laglitsynth.screening_abstracts.screen.preflight"),
         patch(
             "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=side_effect,
@@ -792,7 +776,7 @@ def test_run_id_default_generates_fresh_dir(tmp_path: Path) -> None:
 
     classify_results = {"W1": {"relevance_score": 80, "reason": "ok"}}
     with (
-        patch("laglitsynth.screening_abstracts.screen._preflight"),
+        patch("laglitsynth.screening_abstracts.screen.preflight"),
         patch(
             "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=_mock_classify(classify_results),
@@ -818,7 +802,7 @@ def test_config_yaml_records_resolved_args(tmp_path: Path) -> None:
 
     classify_results = {"W1": {"relevance_score": 80, "reason": "ok"}}
     with (
-        patch("laglitsynth.screening_abstracts.screen._preflight"),
+        patch("laglitsynth.screening_abstracts.screen.preflight"),
         patch(
             "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=_mock_classify(classify_results),
@@ -887,7 +871,7 @@ def test_run_dir_printed_to_stderr_at_end(
     expected_dir = tmp_path / "screening-abstracts" / "test-run-id"
 
     with (
-        patch("laglitsynth.screening_abstracts.screen._preflight"),
+        patch("laglitsynth.screening_abstracts.screen.preflight"),
         patch(
             "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=_mock_classify(classify_results),

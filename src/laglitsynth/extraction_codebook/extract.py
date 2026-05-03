@@ -26,6 +26,7 @@ from openai import APIConnectionError, APITimeoutError, OpenAI
 from pydantic import BaseModel, ValidationError
 
 from laglitsynth.catalogue_fetch.models import Work
+from laglitsynth.concurrency import map_concurrent
 from laglitsynth.config import register_config_arg, resolve_yaml_arg, save_resolved_config
 from laglitsynth.extraction_codebook.codebook import (
     CodebookContext,
@@ -52,6 +53,7 @@ from laglitsynth.io import (
     write_meta,
 )
 from laglitsynth.models import LlmMeta, RunMeta
+from laglitsynth.ollama import preflight
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +61,7 @@ STAGE_SUBDIR = "extraction-codebook"
 DEFAULT_CODEBOOK = Path("examples/codebooks/lagrangian-oceanography.yaml")
 
 _TEMPERATURE = 0.8
-_NUM_CTX = 32768
+_DEFAULT_NUM_CTX = 32768
 _LLM_TIMEOUT_SECONDS = 600
 _LLM_MAX_RETRIES = 3
 
@@ -101,6 +103,7 @@ def extract_codebook(
     model: str,
     truncated: bool,
     ctx: CodebookContext,
+    num_ctx: int = _DEFAULT_NUM_CTX,
 ) -> ExtractionRecordProto:
     """Call the LLM, validate the payload, compose the full record.
 
@@ -121,7 +124,7 @@ def extract_codebook(
             ],
             temperature=_TEMPERATURE,
             seed=seed,
-            extra_body={"options": {"num_ctx": _NUM_CTX}},
+            extra_body={"options": {"num_ctx": num_ctx}},
         )
     except (APITimeoutError, APIConnectionError) as exc:
         logger.warning("LLM timeout for %s: %s", work_id, exc)
@@ -207,21 +210,27 @@ def extract_works(
     *,
     client: OpenAI,
     model: str,
+    num_ctx: int = _DEFAULT_NUM_CTX,
     max_records: int | None,
     ctx: CodebookContext,
     skip_ids: set[str] | None = None,
+    concurrency: int = 1,
 ) -> Iterator[ExtractionRecordProto]:
     skip_ids = skip_ids or set()
-    processed = 0
+    eligible: list[Work] = []
     for work in works:
         if work.id in skip_ids:
             continue
-        if max_records is not None and processed >= max_records:
-            return
-        processed += 1
-        yield _extract_one(
-            work, extractions, extraction_output_dir, client, model, ctx
+        if max_records is not None and len(eligible) >= max_records:
+            break
+        eligible.append(work)
+
+    def _call_one(work: Work) -> ExtractionRecordProto:
+        return _extract_one(
+            work, extractions, extraction_output_dir, client, model, ctx, num_ctx
         )
+
+    yield from map_concurrent(_call_one, eligible, max_workers=concurrency)
 
 
 def _extract_one(
@@ -231,6 +240,7 @@ def _extract_one(
     client: OpenAI,
     model: str,
     ctx: CodebookContext,
+    num_ctx: int = _DEFAULT_NUM_CTX,
 ) -> ExtractionRecordProto:
     # Step 1: prefer full text when an extraction exists.
     extracted = extractions.get(work.id)
@@ -257,6 +267,7 @@ def _extract_one(
                 model=model,
                 truncated=truncated,
                 ctx=ctx,
+                num_ctx=num_ctx,
             )
         # Empty body (valid XML, no content): fall through to abstract.
 
@@ -270,6 +281,7 @@ def _extract_one(
             model=model,
             truncated=False,
             ctx=ctx,
+            num_ctx=num_ctx,
         )
 
     # Step 3: no source at all.
@@ -280,16 +292,6 @@ def _extract_one(
         reason="no-source",
         ctx=ctx,
     )
-
-
-def _preflight(args: argparse.Namespace) -> None:
-    try:
-        client = OpenAI(base_url=f"{args.base_url}/v1", api_key="ollama")
-        client.models.retrieve(args.model)
-    except Exception:
-        raise SystemExit(
-            f"Cannot reach Ollama at {args.base_url}. Is `ollama serve` running?"
-        )
 
 
 def build_subparser(
@@ -353,13 +355,23 @@ def build_subparser(
     )
     parser.add_argument(
         "--model",
-        default="gemma3:4b",
-        help="Ollama model name (default: gemma3:4b)",
+        default="llama3.1:8b",
+        help="Ollama model name (default: llama3.1:8b)",
     )
     parser.add_argument(
         "--base-url",
         default="http://localhost:11434",
         help="Ollama API base URL (default: http://localhost:11434)",
+    )
+    parser.add_argument(
+        "--num-ctx",
+        type=int,
+        default=_DEFAULT_NUM_CTX,
+        dest="num_ctx",
+        help=(
+            "Ollama context-window hint passed via extra_body (default: 32768). "
+            "Only fully reliable when the model is Modelfile-baked with the same value."
+        ),
     )
     parser.add_argument(
         "--max-records",
@@ -377,13 +389,24 @@ def build_subparser(
         action="store_true",
         help="Print summaries to stderr without writing output",
     )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help=(
+            "In-flight LLM requests (default: 1). Stage 8 is prefill-bound "
+            "(the TEI prompt dominates ~90%% of wall time) and Ollama serialises "
+            "prefill across requests, so the safe default is 1. Users with "
+            "vLLM or SGLang can override. See docs/llm-concurrency.md."
+        ),
+    )
     register_config_arg(parser)
     parser.set_defaults(run=run)
     return parser
 
 
 def run(args: argparse.Namespace) -> None:
-    _preflight(args)
+    preflight(base_url=args.base_url, model=args.model)
 
     if args.run_id is None:
         args.run_id = generate_run_id()
@@ -405,7 +428,7 @@ def run(args: argparse.Namespace) -> None:
             + "\n"
             + USER_TEMPLATE
             + "\n"
-            + str(_NUM_CTX)
+            + str(args.num_ctx)
             + "\n"
             + str(CHAR_BUDGET)
         ).encode("utf-8")
@@ -478,9 +501,11 @@ def run(args: argparse.Namespace) -> None:
         extraction_output_dir,
         client=client,
         model=args.model,
+        num_ctx=args.num_ctx,
         max_records=args.max_records,
         ctx=ctx,
         skip_ids=skip_ids,
+        concurrency=args.concurrency,
     ):
         index += 1
         new_records.append(record)

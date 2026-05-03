@@ -222,17 +222,18 @@ Stages 1 and 3 use positional arguments. All other subcommands use
 harmonized to keyword flags when updated. No backwards compatibility
 constraints ([AGENTS.md](../AGENTS.md)).
 
-### Configuration: flags only, scripts source `.env`
+### Configuration: flags first, `.env` fallback for credentials
 
-Every parameter is a CLI flag on the stage tool. Tools do not read
-`.env` or environment variables for run-affecting parameters
-(`--api-key`, `--email`, `--base-url`, `--grobid-url`, model names,
-thresholds). Driver scripts ([scripts/run-pipeline.sh](../scripts/run-pipeline.sh),
-[scripts/nesh-pipeline.sbatch](../scripts/nesh-pipeline.sbatch)) source
-`.env` (`set -a; source .env; set +a`) and pass the values as `--flag
-"$VAR"` to each tool. This keeps a human's flag-passed value
-authoritative — there is no env-var fallback path that could silently
-override what the user typed.
+Every parameter is a CLI flag on the stage tool. For credential flags
+(`--api-key`, `--email`) the tool also reads `.env` in the working directory
+when the flag is omitted, and emits a one-line stderr notice
+(`Loaded <KEY> from .env`). The explicit flag always wins; the `.env` read is
+never silent. All other run-affecting parameters (`--base-url`, `--grobid-url`,
+model names, thresholds) are CLI-only. Driver scripts
+([scripts/run-pipeline.sh](../scripts/run-pipeline.sh),
+[scripts/nesh-pipeline.sbatch](../scripts/nesh-pipeline.sbatch)) source `.env`
+(`set -a; source .env; set +a`) and pass the values as `--flag "$VAR"` to each
+tool — this is still the recommended pattern for wrapper invocations.
 
 ### Planned subcommands
 
@@ -320,8 +321,16 @@ laglitsynth extraction-codebook \
     --extractions data/fulltext-extraction/extraction.jsonl \
     --run-id "$RUN_ID"
 
-# Stages 9–12 are not yet implemented. Stop here for now.
+```
 
+#### STOP HERE — stages 9–12 are not yet implemented
+
+Stages 9–12 (extraction adjudication, quantitative synthesis, thematic
+synthesis, narrative synthesis) are specified in
+[pipeline.md](pipeline.md) but not yet built. Users running an
+end-to-end pipeline stop after stage 8.
+
+```sh
 # 9. Extraction adjudication (pass-through in prototype)
 laglitsynth extraction-adjudication \
     --data-dir data/ \

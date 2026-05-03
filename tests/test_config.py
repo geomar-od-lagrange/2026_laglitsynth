@@ -199,7 +199,7 @@ def test_cli_config_dispatch_does_not_bleed_across_subparsers(tmp_path: Path) ->
     captured.clear()
     with patch(
         "laglitsynth.screening_abstracts.screen.run", fake_run
-    ), patch("laglitsynth.screening_abstracts.screen._preflight"):
+    ), patch("laglitsynth.screening_abstracts.screen.preflight"):
         main(
             [
                 "screening-abstracts",

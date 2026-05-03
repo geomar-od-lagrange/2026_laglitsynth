@@ -24,7 +24,11 @@
 # Override models / endpoints via env vars:
 #   OUTPUT_ROOT, OLLAMA_BASE, GROBID_URL,
 #   SCREENING_MODEL, ELIGIBILITY_MODEL, EXTRACTION_MODEL,
-#   LLM_CONCURRENCY (forwarded to every LLM-driven stage that accepts it),
+#   ELIGIBILITY_NUM_CTX    (--num-ctx for stage 7; default 32768),
+#   EXTRACTION_NUM_CTX     (--num-ctx for stage 8; default 32768),
+#   LLM_CONCURRENCY        (--concurrency for stages 3 and 7; default 1),
+#   ELIGIBILITY_CONCURRENCY (--concurrency for stage 7 only; default LLM_CONCURRENCY),
+#   EXTRACTION_CONCURRENCY  (--concurrency for stage 8 only; default 1 — prefill-bound),
 #   RUN_ID (LLM-stage leaf under <data-dir>/<stage-subdir>/<run-id>/;
 #           a fresh ISO+hex id is generated when unset).
 
@@ -45,7 +49,11 @@ GROBID_URL="${GROBID_URL:-http://localhost:8070}"
 SCREENING_MODEL="${SCREENING_MODEL:-gemma3:4b}"
 ELIGIBILITY_MODEL="${ELIGIBILITY_MODEL:-gemma3:4b}"
 EXTRACTION_MODEL="${EXTRACTION_MODEL:-llama3.1:8b}"
+ELIGIBILITY_NUM_CTX="${ELIGIBILITY_NUM_CTX:-32768}"
+EXTRACTION_NUM_CTX="${EXTRACTION_NUM_CTX:-32768}"
 LLM_CONCURRENCY="${LLM_CONCURRENCY:-1}"
+ELIGIBILITY_CONCURRENCY="${ELIGIBILITY_CONCURRENCY:-$LLM_CONCURRENCY}"
+EXTRACTION_CONCURRENCY="${EXTRACTION_CONCURRENCY:-1}"
 STOP_AFTER_STAGE="${STOP_AFTER_STAGE:-8}"
 
 # Single run-id threaded through stages 3, 7, 8 so downstream inputs
@@ -107,9 +115,6 @@ run_stage 6 fulltext-extraction \
         --grobid-url "$GROBID_URL" \
         --skip-existing
 
-# Stages 7 and 8 do not yet accept --concurrency; they run sequentially
-# regardless of LLM_CONCURRENCY. See docs/llm-concurrency.md for the
-# follow-up.
 run_stage 7 fulltext-eligibility \
     laglitsynth fulltext-eligibility \
         --catalogue "$ROOT/catalogue-dedup/deduplicated.jsonl" \
@@ -119,7 +124,9 @@ run_stage 7 fulltext-eligibility \
         --data-dir "$ROOT" \
         --run-id "$RUN_ID" \
         --model "$ELIGIBILITY_MODEL" \
-        --base-url "$OLLAMA_BASE"
+        --base-url "$OLLAMA_BASE" \
+        --num-ctx "$ELIGIBILITY_NUM_CTX" \
+        --concurrency "$ELIGIBILITY_CONCURRENCY"
 
 run_stage 8 extraction-codebook \
     laglitsynth extraction-codebook \
@@ -129,7 +136,9 @@ run_stage 8 extraction-codebook \
         --data-dir "$ROOT" \
         --run-id "$RUN_ID" \
         --model "$EXTRACTION_MODEL" \
-        --base-url "$OLLAMA_BASE"
+        --base-url "$OLLAMA_BASE" \
+        --num-ctx "$EXTRACTION_NUM_CTX" \
+        --concurrency "$EXTRACTION_CONCURRENCY"
 
 echo
 echo "Pipeline complete (stages 1..$STOP_AFTER_STAGE). Outputs under: $ROOT/"

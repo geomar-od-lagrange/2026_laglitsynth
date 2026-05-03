@@ -10,6 +10,18 @@ means:
 - Alternative consumers (e.g. feeding raw PDFs to a long-context LLM) can
   bypass extraction entirely and work with the PDFs directly.
 
+## Prerequisites
+
+Start the GROBID container before running this stage:
+
+```bash
+docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0
+```
+
+GROBID takes 30–60 seconds to start. Health check: `GET http://localhost:8070/api/isalive`.
+See [external-services.md](external-services.md) for the full setup (Apple
+Silicon Rosetta workaround, memory requirements, `docker compose` file).
+
 ## Approach: GROBID only
 
 Use GROBID for all PDF-to-text conversion. GROBID is the only tool that
@@ -224,6 +236,24 @@ laglitsynth fulltext-extraction \
 The CLI checks the GROBID health endpoint before starting. If GROBID is
 not running, fail fast with a clear error message and the `docker run`
 command to start it.
+
+### Recovery after a GROBID crash
+
+If GROBID goes down mid-corpus, restart the container and re-run with
+`--skip-existing` to continue from where extraction stopped:
+
+```bash
+docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0  # restart GROBID
+laglitsynth fulltext-extraction \
+    --pdf-dir data/fulltext-retrieval/pdfs/ \
+    --output-dir data/fulltext-extraction/ \
+    --grobid-url http://localhost:8070 \
+    --skip-existing
+```
+
+Already-extracted PDFs (those with an `ExtractedDocument` record in
+`extraction.jsonl`) are skipped. See [external-services.md](external-services.md)
+for the macOS/Apple Silicon Rosetta workaround if GROBID fails to start.
 
 ## What to build now
 
