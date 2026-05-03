@@ -42,6 +42,7 @@ def _active_works(
     catalogue_path: Path,
     screening_verdicts_path: Path,
     screening_threshold: float,
+    stats: JsonlReadStats | None = None,
 ) -> Iterator[Work]:
     """Yield Works that pass the screening threshold gate.
 
@@ -53,8 +54,11 @@ def _active_works(
     Works present in the catalogue but absent from the verdicts file are also
     excluded (they were never screened).
     """
-    verdicts = {v.work_id: v for v in read_jsonl(screening_verdicts_path, ScreeningVerdict)}
-    for w in read_jsonl(catalogue_path, Work):
+    verdicts = {
+        v.work_id: v
+        for v in read_jsonl(screening_verdicts_path, ScreeningVerdict, stats)
+    }
+    for w in read_jsonl(catalogue_path, Work, stats):
         sv = verdicts.get(w.id)
         if sv is None:
             continue
@@ -395,7 +399,14 @@ def run(args: argparse.Namespace) -> None:
                 file=sys.stderr,
             )
 
-    works = list(_active_works(args.catalogue, args.screening_verdicts, args.screening_threshold))
+    works = list(
+        _active_works(
+            args.catalogue,
+            args.screening_verdicts,
+            args.screening_threshold,
+            stats,
+        )
+    )
     total = len(works)
     works_by_id: dict[str, Work] = {w.id: w for w in works}
     input_ids = {w.id for w in works}
