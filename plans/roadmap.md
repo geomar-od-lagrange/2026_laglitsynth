@@ -110,12 +110,14 @@ Update this file when a plan is written, implemented, or archived.
 
 - [Run manifest](run-manifest.md) — one typed `RunManifest` file at `data/manifest.json`, written via `io.write_meta`, pinning the review's queries, the shared run-id, and an append-only per-stage input→output log. Each stage reads it to discover its upstream output and appends its own entry, dissolving the hand-carried path relay, the no-project-grouping gap, the "where was I" resume gap, and the cross-machine run-id-coordination gap from [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md). Settles the diversified-retrieval open question of where the persistent store lives relative to per-search runs.
 - [Diversifying full-text retrieval](fulltext-retrieval-diversified.md) —
-  design direction, implementation deferred: a persistent work-keyed
-  catalogue + PDF store decoupled from the search term, with cheap manual
-  (DOI-list → Zotero → import-by-DOI) diversification. Open questions to
-  settle before it is ready to build; its open question of where the
-  persistent store lives relative to per-search runs is settled by the
-  [run manifest](run-manifest.md) plan.
+  build spec (no longer a deferred design direction): a persistent
+  work-keyed PDF store at `data/pdfs/<work-stem>.pdf` with a provenance
+  sidecar, plus `fulltext-retrieval-export` (DOI links + RIS + round-trip
+  CSV for the gaps) and `fulltext-retrieval-import` (ingest a returned
+  folder, match by DOI/stem, validate magic bytes, dedup). The store-
+  location open question is resolved by [run-manifest.md](run-manifest.md)
+  (store lives under `data/`, manifest indexes it); five-commit
+  implementation sequence is in the plan.
 
 ## Deferred until pipeline is feature-complete
 
