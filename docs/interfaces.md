@@ -57,6 +57,19 @@ The meta files stay as per-run provenance records — they are not merged.
 | `data/catalogue-dedup/dropped.jsonl` | [`DroppedRecord`](../src/laglitsynth/catalogue_dedup/models.py) | Dropped duplicates with the matching rule and the surviving work's ID |
 | `data/catalogue-dedup/dedup-meta.json` | [`DeduplicationMeta`](../src/laglitsynth/catalogue_dedup/models.py) | Counts by matching rule |
 
+### Stage 2b — abstract-lookup *(exists)*
+
+| Path | Model | Description |
+|---|---|---|
+| `data/abstract-lookup/abstracts.jsonl` | [`AbstractRecord`](../src/laglitsynth/abstract_lookup/models.py) | Per-work resolved abstract and source (`None` when still missing) |
+| `data/abstract-lookup/abstract-lookup-meta.json` | [`AbstractLookupMeta`](../src/laglitsynth/abstract_lookup/models.py) | Counts: filled, still-missing, no-DOI, by source |
+
+Reads the deduplicated catalogue; for each `Work` with `abstract is None` and a
+DOI it looks one up via Semantic Scholar → OpenAlex → Crossref (first non-empty
+wins) and writes the abstract to the sidecar keyed by work id. The catalogue
+file is never rewritten; downstream stages join the sidecar at read time. See
+[abstract-lookup.md](abstract-lookup.md).
+
 ### Stage 3 — screening-abstracts *(exists)*
 
 | Path | Model | Description |
@@ -160,6 +173,13 @@ laglitsynth catalogue-fetch QUERY --api-key KEY \
 laglitsynth catalogue-dedup \
     --input "data/catalogue-fetch/*.jsonl" \
     --output-dir data/catalogue-dedup/
+
+# Stage 2b — abstract-lookup
+laglitsynth abstract-lookup \
+    --input data/catalogue-dedup/deduplicated.jsonl \
+    --output-dir data/abstract-lookup/ \
+    --email EMAIL \
+    [--api-key KEY] [--skip-existing]
 
 # Stage 3 — screening-abstracts
 laglitsynth screening-abstracts INPUT PROMPT \
@@ -400,7 +420,7 @@ context-window change produces a different digest. Stage 8 also folds
 | Category | Policy | Models |
 |---|---|---|
 | OpenAlex-sourced | `extra="ignore"` — upstream may add fields | `Work`, `Author`, `Authorship`, `Institution`, `Source`, `Location`, `OpenAccess`, `Biblio`, `TopicHierarchy`, `Topic`, `Keyword` |
-| Internally owned | `extra="forbid"` — unexpected fields are bugs | All `*Meta`, `RunMeta`, `LlmMeta`, `ScreeningVerdict`, `DroppedRecord`, `RetrievalRecord`, `RetrievalStatus`, `ExtractedDocument`, `Section`, `Figure`, `Citation`, `BibReference`, `EligibilityVerdict`, `ExtractionRecord` |
+| Internally owned | `extra="forbid"` — unexpected fields are bugs | All `*Meta`, `RunMeta`, `LlmMeta`, `ScreeningVerdict`, `DroppedRecord`, `RetrievalRecord`, `RetrievalStatus`, `ExtractedDocument`, `Section`, `Figure`, `Citation`, `BibReference`, `EligibilityVerdict`, `ExtractionRecord`, `AbstractRecord`, `AbstractLookupMeta` |
 
 ## Model dependency graph
 
@@ -427,6 +447,8 @@ context-window change produces a different digest. Stage 8 also folds
 | `ExtractionRecord` (dynamic; [`build_record_model`](../src/laglitsynth/extraction_codebook/codebook.py)) | `laglitsynth.extraction_codebook.codebook` | 8, 9, 10, 11 |
 | [`ExtractionCodebookMeta`](../src/laglitsynth/extraction_codebook/models.py) | `laglitsynth.extraction_codebook.models` | 8 |
 | [`CodebookSpec`](../src/laglitsynth/extraction_codebook/codebook.py) | `laglitsynth.extraction_codebook.codebook` | 8 (codebook YAML schema) |
+| [`AbstractRecord`](../src/laglitsynth/abstract_lookup/models.py) | `laglitsynth.abstract_lookup.models` | 2b |
+| [`AbstractLookupMeta`](../src/laglitsynth/abstract_lookup/models.py) | `laglitsynth.abstract_lookup.models` | 2b |
 
 ### Models not yet defined
 
@@ -443,6 +465,7 @@ context-window change produces a different digest. Stage 8 also folds
 |---|---|---|
 | 1. catalogue-fetch | — | Work, FetchMeta |
 | 2. catalogue-dedup | Work | Work, DroppedRecord, DeduplicationMeta |
+| 2b. abstract-lookup | Work | AbstractRecord, AbstractLookupMeta |
 | 3. screening-abstracts | Work | ScreeningVerdict, ScreeningMeta |
 | 5. fulltext-retrieval | Work + ScreeningVerdict (inline join) | RetrievalRecord, RetrievalMeta |
 | 6. fulltext-extraction | (PDFs) | ExtractedDocument, ExtractionMeta |
