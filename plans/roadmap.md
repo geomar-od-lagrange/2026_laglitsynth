@@ -91,17 +91,23 @@ Update this file when a plan is written, implemented, or archived.
   the deduplicated catalogue against upstream verdict sidecars; no more
   `included.jsonl` or `eligible.jsonl` convenience copies.
 
+- [DOI → abstract lookup](doi-abstract-lookup.md) — `abstract-lookup`
+  stage backfills missing abstracts by DOI (Semantic Scholar → OpenAlex →
+  Crossref, first non-empty wins) into an
+  [`AbstractRecord`](../src/laglitsynth/abstract_lookup/models.py) sidecar keyed
+  by work id; the deduplicated catalogue is never rewritten in place. Runs
+  between `catalogue-dedup` and `screening-abstracts`. Source clients take an
+  injected `httpx.Client` (tested via `httpx.MockTransport`, no network);
+  `--email`/`--api-key` with `.env` fallback, `Retry-After` honoured with a
+  bounded backoff, `--skip-existing` re-processes only gaps. See
+  [abstract-lookup.md](../docs/abstract-lookup.md).
+
 ## In flight
 
 - [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate (a run manifest / project-grouping notion) is not yet planned.
 
 ## Queued — ready to plan
 
-- [DOI → abstract lookup](doi-abstract-lookup.md) — backfill missing
-  abstracts by DOI (Semantic Scholar → OpenAlex → Crossref) so screening
-  always has text. Motivated by [wos-starter-api.md](../docs/explorations/wos-starter-api.md)
-  (WoS Starter returns no abstracts) and the source comparison in
-  [zotero-retrieval.md](../docs/explorations/zotero-retrieval.md).
 - [Diversifying full-text retrieval](fulltext-retrieval-diversified.md) —
   design direction, implementation deferred: a persistent work-keyed
   catalogue + PDF store decoupled from the search term, with cheap manual

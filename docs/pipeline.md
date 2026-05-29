@@ -15,6 +15,7 @@ stages are still referenced by their original numbers throughout the pipeline.
 |---|---|---|
 | 1 | [catalogue-fetch](#1-catalogue-fetch) | catalogue |
 | 2 | [catalogue-dedup](#2-catalogue-dedup) | catalogue |
+| 2b | [abstract-lookup](#2b-abstract-lookup) | catalogue |
 | 3 | [screening-abstracts](#3-screening-abstracts) | catalogue |
 | 5 | [fulltext-retrieval](#5-fulltext-retrieval) | catalogue → corpus |
 | 6 | [fulltext-extraction](#6-fulltext-extraction) | corpus |
@@ -46,6 +47,18 @@ work appears under different OpenAlex IDs. Deduplication operates on metadata
 
 - **Consumes:** retrieved catalogue
 - **Produces:** deduplicated catalogue
+
+### 2b. abstract-lookup
+
+Backfills missing abstracts by DOI so screening always has text. For each work
+with no abstract and a DOI, it looks one up via Semantic Scholar → OpenAlex →
+Crossref, stopping at the first non-empty result, and writes the abstract to a
+sidecar keyed by work id — the deduplicated catalogue is never rewritten in
+place. Works without a DOI are skipped and reported. See
+[abstract-lookup.md](abstract-lookup.md).
+
+- **Consumes:** deduplicated catalogue, Semantic Scholar / OpenAlex / Crossref APIs
+- **Produces:** abstract sidecar (per-work resolved abstract and source)
 
 ### 3. screening-abstracts
 
@@ -228,6 +241,7 @@ graph TD
     OA[(OpenAlex API)]
     RCAT[(retrieved catalogue)]
     DCAT[(deduplicated catalogue)]
+    ABS[(abstract sidecar)]
     SVERD[(screening verdicts)]
     EVERD[(eligibility verdicts)]
     PDFS[(PDFs on disk)]
@@ -240,6 +254,7 @@ graph TD
 
     FETCH[catalogue-fetch]
     DEDUP[catalogue-dedup]
+    ALOOKUP[abstract-lookup]
     SCREEN[screening-abstracts]
     RETRIEVE[fulltext-retrieval]
     GROBID[fulltext-extraction]
@@ -255,6 +270,9 @@ graph TD
     FETCH --> RCAT
     RCAT --> DEDUP
     DEDUP --> DCAT
+    DCAT --> ALOOKUP
+    ALOOKUP --> ABS
+    ABS --> SCREEN
     DCAT --> SCREEN
     SCREEN --> SVERD
     DCAT --> RETRIEVE
