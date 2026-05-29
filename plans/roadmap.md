@@ -103,11 +103,14 @@ Update this file when a plan is written, implemented, or archived.
   (WoS Starter returns no abstracts) and the source comparison in
   [zotero-retrieval.md](../docs/explorations/zotero-retrieval.md).
 - [Diversifying full-text retrieval](fulltext-retrieval-diversified.md) —
-  design direction, implementation deferred: a persistent work-keyed
-  catalogue + PDF store decoupled from the search term, with cheap manual
-  (DOI-list → Zotero → import-by-DOI) diversification. Open questions to
-  settle before it is ready to build; overlaps the project/run-grouping
-  gap in [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md).
+  build spec (no longer a deferred design direction): a persistent
+  work-keyed PDF store at `data/pdfs/<work-stem>.pdf` with a provenance
+  sidecar, plus `fulltext-retrieval-export` (DOI links + RIS + round-trip
+  CSV for the gaps) and `fulltext-retrieval-import` (ingest a returned
+  folder, match by DOI/stem, validate magic bytes, dedup). The store-
+  location open question is resolved by [run-manifest.md](run-manifest.md)
+  (store lives under `data/`, manifest indexes it); five-commit
+  implementation sequence is in the plan.
 
 ## Deferred until pipeline is feature-complete
 
