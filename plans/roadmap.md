@@ -93,11 +93,21 @@ Update this file when a plan is written, implemented, or archived.
 
 ## In flight
 
-- [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending.
+- [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate (a run manifest / project-grouping notion) is not yet planned.
 
 ## Queued — ready to plan
 
-- (None.)
+- [DOI → abstract lookup](doi-abstract-lookup.md) — backfill missing
+  abstracts by DOI (Semantic Scholar → OpenAlex → Crossref) so screening
+  always has text. Motivated by [wos-starter-api.md](../docs/explorations/wos-starter-api.md)
+  (WoS Starter returns no abstracts) and the source comparison in
+  [zotero-retrieval.md](../docs/explorations/zotero-retrieval.md).
+- [Diversifying full-text retrieval](fulltext-retrieval-diversified.md) —
+  design direction, implementation deferred: a persistent work-keyed
+  catalogue + PDF store decoupled from the search term, with cheap manual
+  (DOI-list → Zotero → import-by-DOI) diversification. Open questions to
+  settle before it is ready to build; overlaps the project/run-grouping
+  gap in [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md).
 
 ## Deferred until pipeline is feature-complete
 
@@ -119,7 +129,9 @@ Update this file when a plan is written, implemented, or archived.
 - `Work` model additions — `source_catalogues: list[str]`,
   `catalogue_ids: dict[str, str]`, derived `is_peer_reviewed: bool |
   None`. Defer until a stage 7+ consumer arrives — stage 7 itself does
-  not branch on these.
+  not branch on these. Now also motivated by adding Web of Science as a
+  second catalogue source ([wos-starter-api.md](../docs/explorations/wos-starter-api.md)),
+  which the diversified-retrieval direction would consume.
 - `ExtractedDocument` quality gate — `extraction_status` enum + metrics.
   Defer until a stage 9+ consumer arrives — stages 7 and 8 both fell
   back to source-basis selection instead.
