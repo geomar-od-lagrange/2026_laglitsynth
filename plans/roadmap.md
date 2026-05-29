@@ -94,6 +94,7 @@ Update this file when a plan is written, implemented, or archived.
 ## In flight
 
 - [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate (a run manifest / project-grouping notion) is not yet planned.
+- [Cross-machine + storage convention](../docs/cross-machine.md) — the third follow-up candidate from [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) landed as an authoritative doc: project = working-directory boundary, run-from-root + fixed-`data/` path contract, per-machine `.env`, and the safe sync direction per `data/` subdir (bulk PDFs/TEI union, per-run-id gate outputs authoritative-side-wins, deduplicated spine rsynced once read-only). Companion probe [scripts/probe_zotero.py](../scripts/probe_zotero.py) + note [zotero-export-probe.md](../docs/explorations/zotero-export-probe.md) start on the Zotero-import open question in [fulltext-retrieval-diversified.md](fulltext-retrieval-diversified.md).
 
 ## Queued — ready to plan
 
