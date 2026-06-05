@@ -35,6 +35,34 @@ below. It does not do text extraction — that is stage 6
 does not backfill abstracts, which is the separate
 [DOI → abstract lookup](doi-abstract-lookup.md) plan.
 
+## Collaboration model and build scope
+
+This store is single-writer. One person — call them A — drives the
+pipeline and is the only process that ever writes `data/pdfs/`,
+`provenance.jsonl`, and the meta. Collaborators B–D do not run retrieval
+against A's tree; they receive an export bundle, fetch PDFs through their
+own institutional access, and hand back a *folder* of PDFs, which A
+ingests with `fulltext-retrieval-import`. The shared file store is a
+**drop zone for those folders, not a shared mutable store** — B–D push
+artifacts, A integrates them serially. Because A is the sole writer, the
+work-keyed `provenance.jsonl` stays a plain whole-file
+last-write-wins record (read-all, rewrite-atomic): there is no concurrent
+writer to race, so no append-only journal or locking is needed. Import
+dedups by `content_sha256` and one-PDF-per-work, so two collaborators
+returning the same PDF is harmless — which means partitioning the missing
+list across B–D is an *efficiency* nicety, not a correctness requirement,
+and is left out of this build (A can split `dois.txt` by hand). The
+"pause" while retrieval happens needs no mechanism: the pipeline is manual
+subcommands, so A simply does not run extraction until the gap is small
+enough, checked by re-running export.
+
+Manifest wiring is **out of scope for this build.** The
+[run-manifest](run-manifest.md) plan is not yet implemented, so every
+stage here takes its inputs via explicit flags exactly as today; there are
+no `latest_output` / `append_stage` calls. When the manifest lands, the
+omitted-input resolution and lineage entry are added then, as that plan
+describes — additively, breaking nothing here.
+
 ## Target state
 
 ### A work-keyed, persistent PDF store under `data/`
@@ -243,10 +271,8 @@ record round-trips with `pdf_path=None` and `content_sha256=None`.
 Point OA + Unpaywall retrieval at `data/pdfs/<stem>.pdf`; emit
 `PdfProvenanceRecord` (sources `oa` / `unpaywall`, else `missing`) instead
 of `RetrievalRecord`; make `--skip-existing` key off provenance; drop
-`--manual-dir` and `unretrieved.txt`. Resolve omitted inputs via the
-manifest and call `append_stage` ([run-manifest](run-manifest.md));
-retrieval carries no run-id, so it is one of the non-run-id stages that
-plan wires. Tests: a retrieved work gets an `oa`/`unpaywall` record and a
+`--manual-dir` and `unretrieved.txt`. Inputs stay explicit flags as today
+(manifest wiring deferred, see build scope above). Tests: a retrieved work gets an `oa`/`unpaywall` record and a
 PDF at the stem path; a sourceless work gets a `missing` record and no PDF;
 `--skip-existing` skips works with a non-`missing` record; behaviour is
 unchanged when no manifest exists.
