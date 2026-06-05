@@ -1,0 +1,329 @@
+"""Ingest a collaborator's returned folder of PDFs into the shared store.
+
+``fulltext-retrieval-import`` reads the ``pdf-manifest.csv`` written by a
+matching export, resolves each returned PDF to a work stem, validates it is
+a real PDF, dedups by content hash, copies matched PDFs into
+``<data-dir>/pdfs/``, and upserts each work's provenance with the given
+``--source`` (``zotero-import`` | ``manual``).
+
+Stem resolution order, per work, never guessed:
+
+1. an embedded DOI (PDF metadata or first-page text) that appears in the
+   manifest's DOI→stem map;
+2. a filename whose stem matches the manifest directly (plain folder drop);
+3. a returned sidecar ``*.csv`` / ``*.json`` mapping the collaborator's
+   filenames to DOIs.
+
+A PDF that resolves to no manifest stem, or is not a real PDF, is reported
+and skipped.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import re
+import shutil
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from pypdf import PdfReader
+from pypdf.errors import PyPdfError
+
+from laglitsynth.fulltext_retrieval.models import PdfProvenanceRecord, PdfSource
+from laglitsynth.fulltext_retrieval.retrieve import _DOI_PREFIX_RE, _validate_pdf
+from laglitsynth.fulltext_retrieval.store import (
+    load_provenance,
+    sha256_of,
+    store_pdf_path,
+    upsert_provenance,
+)
+
+# DOI syntax per Crossref's recommended regex (case-insensitive).
+_DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:a-z0-9]+", re.IGNORECASE)
+
+_IMPORT_SOURCES = {
+    "zotero-import": PdfSource.zotero_import,
+    "manual": PdfSource.manual,
+}
+
+
+@dataclass
+class ManifestEntry:
+    work_id: str
+    stem: str
+    doi: str | None
+
+
+@dataclass
+class _ImportSummary:
+    copied: int = 0
+    skipped_not_pdf: list[str] = field(default_factory=list)
+    skipped_unmatched: list[str] = field(default_factory=list)
+    skipped_duplicate: list[str] = field(default_factory=list)
+    skipped_existing_differs: list[str] = field(default_factory=list)
+
+
+def _normalise_doi(doi: str | None) -> str | None:
+    if doi is None:
+        return None
+    bare = _DOI_PREFIX_RE.sub("", doi).strip().lower()
+    return bare or None
+
+
+def read_manifest(path: Path) -> list[ManifestEntry]:
+    """Parse ``pdf-manifest.csv`` into ``ManifestEntry`` rows."""
+    entries: list[ManifestEntry] = []
+    with open(path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            doi = row.get("doi") or None
+            entries.append(
+                ManifestEntry(
+                    work_id=row["work_id"],
+                    stem=row["stem"],
+                    doi=doi if doi else None,
+                )
+            )
+    return entries
+
+
+def _load_sidecar(import_dir: Path) -> dict[str, str]:
+    """Return a filename→DOI map from any ``*.csv``/``*.json`` sidecars.
+
+    A CSV sidecar must have ``filename`` and ``doi`` columns. A JSON sidecar
+    must be an object mapping filename to DOI. Sidecars are optional; absent
+    ones contribute nothing.
+    """
+    mapping: dict[str, str] = {}
+    for csv_path in sorted(import_dir.glob("*.csv")):
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            if reader.fieldnames is None or "filename" not in reader.fieldnames:
+                continue
+            for row in reader:
+                fname = row.get("filename")
+                doi = row.get("doi")
+                if fname and doi:
+                    mapping[fname] = doi
+    for json_path in sorted(import_dir.glob("*.json")):
+        try:
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            for fname, doi in data.items():
+                if isinstance(fname, str) and isinstance(doi, str):
+                    mapping[fname] = doi
+    return mapping
+
+
+def _embedded_doi(pdf_path: Path) -> str | None:
+    """Return a DOI found in the PDF metadata or first-page text, or None."""
+    try:
+        reader = PdfReader(str(pdf_path))
+        meta = reader.metadata
+        if meta is not None:
+            for value in meta.values():
+                if isinstance(value, str):
+                    m = _DOI_RE.search(value)
+                    if m is not None:
+                        return m.group(0)
+        if reader.pages:
+            text = reader.pages[0].extract_text() or ""
+            m = _DOI_RE.search(text)
+            if m is not None:
+                return m.group(0)
+    except (PyPdfError, OSError, ValueError) as exc:
+        # A malformed PDF yields no embedded DOI; later strategies still apply.
+        print(f"  ! could not parse {pdf_path.name} for embedded DOI: {exc}", file=sys.stderr)
+    return None
+
+
+def _resolve_stem(
+    pdf_path: Path,
+    *,
+    doi_to_stem: dict[str, str],
+    stems: set[str],
+    sidecar: dict[str, str],
+) -> str | None:
+    """Resolve a returned PDF to a manifest stem, or None if unmatched."""
+    # (a) embedded DOI in metadata / first-page text.
+    embedded = _normalise_doi(_embedded_doi(pdf_path))
+    if embedded is not None and embedded in doi_to_stem:
+        return doi_to_stem[embedded]
+
+    # (b) filename stem matching the manifest directly.
+    if pdf_path.stem in stems:
+        return pdf_path.stem
+
+    # (c) sidecar filename → DOI → stem.
+    sidecar_doi = _normalise_doi(sidecar.get(pdf_path.name))
+    if sidecar_doi is not None and sidecar_doi in doi_to_stem:
+        return doi_to_stem[sidecar_doi]
+
+    return None
+
+
+def import_pdfs(
+    import_dir: Path,
+    manifest_path: Path,
+    data_dir: Path,
+    source: PdfSource,
+    *,
+    overwrite: bool,
+) -> tuple[_ImportSummary, int]:
+    """Import PDFs from ``import_dir``; return ``(summary, still_missing)``.
+
+    ``still_missing`` is the number of manifest works without a non-missing
+    provenance record after this import.
+    """
+    entries = read_manifest(manifest_path)
+    by_stem = {e.stem: e for e in entries}
+    stems = set(by_stem)
+    doi_to_stem: dict[str, str] = {}
+    for e in entries:
+        norm = _normalise_doi(e.doi)
+        if norm is not None:
+            doi_to_stem[norm] = e.stem
+    sidecar = _load_sidecar(import_dir)
+
+    provenance = load_provenance(data_dir)
+    summary = _ImportSummary()
+
+    for pdf_path in sorted(import_dir.glob("*.pdf")):
+        with open(pdf_path, "rb") as f:
+            head = f.read(4)
+        if not _validate_pdf(head):
+            summary.skipped_not_pdf.append(pdf_path.name)
+            continue
+
+        stem = _resolve_stem(
+            pdf_path, doi_to_stem=doi_to_stem, stems=stems, sidecar=sidecar
+        )
+        if stem is None:
+            summary.skipped_unmatched.append(pdf_path.name)
+            continue
+
+        new_sha = sha256_of(pdf_path)
+        dest = store_pdf_path(data_dir, stem)
+        existing = provenance.get(by_stem[stem].work_id)
+        if dest.exists():
+            if existing is not None and existing.content_sha256 == new_sha:
+                summary.skipped_duplicate.append(pdf_path.name)
+                continue
+            if not overwrite:
+                summary.skipped_existing_differs.append(pdf_path.name)
+                continue
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(pdf_path, dest)
+        entry = by_stem[stem]
+        upsert_provenance(
+            data_dir,
+            provenance,
+            PdfProvenanceRecord(
+                work_id=entry.work_id,
+                stem=stem,
+                doi=entry.doi,
+                source=source,
+                source_url=None,
+                pdf_path=f"pdfs/{stem}.pdf",
+                content_sha256=new_sha,
+                obtained_at=_now(),
+            ),
+        )
+        summary.copied += 1
+
+    still_missing = sum(
+        1
+        for e in entries
+        if (rec := provenance.get(e.work_id)) is None
+        or rec.source == PdfSource.missing
+    )
+    return summary, still_missing
+
+
+def _now() -> str:
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).isoformat(timespec="microseconds")
+
+
+def build_subparser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> argparse.ArgumentParser:
+    parser = subparsers.add_parser(
+        "fulltext-retrieval-import",
+        help="Ingest a collaborator's returned folder of PDFs into the store.",
+    )
+    parser.add_argument(
+        "--import-dir",
+        type=Path,
+        required=True,
+        help="Folder of PDFs a collaborator shipped back.",
+    )
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        required=True,
+        help="pdf-manifest.csv from the matching export.",
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path("data"),
+        help="Project data directory holding the pdfs/ store (default: data).",
+    )
+    parser.add_argument(
+        "--source",
+        choices=sorted(_IMPORT_SOURCES),
+        required=True,
+        help="Provenance source to record for ingested PDFs.",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Replace an existing PDF whose content differs (default: keep existing).",
+    )
+    parser.set_defaults(run=run)
+    return parser
+
+
+def run(args: argparse.Namespace) -> None:
+    source = _IMPORT_SOURCES[args.source]
+    summary, still_missing = import_pdfs(
+        args.import_dir,
+        args.manifest,
+        args.data_dir,
+        source,
+        overwrite=args.overwrite,
+    )
+
+    print("\nImport summary:", file=sys.stderr)
+    print(f"  Matched and copied:     {summary.copied}", file=sys.stderr)
+    if summary.skipped_duplicate:
+        print(
+            f"  Skipped (already present): {len(summary.skipped_duplicate)}",
+            file=sys.stderr,
+        )
+    if summary.skipped_existing_differs:
+        print(
+            f"  Skipped (differs, no --overwrite): "
+            f"{len(summary.skipped_existing_differs)}",
+            file=sys.stderr,
+        )
+    if summary.skipped_not_pdf:
+        print(
+            f"  Skipped (not a PDF): {len(summary.skipped_not_pdf)} "
+            f"({', '.join(summary.skipped_not_pdf)})",
+            file=sys.stderr,
+        )
+    if summary.skipped_unmatched:
+        print(
+            f"  Skipped (no manifest match): {len(summary.skipped_unmatched)} "
+            f"({', '.join(summary.skipped_unmatched)})",
+            file=sys.stderr,
+        )
+    print(f"  Manifest works still missing: {still_missing}", file=sys.stderr)
