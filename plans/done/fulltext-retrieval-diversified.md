@@ -2,7 +2,7 @@
 
 ## Goal
 
-Stage 5 today ([fulltext_retrieval/retrieve.py](../src/laglitsynth/fulltext_retrieval/retrieve.py))
+Stage 5 today ([fulltext_retrieval/retrieve.py](../../src/laglitsynth/fulltext_retrieval/retrieve.py))
 runs one process against OA URLs, Unpaywall, and a single manual drop
 directory, writing PDFs into a per-run `--output-dir`. PDF coverage from
 any single source is patchy, publishers throttle a single IP, and the
@@ -17,7 +17,7 @@ through their own institutional access (via the Zotero application or a
 plain folder drop), matched back to works by an explicit DOI→stem mapping.
 The blocking question this plan was deferred on — *where the persistent
 store lives relative to per-search runs* — is answered by the
-[run-manifest](run-manifest.md) plan: the store lives under `data/` and the
+[run-manifest](../run-manifest.md) plan: the store lives under `data/` and the
 manifest is the index over it.
 
 ## Non-goals
@@ -26,14 +26,14 @@ Legitimate access only — OA plus collaborators' own licensed access via
 their own tools; no scraping behind paywalls, no captcha-solving, no
 Sci-Hub, no bulk publisher hammering. We use the Zotero *application*, run
 by a human with the right subscription, never its AGPL code or
-translation-server (see [zotero-retrieval.md](../docs/explorations/zotero-retrieval.md)).
+translation-server (see [zotero-retrieval.md](../../docs/explorations/zotero-retrieval.md)).
 This plan does not build the per-attempt log or pluggable-resolver
 framework an earlier draft proposed — that stays deferred (see Follow-ups).
 It does not store multiple PDF versions per work; one PDF per work, chosen
 below. It does not do text extraction — that is stage 6
-([fulltext_extraction](../src/laglitsynth/fulltext_extraction/)) — and it
+([fulltext_extraction](../../src/laglitsynth/fulltext_extraction/)) — and it
 does not backfill abstracts, which is the separate
-[DOI → abstract lookup](doi-abstract-lookup.md) plan.
+[DOI → abstract lookup](../doi-abstract-lookup.md) plan.
 
 ## Collaboration model and build scope
 
@@ -57,7 +57,7 @@ subcommands, so A simply does not run extraction until the gap is small
 enough, checked by re-running export.
 
 Manifest wiring is **out of scope for this build.** The
-[run-manifest](run-manifest.md) plan is not yet implemented, so every
+[run-manifest](../run-manifest.md) plan is not yet implemented, so every
 stage here takes its inputs via explicit flags exactly as today; there are
 no `latest_output` / `append_stage` calls. When the manifest lands, the
 omitted-input resolution and lineage entry are added then, as that plan
@@ -71,12 +71,12 @@ The PDF store stops being a per-run `--output-dir/pdfs/` tree and becomes
 one persistent directory, `data/pdfs/`, holding `data/pdfs/<work-stem>.pdf`
 for every work whose PDF has been obtained by any means. The stem is the
 OpenAlex work-id leaf produced by
-[work_id_to_filename](../src/laglitsynth/ids.py) — exactly the filename
+[work_id_to_filename](../../src/laglitsynth/ids.py) — exactly the filename
 stage 5 writes today, so this is a relocation of the store, not a new
 naming scheme. A PDF is fetched once per work and reused by every search
 that includes that work; a new search mostly reuses PDFs already on disk
 and only fills the margin. This is the storage analogue of what
-[dedup](../src/laglitsynth/catalogue_dedup/) already does for catalogues:
+[dedup](../../src/laglitsynth/catalogue_dedup/) already does for catalogues:
 the store is the union over searches, deduplicated by work, and a search is
 a *view* over it, not a private copy. The manifest's `data_dir` is the
 project root the store hangs off, and `data/pdfs/` sits beside the other
@@ -100,7 +100,7 @@ before.
 The store is keyed on the work stem, not the DOI. DOI is provenance and a
 retrieval/match hint, never the filesystem key. This is deliberate: ~10–15%
 of WoS-only records carry no DOI at all (see
-[wos-starter-api.md](../docs/explorations/wos-starter-api.md)), and a
+[wos-starter-api.md](../../docs/explorations/wos-starter-api.md)), and a
 DOI-keyed store would have no slot for them. Because every work has an
 OpenAlex-style id and therefore a stem, stem-keying gives every work a slot
 uniformly — DOI-bearing or not. The export step still emits a DOI link for
@@ -113,7 +113,7 @@ the stem so import can match a returned PDF even when no DOI exists.
 Alongside the PDFs, a single work-keyed provenance file
 `data/pdfs/provenance.jsonl` records, per work, where its one PDF came from
 or that it is still missing. A new model in
-[fulltext_retrieval/models.py](../src/laglitsynth/fulltext_retrieval/models.py):
+[fulltext_retrieval/models.py](../../src/laglitsynth/fulltext_retrieval/models.py):
 
 ```python
 class PdfSource(str, Enum):
@@ -158,10 +158,10 @@ rewritten atomically, the same shape today's `retrieval.jsonl` seeding uses.
 A new subcommand resolves the works in the current selection that still
 lack a PDF and writes a handoff bundle a collaborator can act on. Inputs
 resolve the same way every manifest-aware stage resolves them
-([run-manifest](run-manifest.md)): explicit `--catalogue` /
+([run-manifest](../run-manifest.md)): explicit `--catalogue` /
 `--screening-verdicts` win, else `latest_output` from the manifest. The
 selection is the screening-gated active set —
-[_active_works](../src/laglitsynth/fulltext_retrieval/retrieve.py) is reused
+[_active_works](../../src/laglitsynth/fulltext_retrieval/retrieve.py) is reused
 verbatim — minus works that already have a non-`missing` provenance record.
 It writes, into `--export-dir` (default `data/pdfs/export/`):
 
@@ -257,7 +257,7 @@ Five commits. `pixi run typecheck` and `pixi run test` pass between each.
 ### 1. Provenance model and shared store helpers
 
 Replace `RetrievalStatus` / `RetrievalRecord` in
-[fulltext_retrieval/models.py](../src/laglitsynth/fulltext_retrieval/models.py)
+[fulltext_retrieval/models.py](../../src/laglitsynth/fulltext_retrieval/models.py)
 with `PdfSource` and `PdfProvenanceRecord`; keep `RetrievalMeta` with
 counters recomputed over `PdfSource`. Add a `store.py` module with
 `load_provenance(data_dir) -> dict[str, PdfProvenanceRecord]`,
@@ -282,7 +282,7 @@ unchanged when no manifest exists.
 Add the export subcommand: resolve the screening-gated selection (reuse
 `_active_works`), subtract works with a non-`missing` provenance record,
 and write `dois.txt`, `missing.ris`, `pdf-manifest.csv` into `--export-dir`.
-Register it in [cli.py](../src/laglitsynth/cli.py). Tests: only
+Register it in [cli.py](../../src/laglitsynth/cli.py). Tests: only
 PDF-less in-selection works are exported; a DOI-less work appears in the
 CSV and RIS with empty DOI but is absent from `dois.txt`; the CSV's
 `expected_filename` is `<stem>.pdf`; the RIS parses back to the right
@@ -294,7 +294,7 @@ Add the import subcommand: read `pdf-manifest.csv`, resolve each PDF's
 target stem by DOI→stem then stem-filename then a returned sidecar map,
 validate magic bytes, dedup by `content_sha256`, copy matched PDFs into
 `data/pdfs/`, and upsert provenance with `--source`. Register it in
-[cli.py](../src/laglitsynth/cli.py). Tests: a PDF matched by DOI lands at
+[cli.py](../../src/laglitsynth/cli.py). Tests: a PDF matched by DOI lands at
 its stem path with a `zotero-import` record; a `--source manual` filename-
 stem match lands with a `manual` record; a non-PDF and an unmatched file
 are skipped and reported; a byte-identical re-import is a no-op; a
@@ -302,16 +302,16 @@ differing PDF is skipped unless `--overwrite`.
 
 ### 5. Docs and roadmap
 
-Rewrite [docs/fulltext-retrieval.md](../docs/fulltext-retrieval.md) to
+Rewrite [docs/fulltext-retrieval.md](../../docs/fulltext-retrieval.md) to
 describe the persistent `data/pdfs/` store, the provenance file, and the
 export→collaborator→import loop. Update the Stage 5 entries in
-[docs/interfaces.md](../docs/interfaces.md) that name the removed
+[docs/interfaces.md](../../docs/interfaces.md) that name the removed
 `RetrievalRecord` / `RetrievalStatus`, `retrieval.jsonl`, `unretrieved.txt`,
 and `--manual-dir` (the Stage 5 path table, the model registry, the
 dataflow row, and the manual-download command block) so they describe
 `PdfProvenanceRecord`, `data/pdfs/`, and the export/import subcommands
-instead; link the new doc from [README.md](../README.md). Move this plan to
-[plans/done/](done/) and update [roadmap.md](roadmap.md).
+instead; link the new doc from [README.md](../../README.md). Move this plan to
+[plans/done/](.) and update [roadmap.md](../roadmap.md).
 
 ## Follow-ups
 
@@ -321,10 +321,10 @@ PDF versions per work or fine-grained per-attempt provenance, and the
 one-PDF-per-work store above is the trigger-free baseline until then. A
 Semantic Scholar `openAccessPdf` source could slot in beside OA/Unpaywall
 as one more automatic `PdfSource`, but that overlaps the
-[DOI → abstract lookup](doi-abstract-lookup.md) client and should land with
+[DOI → abstract lookup](../doi-abstract-lookup.md) client and should land with
 it, not here. Stage 6 (extraction) gaining a manifest entry that reads
 `data/pdfs/` as its input is tracked in the
-[run-manifest](run-manifest.md) follow-ups.
+[run-manifest](../run-manifest.md) follow-ups.
 
 ## Risks
 
@@ -337,13 +337,13 @@ the collaborator can be asked to return a filename→DOI sidecar.
 
 ## Critical files
 
-- [src/laglitsynth/fulltext_retrieval/retrieve.py](../src/laglitsynth/fulltext_retrieval/retrieve.py)
-- [src/laglitsynth/fulltext_retrieval/models.py](../src/laglitsynth/fulltext_retrieval/models.py)
-- [src/laglitsynth/ids.py](../src/laglitsynth/ids.py)
-- [src/laglitsynth/io.py](../src/laglitsynth/io.py)
-- [src/laglitsynth/cli.py](../src/laglitsynth/cli.py)
-- [src/laglitsynth/catalogue_dedup/dedup.py](../src/laglitsynth/catalogue_dedup/dedup.py)
-- [plans/run-manifest.md](run-manifest.md)
-- [docs/explorations/zotero-retrieval.md](../docs/explorations/zotero-retrieval.md)
-- [docs/explorations/wos-starter-api.md](../docs/explorations/wos-starter-api.md)
-- [docs/explorations/running-the-pipeline.md](../docs/explorations/running-the-pipeline.md)
+- [src/laglitsynth/fulltext_retrieval/retrieve.py](../../src/laglitsynth/fulltext_retrieval/retrieve.py)
+- [src/laglitsynth/fulltext_retrieval/models.py](../../src/laglitsynth/fulltext_retrieval/models.py)
+- [src/laglitsynth/ids.py](../../src/laglitsynth/ids.py)
+- [src/laglitsynth/io.py](../../src/laglitsynth/io.py)
+- [src/laglitsynth/cli.py](../../src/laglitsynth/cli.py)
+- [src/laglitsynth/catalogue_dedup/dedup.py](../../src/laglitsynth/catalogue_dedup/dedup.py)
+- [plans/run-manifest.md](../run-manifest.md)
+- [docs/explorations/zotero-retrieval.md](../../docs/explorations/zotero-retrieval.md)
+- [docs/explorations/wos-starter-api.md](../../docs/explorations/wos-starter-api.md)
+- [docs/explorations/running-the-pipeline.md](../../docs/explorations/running-the-pipeline.md)

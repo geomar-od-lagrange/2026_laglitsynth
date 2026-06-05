@@ -87,15 +87,20 @@ output.
 
 | Path | Model | Description |
 |---|---|---|
-| `data/fulltext-retrieval/retrieval.jsonl` | [`RetrievalRecord`](../src/laglitsynth/fulltext_retrieval/models.py) | Per-work retrieval outcome and PDF location |
-| `data/fulltext-retrieval/retrieval-meta.json` | [`RetrievalMeta`](../src/laglitsynth/fulltext_retrieval/models.py) | Counts by source |
-| `data/fulltext-retrieval/pdfs/<work_id>.pdf` | (binary) | Raw PDFs |
-| `data/fulltext-retrieval/unretrieved.txt` | (plain text) | DOIs for manual download |
+| `data/pdfs/<stem>.pdf` | (binary) | The persistent, work-keyed PDF store: one PDF per work, shared across searches |
+| `data/pdfs/provenance.jsonl` | [`PdfProvenanceRecord`](../src/laglitsynth/fulltext_retrieval/models.py) | Per-work store state: where its one PDF came from, or that it is still `missing` (whole-file, last-write-wins, single writer) |
+| `data/fulltext-retrieval/retrieval-meta.json` | [`RetrievalMeta`](../src/laglitsynth/fulltext_retrieval/models.py) | Per-invocation counts by `PdfSource` |
+| `data/pdfs/export/{dois.txt,missing.ris,pdf-manifest.csv}` | (plain text / CSV) | Export bundle for a collaborator: still-missing works as DOI links, RIS, and the round-trip stem map |
 
 Stage 5 joins the deduplicated catalogue against stage 3's `verdicts.jsonl`
 at the `--screening-threshold` cutoff to determine the active work set.
-`RetrievalRecord` flags each work's retrieval status (success, failed,
-abstract-only) and the PDF path.
+`fulltext-retrieval` fills the store automatically from OA URLs and Unpaywall,
+recording a [`PdfProvenanceRecord`](../src/laglitsynth/fulltext_retrieval/models.py)
+per work (`source` one of `oa` / `unpaywall` / `missing`).
+`fulltext-retrieval-export` lists the still-missing selection for a
+collaborator; `fulltext-retrieval-import` ingests their returned PDF folder
+(`source` `zotero-import` / `manual`), matched back to works through the
+export's `pdf-manifest.csv`.
 
 ### Stage 6 — fulltext-extraction
 
@@ -194,18 +199,34 @@ laglitsynth screening-abstracts-export \
     --catalogue data/catalogue-dedup/deduplicated.jsonl \
     [--output PATH] [--n-subset N] [--subset-seed N]
 
-# Stage 5 — fulltext-retrieval
+# Stage 5 — fulltext-retrieval (automatic OA + Unpaywall into data/pdfs/)
 laglitsynth fulltext-retrieval \
     --catalogue data/catalogue-dedup/deduplicated.jsonl \
     --screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
     --screening-threshold 50 \
-    --output-dir data/fulltext-retrieval/ \
+    --data-dir data/ \
     --email EMAIL \
-    [--manual-dir DIR] [--skip-existing] [--dry-run]
+    [--skip-existing] [--dry-run]
+
+# Stage 5 — fulltext-retrieval-export (handoff bundle for a collaborator)
+laglitsynth fulltext-retrieval-export \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    --screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
+    --screening-threshold 50 \
+    --data-dir data/ \
+    [--export-dir data/pdfs/export/]
+
+# Stage 5 — fulltext-retrieval-import (ingest a returned PDF folder)
+laglitsynth fulltext-retrieval-import \
+    --import-dir PATH \
+    --manifest data/pdfs/export/pdf-manifest.csv \
+    --data-dir data/ \
+    --source zotero-import|manual \
+    [--overwrite]
 
 # Stage 6 — fulltext-extraction
 laglitsynth fulltext-extraction \
-    --pdf-dir data/fulltext-retrieval/pdfs/ \
+    --pdf-dir data/pdfs/ \
     --output-dir data/fulltext-extraction/ \
     --grobid-url URL \
     [--skip-existing]
@@ -311,18 +332,28 @@ laglitsynth fulltext-retrieval \
     --catalogue data/catalogue-dedup/deduplicated.jsonl \
     --screening-verdicts "data/screening-abstracts/$RUN_ID/verdicts.jsonl" \
     --screening-threshold 50 \
-    --output-dir data/fulltext-retrieval/ \
+    --data-dir data/ \
     --email user@example.com \
     --skip-existing
 
-# Manual: download unretrieved PDFs from data/fulltext-retrieval/unretrieved.txt
-# Place them in data/fulltext-retrieval/manual/ named by OpenAlex work ID
-# Then re-run retrieval to pick up manual PDFs
+# Diversify the still-missing margin via collaborators with library access:
+# export the gap, hand the bundle to a collaborator, import what they return.
+laglitsynth fulltext-retrieval-export \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    --screening-verdicts "data/screening-abstracts/$RUN_ID/verdicts.jsonl" \
+    --screening-threshold 50 \
+    --data-dir data/
+# ... collaborator resolves data/pdfs/export/dois.txt through their own access ...
+laglitsynth fulltext-retrieval-import \
+    --import-dir ~/Downloads/returned-pdfs/ \
+    --manifest data/pdfs/export/pdf-manifest.csv \
+    --data-dir data/ \
+    --source zotero-import
 
 # 6. Fulltext extraction
 # Manual: start GROBID container first
 laglitsynth fulltext-extraction \
-    --pdf-dir data/fulltext-retrieval/pdfs/ \
+    --pdf-dir data/pdfs/ \
     --output-dir data/fulltext-extraction/ \
     --grobid-url http://localhost:8070
 
@@ -420,7 +451,7 @@ context-window change produces a different digest. Stage 8 also folds
 | Category | Policy | Models |
 |---|---|---|
 | OpenAlex-sourced | `extra="ignore"` — upstream may add fields | `Work`, `Author`, `Authorship`, `Institution`, `Source`, `Location`, `OpenAccess`, `Biblio`, `TopicHierarchy`, `Topic`, `Keyword` |
-| Internally owned | `extra="forbid"` — unexpected fields are bugs | All `*Meta`, `RunMeta`, `LlmMeta`, `ScreeningVerdict`, `DroppedRecord`, `RetrievalRecord`, `RetrievalStatus`, `ExtractedDocument`, `Section`, `Figure`, `Citation`, `BibReference`, `EligibilityVerdict`, `ExtractionRecord`, `AbstractRecord`, `AbstractLookupMeta` |
+| Internally owned | `extra="forbid"` — unexpected fields are bugs | All `*Meta`, `RunMeta`, `LlmMeta`, `ScreeningVerdict`, `DroppedRecord`, `PdfProvenanceRecord`, `PdfSource`, `ExtractedDocument`, `Section`, `Figure`, `Citation`, `BibReference`, `EligibilityVerdict`, `ExtractionRecord`, `AbstractRecord`, `AbstractLookupMeta` |
 
 ## Model dependency graph
 
@@ -436,8 +467,8 @@ context-window change produces a different digest. Stage 8 also folds
 | [`ScreeningMeta`](../src/laglitsynth/screening_abstracts/models.py) | `laglitsynth.screening_abstracts.models` | 3 |
 | [`DroppedRecord`](../src/laglitsynth/catalogue_dedup/models.py) | `laglitsynth.catalogue_dedup.models` | 2 |
 | [`DeduplicationMeta`](../src/laglitsynth/catalogue_dedup/models.py) | `laglitsynth.catalogue_dedup.models` | 2 |
-| [`RetrievalStatus`](../src/laglitsynth/fulltext_retrieval/models.py) | `laglitsynth.fulltext_retrieval.models` | 5 |
-| [`RetrievalRecord`](../src/laglitsynth/fulltext_retrieval/models.py) | `laglitsynth.fulltext_retrieval.models` | 5 |
+| [`PdfSource`](../src/laglitsynth/fulltext_retrieval/models.py) | `laglitsynth.fulltext_retrieval.models` | 5 |
+| [`PdfProvenanceRecord`](../src/laglitsynth/fulltext_retrieval/models.py) | `laglitsynth.fulltext_retrieval.models` | 5 |
 | [`RetrievalMeta`](../src/laglitsynth/fulltext_retrieval/models.py) | `laglitsynth.fulltext_retrieval.models` | 5 |
 | [`ExtractedDocument`](../src/laglitsynth/fulltext_extraction/models.py) | `laglitsynth.fulltext_extraction.models` | 6, 7, 8 |
 | [`ExtractionMeta`](../src/laglitsynth/fulltext_extraction/models.py) | `laglitsynth.fulltext_extraction.models` | 6 |
@@ -467,7 +498,7 @@ context-window change produces a different digest. Stage 8 also folds
 | 2. catalogue-dedup | Work | Work, DroppedRecord, DeduplicationMeta |
 | 2b. abstract-lookup | Work | AbstractRecord, AbstractLookupMeta |
 | 3. screening-abstracts | Work | ScreeningVerdict, ScreeningMeta |
-| 5. fulltext-retrieval | Work + ScreeningVerdict (inline join) | RetrievalRecord, RetrievalMeta |
+| 5. fulltext-retrieval | Work + ScreeningVerdict (inline join) | PdfProvenanceRecord, RetrievalMeta |
 | 6. fulltext-extraction | (PDFs) | ExtractedDocument, ExtractionMeta |
 | 7. fulltext-eligibility | Work + ScreeningVerdict (inline join), ExtractedDocument | EligibilityVerdict, EligibilityMeta |
 | 8. extraction-codebook | Work + EligibilityVerdict (inline join), ExtractedDocument | ExtractionRecord, ExtractionCodebookMeta |

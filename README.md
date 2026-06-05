@@ -40,8 +40,11 @@ implemented stage has its own doc under [`docs/`](docs/).
   relevance with a local Ollama-hosted LLM, emitting a `ScreeningVerdict`
   sidecar. See [`docs/screening-abstracts.md`](docs/screening-abstracts.md).
 - Stage 5 — `laglitsynth fulltext-retrieval` — join the deduplicated
-  catalogue against the screening verdicts at a threshold, then fetch PDFs
-  via manual pickup, OA URLs, and Unpaywall. See
+  catalogue against the screening verdicts at a threshold, then fill a
+  persistent, work-keyed PDF store under `data/pdfs/` from OA URLs and
+  Unpaywall, with `fulltext-retrieval-export` /
+  `fulltext-retrieval-import` to diversify the still-missing margin through
+  collaborators' institutional access. See
   [`docs/fulltext-retrieval.md`](docs/fulltext-retrieval.md).
 - Stage 6 — `laglitsynth fulltext-extraction` — parse retrieved PDFs into
   structured section text via GROBID. See

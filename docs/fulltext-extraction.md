@@ -118,7 +118,7 @@ class ExtractedDocument(BaseModel):
 ```
 
 `tei_path` is stored as the relative string `"tei/<work_id>.tei.xml"`,
-mirroring [`RetrievalRecord.pdf_path`](../src/laglitsynth/fulltext_retrieval/models.py).
+mirroring [`PdfProvenanceRecord.pdf_path`](../src/laglitsynth/fulltext_retrieval/models.py).
 Consumers join with their `output_dir` at read time — typically via
 `ExtractedDocument.open_tei(output_dir)`, which returns a
 `TeiDocument` wrapper over the TEI file on disk.

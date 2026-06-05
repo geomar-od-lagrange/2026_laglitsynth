@@ -1,7 +1,7 @@
 # Zotero export probe: how returned PDFs carry their DOI
 
 Investigative note for the Zotero-import open question in
-[fulltext-retrieval-diversified.md](../../plans/fulltext-retrieval-diversified.md):
+[fulltext-retrieval-diversified.md](../../plans/done/fulltext-retrieval-diversified.md):
 
 > How do PDFs returned from Zotero carry their DOI for matching -- via
 > Zotero's export filename, or a CSV mapping we round-trip? Confirm
@@ -73,7 +73,7 @@ rely on the export filename alone; import either follows the
 attachment-to-parent linkage on a Zotero export (e.g. an exported
 collection with files) or round-trips a CSV mapping DOI ->
 expected `<work-stem>.pdf` alongside the export, per the
-[diversified-retrieval direction](../../plans/fulltext-retrieval-diversified.md).
+[diversified-retrieval direction](../../plans/done/fulltext-retrieval-diversified.md).
 Record which approach the real export supports here once the probe has
 run, so the deferred import step can be designed against fact rather than
 guess.

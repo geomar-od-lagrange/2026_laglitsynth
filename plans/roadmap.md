@@ -102,23 +102,28 @@ Update this file when a plan is written, implemented, or archived.
   bounded backoff, `--skip-existing` re-processes only gaps. See
   [abstract-lookup.md](../docs/abstract-lookup.md).
 
+- [Diversifying full-text retrieval](done/fulltext-retrieval-diversified.md) —
+  stage 5 now maintains a persistent, work-keyed PDF store at
+  `data/pdfs/<stem>.pdf` with a `provenance.jsonl` sidecar
+  ([`PdfProvenanceRecord`](../src/laglitsynth/fulltext_retrieval/models.py)),
+  replacing the per-run `retrieval.jsonl` / `RetrievalRecord`.
+  `fulltext-retrieval` is rewired onto the store (`--data-dir`,
+  provenance-keyed `--skip-existing`, `--manual-dir` / `unretrieved.txt`
+  removed); `fulltext-retrieval-export` emits the DOI/RIS/round-trip-CSV gap
+  bundle and `fulltext-retrieval-import` ingests a collaborator's returned
+  folder (match by embedded-DOI / stem / sidecar, magic-byte validate,
+  sha256 dedup). Single-writer, A-driven drop-zone collaboration model
+  ([cross-machine.md](../docs/cross-machine.md)); manifest wiring deferred.
+  See [fulltext-retrieval.md](../docs/fulltext-retrieval.md).
+
 ## In flight
 
 - [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate is now planned as the [run manifest](run-manifest.md).
-- [Cross-machine + storage convention](../docs/cross-machine.md) — the third follow-up candidate from [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) landed as an authoritative doc: project = working-directory boundary, run-from-root + fixed-`data/` path contract, per-machine `.env`, and the safe sync direction per `data/` subdir (bulk PDFs/TEI union, per-run-id gate outputs authoritative-side-wins, deduplicated spine rsynced once read-only). Companion probe [scripts/probe_zotero.py](../scripts/probe_zotero.py) + note [zotero-export-probe.md](../docs/explorations/zotero-export-probe.md) start on the Zotero-import open question in [fulltext-retrieval-diversified.md](fulltext-retrieval-diversified.md).
+- [Cross-machine + storage convention](../docs/cross-machine.md) — the third follow-up candidate from [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) landed as an authoritative doc: project = working-directory boundary, run-from-root + fixed-`data/` path contract, per-machine `.env`, and the safe sync direction per `data/` subdir (bulk PDFs/TEI union, per-run-id gate outputs authoritative-side-wins, deduplicated spine rsynced once read-only). Companion probe [scripts/probe_zotero.py](../scripts/probe_zotero.py) + note [zotero-export-probe.md](../docs/explorations/zotero-export-probe.md) start on the Zotero-import open question in [fulltext-retrieval-diversified.md](done/fulltext-retrieval-diversified.md).
 
 ## Queued — ready to plan
 
 - [Run manifest](run-manifest.md) — one typed `RunManifest` file at `data/manifest.json`, written via `io.write_meta`, pinning the review's queries, the shared run-id, and an append-only per-stage input→output log. Each stage reads it to discover its upstream output and appends its own entry, dissolving the hand-carried path relay, the no-project-grouping gap, the "where was I" resume gap, and the cross-machine run-id-coordination gap from [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md). Settles the diversified-retrieval open question of where the persistent store lives relative to per-search runs.
-- [Diversifying full-text retrieval](fulltext-retrieval-diversified.md) —
-  build spec (no longer a deferred design direction): a persistent
-  work-keyed PDF store at `data/pdfs/<work-stem>.pdf` with a provenance
-  sidecar, plus `fulltext-retrieval-export` (DOI links + RIS + round-trip
-  CSV for the gaps) and `fulltext-retrieval-import` (ingest a returned
-  folder, match by DOI/stem, validate magic bytes, dedup). The store-
-  location open question is resolved by [run-manifest.md](run-manifest.md)
-  (store lives under `data/`, manifest indexes it); five-commit
-  implementation sequence is in the plan.
 
 ## Deferred until pipeline is feature-complete
 

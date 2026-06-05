@@ -14,7 +14,7 @@ manifest replaces that relay with "stage N reads the manifest, finds
 stage N−1's output, appends its own entry," travels with `data/` so
 the run-id crosses machines with the data instead of in someone's
 shell history, and is the natural home for the project boundary the
-[diversified-retrieval](fulltext-retrieval-diversified.md) plan is
+[diversified-retrieval](done/fulltext-retrieval-diversified.md) plan is
 blocked on. It is the A1/A2 ideas from the
 [usability review](../docs/explorations/usability-review.md) fused and
 viewed as *state* rather than *flags*.
@@ -257,4 +257,4 @@ visible, never silently skipped.
 - [src/laglitsynth/catalogue_dedup/dedup.py](../src/laglitsynth/catalogue_dedup/dedup.py)
 - [src/laglitsynth/fulltext_retrieval/retrieve.py](../src/laglitsynth/fulltext_retrieval/retrieve.py)
 - [docs/explorations/running-the-pipeline.md](../docs/explorations/running-the-pipeline.md)
-- [plans/fulltext-retrieval-diversified.md](fulltext-retrieval-diversified.md)
+- [plans/fulltext-retrieval-diversified.md](done/fulltext-retrieval-diversified.md)

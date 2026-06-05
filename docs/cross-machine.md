@@ -38,7 +38,7 @@ make this load-bearing:
   fallback for `--api-key` / `--email` when the flag is omitted.
 
 Stage outputs store **repo-relative** paths — for example a
-`RetrievalRecord`'s `pdf_path` is `data/fulltext-retrieval/pdfs/<work>.pdf`,
+`PdfProvenanceRecord`'s `pdf_path` is `pdfs/<stem>.pdf` under `data/`,
 not an absolute path. This is what makes the tree portable: rsync the
 same relative subtree to another machine, run from that machine's repo
 root, and the recorded paths resolve unchanged. The contract, stated
@@ -82,8 +82,23 @@ The stage graph suggests a natural split across machines:
   [`fulltext-retrieval`](interfaces.md#stage-5--fulltext-retrieval-exists)
   of paywalled PDFs via their own institutional access. This is the one
   stage that cannot be centralised, because access is per-person; the
-  [diversified-retrieval direction](../plans/fulltext-retrieval-diversified.md)
+  [diversified-retrieval design](../plans/done/fulltext-retrieval-diversified.md)
   is built around it.
+
+### Drop-zone rule for collaborator PDFs
+
+The shared PDF store is single-writer: only A (the operator driving the
+pipeline) ever writes `data/pdfs/` and its `provenance.jsonl`. Collaborators
+B–D never run a stage that writes A's `data/` — not retrieval, not import.
+They receive an export bundle, fetch PDFs through their own access, and hand
+A a *folder* of PDFs; A then runs
+[`fulltext-retrieval-import`](fulltext-retrieval.md#fulltext-retrieval-import)
+to integrate it. The shared file store is a drop zone for those folders, not
+a shared mutable store: B–D push artifacts, A integrates them serially.
+Because A is the sole writer, the whole-file `provenance.jsonl` never races —
+there is no second writer to overwrite a concurrent edit. This is what lets
+provenance stay a plain read-all/rewrite-atomic record with no journal or
+locking.
 
 ## Syncing `data/`: safe direction per subdir
 
@@ -132,10 +147,12 @@ whole-file outputs and `--delete`: rsyncing a stale `data/` over a fresh
 one with `--delete` removes outputs the fresh side produced. The rule is
 blunt and safe: **do not use `rsync --delete` on `data/` subdirs.** Union
 the bulk, and move per-run-id directories and the spine from their
-authoritative side. The append-only store the
-[diversified-retrieval direction](../plans/fulltext-retrieval-diversified.md)
-sketches for PDFs is partly a defense against exactly this — a store you
-can only ever union is one you cannot lose by syncing the wrong way.
+authoritative side. For the PDF store specifically, the
+[drop-zone rule](#drop-zone-rule-for-collaborator-pdfs) is the stronger
+guard against exactly this — a single writer (A) means
+`provenance.jsonl` is never synced from two diverging copies, because
+collaborators hand back folders of PDFs that A integrates serially, not a
+rewritten store.
 
 ## Caveat: run-ids are coordinated by hand
 
