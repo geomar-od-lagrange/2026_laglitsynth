@@ -7,22 +7,24 @@ from laglitsynth.models import RunMeta
 TOOL_NAME = "laglitsynth.fulltext_retrieval.retrieve"
 
 
-class RetrievalStatus(str, Enum):
-    retrieved_oa = "retrieved_oa"
-    retrieved_unpaywall = "retrieved_unpaywall"
-    retrieved_manual = "retrieved_manual"
-    abstract_only = "abstract_only"
-    failed = "failed"
+class PdfSource(str, Enum):
+    oa = "oa"  # OA URL on the Work record
+    unpaywall = "unpaywall"  # Unpaywall best_oa_location
+    zotero_import = "zotero-import"  # ingested from a Zotero-exported folder
+    manual = "manual"  # ingested from a plain folder drop
+    missing = "missing"  # no PDF yet; recorded so gaps are addressable
 
 
-class RetrievalRecord(BaseModel):
+class PdfProvenanceRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
     work_id: str
-    retrieval_status: RetrievalStatus
-    source_url: str | None = None
-    pdf_path: str | None = None
-    error: str | None = None
-    retrieved_at: str  # per-record wall-clock timestamp
+    stem: str  # data/pdfs/<stem>.pdf
+    doi: str | None  # None for DOI-less works
+    source: PdfSource
+    source_url: str | None  # the URL a PDF was fetched from, when applicable
+    pdf_path: str | None  # "data/pdfs/<stem>.pdf" when source != missing, else None
+    content_sha256: str | None  # of the PDF bytes; None when missing
+    obtained_at: str  # ISO-8601 UTC of the record
 
 
 class RetrievalMeta(BaseModel):
