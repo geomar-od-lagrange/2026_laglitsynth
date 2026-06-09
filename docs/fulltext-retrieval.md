@@ -159,6 +159,12 @@ to no manifest stem, or is not a real PDF, is reported and skipped. Import
 prints a summary — matched and copied, skipped, and how many manifest works
 are still missing after this import.
 
+A deferred enhancement would let contributors ignore filenames and sidecars
+entirely, matching returned PDFs against the closed manifest by broadened
+DOI extraction (XMP, link annotations) and a title fallback —
+[contributor-pdf-matching.md](explorations/contributor-pdf-matching.md)
+captures the design and why its data-dependent half waits for real returns.
+
 ## Collaboration model
 
 The store is single-writer. One person — call them A — drives the pipeline
