@@ -25,7 +25,6 @@ from typing import Any, Protocol
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
 from laglitsynth.config import resolve_yaml_arg
-from laglitsynth.extraction_codebook.models import SourceBasis
 
 
 class ExtractionRecordProto(Protocol):
@@ -36,7 +35,6 @@ class ExtractionRecordProto(Protocol):
     """
 
     work_id: str
-    source_basis: SourceBasis
     reason: str | None
     seed: int | None
     truncated: bool
@@ -203,17 +201,16 @@ class CodebookContext:
 def build_record_model(payload_model: type[BaseModel]) -> type[BaseModel]:
     """Compose the per-work ``ExtractionRecord`` class around ``payload_model``.
 
-    Adds the identification block (``work_id``, ``source_basis``,
-    ``reason``, ``seed``, ``truncated``, ``raw_response``) on top of
-    the payload model's content fields. Keeping the record class
-    dynamic — built once at startup from the loaded codebook — means
-    record validation tracks the codebook spec without a class-edit.
+    Adds the identification block (``work_id``, ``reason``, ``seed``,
+    ``truncated``, ``raw_response``) on top of the payload model's
+    content fields. Keeping the record class dynamic — built once at
+    startup from the loaded codebook — means record validation tracks
+    the codebook spec without a class-edit.
     """
     return create_model(
         "ExtractionRecord",
         __base__=payload_model,
         work_id=(str, ...),
-        source_basis=(SourceBasis, ...),
         reason=(str | None, ...),
         seed=(int | None, ...),
         truncated=(bool, ...),

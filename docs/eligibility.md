@@ -12,10 +12,13 @@ See [external-services.md](external-services.md) for Ollama setup.
 
 ## Prototype scope
 
-A single LLM pass over the extracted text (or the abstract for
-abstract-only works). Same flag-don't-filter pattern as
-[`screening-abstracts`](screening-abstracts.md): structured JSON output,
-Pydantic validation, verdicts stored in a sidecar keyed by `work_id`.
+A single LLM pass over the extracted full text. Same flag-don't-filter
+pattern as [`screening-abstracts`](screening-abstracts.md): structured
+JSON output, Pydantic validation, verdicts stored in a sidecar keyed by
+`work_id`. This stage is **full-text-only** — a work without a usable
+full-text extraction is not assessed at all (no verdict row, no count);
+the criteria here turn on numerical-method detail that abstracts do not
+carry, so an abstract is not a valid basis for an eligibility decision.
 
 The eligibility criteria below are provisional placeholders for the
 prototype. They are deliberately broad — designed to let papers through,
@@ -43,40 +46,43 @@ The stage consumes three artifacts:
 - The extraction JSONL ([`ExtractedDocument`](../src/laglitsynth/fulltext_extraction/models.py)
   records from [`fulltext-extraction`](fulltext-extraction.md)).
 
-Works that have an `ExtractedDocument` with non-empty
-[`sections()`](../src/laglitsynth/fulltext_extraction/tei.py) are
-assessed on their full text. Works without a usable extraction fall back
-to the abstract. Works without either are recorded with a sentinel
-verdict and no LLM call.
+Only works that have an `ExtractedDocument` are assessed: the active set
+fed to the LLM is gated on extraction presence, so a work without a
+matching extraction never enters the loop, produces no verdict row, and
+is not counted. (The "what is still missing" gap is already visible
+upstream in the stage 5 `missing` provenance records — flagging absent
+full text again here would be redundant.) A work whose extraction parses
+but renders empty TEI is recorded with a `tei-parse-failure` sentinel,
+since a paper we hold a PDF for but cannot read is a broken extraction
+worth surfacing.
 
 ## Data model
 
 ### EligibilityVerdict
 
-One per catalogue work that reached this stage.
+One per catalogue work that reached this stage (i.e. that had a
+full-text extraction).
 
 ```python
-SourceBasis = Literal["full_text", "abstract_only", "none"]
-
-
 class EligibilityVerdict(BaseModel):
     model_config = ConfigDict(extra="forbid")
     work_id: str
     eligible: bool | None              # None for sentinel-reason skips
-    source_basis: SourceBasis
     reason: str | None                 # LLM free-text or sentinel
     seed: int | None                   # Ollama seed used; None for sentinels
     raw_response: str | None           # LLM's raw message content; None when no call was made
 ```
 
-`eligible` is tri-state. `True` and `False` are real LLM verdicts;
-`None` indicates a sentinel skip — the LLM was not called or its output
-could not be parsed. See [Sentinel reasons](#sentinel-reasons) below.
+Every verdict is full-text-based, so there is no `source_basis` field —
+the basis is implicit. `eligible` is tri-state. `True` and `False` are
+real LLM verdicts; `None` indicates a sentinel skip — the LLM was not
+called or its output could not be parsed. See
+[Sentinel reasons](#sentinel-reasons) below.
 
 `raw_response` captures the LLM's message text before parsing. Present
 on successful verdicts and on `llm-parse-failure` sentinels (so a
-reviewer can see what the model actually said); `None` on sentinels
-that did not call the LLM (`no-source`, `tei-parse-failure`).
+reviewer can see what the model actually said); `None` on the
+`tei-parse-failure` sentinel that did not call the LLM.
 
 The LLM's response is validated through a private
 [`_EligibilityPayload`](../src/laglitsynth/fulltext_eligibility/models.py)
@@ -97,11 +103,10 @@ class EligibilityMeta(BaseModel):
     input_count: int
     eligible_count: int
     excluded_count: int
-    no_source_count: int
     tei_parse_failure_count: int
     llm_parse_failure_count: int
     llm_timeout_count: int
-    by_source_basis: dict[str, int]
+    criterion: str        # the eligibility-criteria system prompt, verbatim
 ```
 
 `run` and `llm` are the shared reproducibility nests from
@@ -112,10 +117,15 @@ eligibility-criteria system prompt, `USER_TEMPLATE`, and the Ollama
 `num_ctx` setting, so any prompt- or context-window change shifts the
 hash.
 
-Per-sentinel counts (`no_source_count`, `tei_parse_failure_count`,
-`llm_parse_failure_count`, `llm_timeout_count`) let operators diagnose
-a run without re-reading `verdicts.jsonl`. The count symmetry with
-stage 8 (`extraction-codebook`) is deliberate.
+`input_count` is the number of works that reached the stage (had a
+full-text extraction) — works skipped for lack of full text are neither
+counted nor flagged. Per-sentinel counts (`tei_parse_failure_count`,
+`llm_parse_failure_count`, `llm_timeout_count`) let operators diagnose a
+run without re-reading `verdicts.jsonl`. There is no `no_source_count`
+or `by_source_basis` — with full-text the only basis, a per-basis
+breakdown carries no information. `criterion` records the criteria
+system prompt verbatim so the review export can embed the same question
+the LLM saw without re-loading the criteria YAML.
 
 ## Storage layout
 
@@ -131,17 +141,18 @@ See [configs.md](configs.md) for the run-id directory model and
 sole output of this stage. Downstream stages that need the eligible work
 set join the catalogue against this sidecar at their own read time.
 
-## Fallback cascade
+## Per-work flow
 
-For each catalogue work, in catalogue order:
+The active set is gated on extraction presence before the loop, so each
+work reaching `_assess_one` has an `ExtractedDocument`. For each such
+work:
 
-1. If an `ExtractedDocument` exists and its
-   [`sections()`](../src/laglitsynth/fulltext_extraction/tei.py) is
-   non-empty, render the full text and take the `full_text` branch.
-2. Else, if `work.abstract` is non-empty, render the abstract and take
-   the `abstract_only` branch.
-3. Else, record `source_basis="none"`, `eligible=None`,
-   `reason="no-source"`. No LLM call.
+1. Render the TEI. If it raises `lxml.etree.XMLSyntaxError`, record a
+   `tei-parse-failure` sentinel (no LLM call).
+2. If the render is empty (valid XML, no body content), record a
+   `tei-parse-failure` sentinel (no LLM call) — a paper we hold a PDF
+   for but cannot read is a broken extraction.
+3. Otherwise call the LLM and record its verdict.
 
 ## Sentinel reasons
 
@@ -149,16 +160,14 @@ All sentinels set `eligible=None` and `seed=None`. Downstream consumers
 join the catalogue against `verdicts.jsonl` filtering for `eligible is True`,
 so sentinel records are naturally excluded from the active work set.
 
-| Reason | Branch | Trigger |
-|---|---|---|
-| `no-source` | `none` | No `ExtractedDocument`, empty TEI body, and no abstract. |
-| `tei-parse-failure` | `full_text` | `sections()` raises `lxml.etree.XMLSyntaxError`. No abstract fallback — a malformed TEI is an operator-visible bug. |
-| `llm-parse-failure` | whichever branch called the LLM | The LLM returned output that could not be parsed into `{"eligible": bool, "reason": str}`. |
-| `llm-timeout` | whichever branch called the LLM | The OpenAI client raised `APITimeoutError` / `APIConnectionError` after all retries exhausted. The OpenAI client is constructed with `timeout=300s` and `max_retries=3` so a single hang on a long full-text prompt does not kill the stage. |
+| Reason | Trigger |
+|---|---|
+| `tei-parse-failure` | `sections()` raises `lxml.etree.XMLSyntaxError`, or renders empty. A paper with a PDF but unreadable TEI is an operator-visible bug, unlike a plain absence of full text (which is silently skipped). |
+| `llm-parse-failure` | The LLM returned output that could not be parsed into `{"eligible": bool, "reason": str}`. |
+| `llm-timeout` | The OpenAI client raised `APITimeoutError` / `APIConnectionError` after all retries exhausted. The OpenAI client is constructed with `timeout=300s` and `max_retries=3` so a single hang on a long full-text prompt does not kill the stage. |
 
-Empty-body TEI (valid XML, no content) returns `[]` from `sections()`
-and falls back to the abstract per step 2 — extraction succeeded, just
-produced nothing extractable.
+There is no `no-source` sentinel: a work without full text is simply not
+processed, not flagged.
 
 ## Surfacing TEI to the LLM
 
@@ -168,8 +177,8 @@ whose first line is the title (when present) followed by its paragraphs
 (one per line); nested children contribute further blocks. Blocks are
 joined by blank lines. Figures and bibliography are dropped — the three
 criteria are answered from body text. Empty `sections()` returns the
-empty string, which the caller treats as a signal to fall back to the
-abstract.
+empty string, which the caller records as a `tei-parse-failure`
+sentinel (there is no abstract fallback).
 
 ## CLI interface
 
@@ -199,7 +208,7 @@ The resolved output directory is `<data-dir>/fulltext-eligibility/<run-id>/`.
 - `--screening-threshold`: relevance score cutoff 0–100 (default: 50).
   Works whose stage 3 score is at or above this threshold are assessed.
 - `--extractions`: the extraction JSONL (`ExtractedDocument` records).
-  Works without a matching record fall back to the abstract.
+  Works without a matching record are skipped (not assessed, not counted).
 - `--extraction-output-dir`: directory that
   `ExtractedDocument.tei_path` is relative to. Defaults to the parent
   of `--extractions`. See
@@ -258,13 +267,42 @@ Criteria:
 
 Respond with JSON: {"eligible": true|false, "reason": "<one sentence>"}.
 
-User: <source_basis>:
+User: full_text:
 <rendered text>
 ```
 
 `response_format={"type": "json_object"}`, `temperature=0.8`, per-call
 random seed recorded on the verdict. Same shape as
 [`screening-abstracts`](screening-abstracts.md).
+
+## Review export
+
+`fulltext-eligibility-export` writes an XLSX review workbook
+([`export.py`](../src/laglitsynth/fulltext_eligibility/export.py)) for
+human spot-checking the LLM stage and tuning its prompt. It is XLSX-only
+— the JSONL sidecar is the machine-readable form. The workbook has an
+`Index` sheet (one row per sampled work, with the `eligible` /
+`llm_reason` verdict inline and a hyperlink to the per-work tab, as a
+light navigation aid) and one tab per sampled work. The per-work tab is
+the working surface: a bibliographic block, the eligibility criterion
+pulled verbatim from `eligibility-meta.json` so the reviewer sees the
+same question the LLM saw, reviewer placeholders (`reviewer_eligible` /
+`reviewer_reason`), and a collapsed LLM-verdict block.
+
+```
+laglitsynth fulltext-eligibility-export \
+    --verdicts data/fulltext-eligibility/<run-id>/verdicts.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    [--meta data/fulltext-eligibility/<run-id>/eligibility-meta.json] \
+    [--output <verdicts parent>/review.xlsx] \
+    [--n-subset N] [--subset-seed 0]
+```
+
+`--n-subset` / `--subset-seed` draw a reproducible random sample (the
+intended workflow is digging into a subset and generalizing, not a wide
+all-works scan); unset or `>=` the verdict count emits the full set in
+verdict order. A verdict whose `work_id` is absent from the catalogue
+raises a `ValueError` naming the offending id.
 
 ## What to defer
 

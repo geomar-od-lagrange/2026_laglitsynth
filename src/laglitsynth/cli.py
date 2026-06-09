@@ -11,8 +11,10 @@ from laglitsynth.abstract_lookup.lookup import build_subparser as build_abstract
 from laglitsynth.catalogue_dedup.dedup import build_subparser as build_dedup_subparser
 from laglitsynth.catalogue_fetch.fetch import build_subparser as build_fetch_subparser
 from laglitsynth.config import load_config
+from laglitsynth.extraction_codebook.export import build_subparser as build_extraction_codebook_export_subparser
 from laglitsynth.extraction_codebook.extract import build_subparser as build_extraction_codebook_subparser
 from laglitsynth.fulltext_eligibility.eligibility import build_subparser as build_eligibility_subparser
+from laglitsynth.fulltext_eligibility.export import build_subparser as build_eligibility_export_subparser
 from laglitsynth.fulltext_extraction.extract import build_subparser as build_extraction_subparser
 from laglitsynth.fulltext_retrieval.export import build_subparser as build_retrieval_export_subparser
 from laglitsynth.fulltext_retrieval.import_ import build_subparser as build_retrieval_import_subparser
@@ -33,7 +35,9 @@ _BUILDERS = (
     build_retrieval_import_subparser,
     build_extraction_subparser,
     build_eligibility_subparser,
+    build_eligibility_export_subparser,
     build_extraction_codebook_subparser,
+    build_extraction_codebook_export_subparser,
     build_run_id_subparser,
 )
 

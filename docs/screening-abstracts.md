@@ -157,70 +157,27 @@ is needed, set `temperature=0` and note that this changes the hash.
 ## Human review export
 
 `laglitsynth screening-abstracts-export` joins `verdicts.jsonl` with the
-dedup catalogue and writes a review file for human spot-checking. The
-`--format` flag (required) selects between a flat CSV and a per-work XLSX
-workbook.
+dedup catalogue and writes an XLSX review workbook for human
+spot-checking. The export is XLSX-only — `verdicts.jsonl` is the
+machine-readable form, the workbook is the human one. (The earlier CSV
+path existed only to round-trip `reviewer_decision` / `reviewer_reason`
+into a stage-4 ingestor that the verdicts-only cutover deleted; it has
+been retired along with the `--format` flag.)
 
-### CSV format
-
-```bash
-laglitsynth screening-abstracts-export \
-    --format csv \
-    --verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl
-```
-
-Default output: `<verdicts parent>/review.csv`. Override with `--output`.
-
-The CSV is UTF-8 with BOM (so Excel-on-Windows renders non-ASCII
-correctly) and uses the stdlib `csv` dialect (`QUOTE_MINIMAL`, `\r\n`),
-round-tripping commas, quotes, and embedded newlines through every
-spreadsheet tested.
-
-#### Columns
-
-| # | Column | Source |
-|---|---|---|
-| 1 | `work_id` | verdict |
-| 2 | `title` | catalogue |
-| 3 | `doi` | catalogue |
-| 4 | `publication_year` | catalogue |
-| 5 | `abstract` | catalogue |
-| 6 | `relevance_score` | verdict (blank for sentinels) |
-| 7 | `llm_reason` | verdict |
-| 8 | `reviewer_decision` | empty — filled by reviewer |
-| 9 | `reviewer_reason` | empty — filled by reviewer |
-| 10 | `raw_response` | verdict (blank when no call was made) |
-
-Sentinel verdicts (`reason="no-abstract"` or `"llm-parse-failure"`) render
-`relevance_score` as an empty cell; `llm_reason` keeps the sentinel string
-so the reviewer can filter on it. A `work_id` present in the verdicts file
-but absent from the catalogue aborts the export — the two inputs are
-expected to come from the same pipeline run.
-
-The export is read-only. When a stage-4 ingestor lands it will read only
-`work_id`, `reviewer_decision`, and `reviewer_reason` from the edited CSV;
-edits to the other columns are ignored by design.
-
-### XLSX format
-
-The XLSX format writes a workbook with one `Index` sheet plus one tab per
-included work. The per-work tab puts the bibliographic block (title,
-authors, journal, year, doi, openalex link, abstract) at the top, the
-screening criterion + reviewer-score cells in the middle, and the LLM
-verdict in a collapsed group at the bottom — so the reviewer scores
-without being primed by the LLM's number, with the LLM's verdict one
-click away for cross-check.
+The workbook has one `Index` sheet plus one tab per included work. The
+per-work tab puts the bibliographic block (title, authors, journal,
+year, doi, openalex link, abstract) at the top, the screening criterion
++ reviewer-score cells in the middle, and the LLM verdict in a collapsed
+group at the bottom — so the reviewer scores without being primed by the
+LLM's number, with the LLM's verdict one click away for cross-check.
 
 ```bash
 laglitsynth screening-abstracts-export \
-    --format xlsx \
     --verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
     --catalogue data/catalogue-dedup/deduplicated.jsonl
 
 # Spot-check a reproducible random sample of 30 works.
 laglitsynth screening-abstracts-export \
-    --format xlsx \
     --verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
     --catalogue data/catalogue-dedup/deduplicated.jsonl \
     --n-subset 30 --subset-seed 1
@@ -230,19 +187,18 @@ Default output: `<verdicts parent>/review.xlsx`. Override with `--output`.
 `--meta` defaults to `<verdicts parent>/screening-meta.json` and is read
 to embed the screening criterion (the user prompt) and the LLM
 fingerprint (`model`, `temperature`, `prompt_sha256`) into each per-work
-sheet.
+sheet. A `work_id` present in the verdicts file but absent from the
+catalogue aborts the export — the two inputs are expected to come from
+the same pipeline run.
 
-`--n-subset` and `--subset-seed` are valid only with `--format xlsx`; passing
-either with `--format csv` exits with an error.
-
-#### Sampling
+### Sampling
 
 `--n-subset N` draws a uniform random sample of `N` verdicts using
 `--subset-seed` (default: `0`) and emits them in their original verdict-file
 order. When `N >= len(verdicts)` or `--n-subset` is unset the whole set is
 emitted — the same command covers both "spot-check 30" and "all of them."
 
-#### Sheet layout
+### Sheet layout
 
 The `Index` sheet has three reviewer-identity rows above the table —
 `reviewer_name`, `reviewer_email`, `review_date` — followed by the

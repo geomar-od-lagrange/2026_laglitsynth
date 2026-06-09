@@ -114,28 +114,37 @@ export's `pdf-manifest.csv`.
 
 | Path | Model | Description |
 |---|---|---|
-| `data/fulltext-eligibility/<run-id>/verdicts.jsonl` | [`EligibilityVerdict`](../src/laglitsynth/fulltext_eligibility/models.py) | Per-work eligibility decision (tri-state with sentinel reasons) |
-| `data/fulltext-eligibility/<run-id>/eligibility-meta.json` | [`EligibilityMeta`](../src/laglitsynth/fulltext_eligibility/models.py) | Counts by source basis, nested `run` + `llm` |
+| `data/fulltext-eligibility/<run-id>/verdicts.jsonl` | [`EligibilityVerdict`](../src/laglitsynth/fulltext_eligibility/models.py) | Per-work eligibility decision (tri-state with sentinel reasons; no `source_basis` — full-text-only) |
+| `data/fulltext-eligibility/<run-id>/eligibility-meta.json` | [`EligibilityMeta`](../src/laglitsynth/fulltext_eligibility/models.py) | Sentinel counts + verbatim `criterion`, nested `run` + `llm` |
 | `data/fulltext-eligibility/<run-id>/config.yaml` | (YAML) | Resolved CLI+config, criteria inlined |
+| `data/fulltext-eligibility/<run-id>/review.xlsx` | (XLSX, on demand) | `fulltext-eligibility-export` review workbook (Index + per-work tabs) |
 
 Stage 7 joins the deduplicated catalogue against stage 3's `verdicts.jsonl`
-at the `--screening-threshold` cutoff to determine the active work set,
-then runs eligibility assessment on each active work. `verdicts.jsonl` is
-the source of truth and the sole output; there is no derived `eligible.jsonl`.
+at the `--screening-threshold` cutoff, then gates that active set on
+extraction presence — it is full-text-only, so works without an
+`ExtractedDocument` are skipped (no verdict row, no count), not flagged.
+`verdicts.jsonl` is the source of truth and the sole machine output; there
+is no derived `eligible.jsonl`. The optional `review.xlsx` is a human
+spot-check artifact written by `fulltext-eligibility-export`.
 
 ### Stage 8 — extraction-codebook *(exists)*
 
 | Path | Model | Description |
 |---|---|---|
-| `<data-dir>/extraction-codebook/<run-id>/records.jsonl` | `ExtractionRecord` (built dynamically by [`build_record_model`](../src/laglitsynth/extraction_codebook/codebook.py)) | One codebook record per input work (successes and sentinels) |
-| `<data-dir>/extraction-codebook/<run-id>/extraction-codebook-meta.json` | [`ExtractionCodebookMeta`](../src/laglitsynth/extraction_codebook/models.py) | Per-branch counts, nested `run` + `llm` |
+| `<data-dir>/extraction-codebook/<run-id>/records.jsonl` | `ExtractionRecord` (built dynamically by [`build_record_model`](../src/laglitsynth/extraction_codebook/codebook.py); no `source_basis` — full-text-only) | One codebook record per processed work (successes and sentinels) |
+| `<data-dir>/extraction-codebook/<run-id>/extraction-codebook-meta.json` | [`ExtractionCodebookMeta`](../src/laglitsynth/extraction_codebook/models.py) | Sentinel counts, nested `run` + `llm` |
 | `<data-dir>/extraction-codebook/<run-id>/config.yaml` | resolved CLI+config (codebook inlined) | Self-contained run snapshot; see [configs.md](configs.md) |
+| `<data-dir>/extraction-codebook/<run-id>/review.xlsx` | (XLSX, on demand) | `extraction-codebook-export` review workbook (Index + per-work tabs) |
 
 Stage 8 joins the deduplicated catalogue against stage 7's `verdicts.jsonl`
-to determine eligible works. Every input work produces exactly one record;
-sentinel records carry `None` in all content fields and a `reason` from the
-vocabulary in [extraction-codebook.md](extraction-codebook.md). Stage 9 and
-stages 10–12 read `records.jsonl` directly.
+to determine eligible works, then gates that set on extraction presence —
+it is full-text-only, so eligible works without an `ExtractedDocument` are
+skipped (no record row, no count). Every processed work produces exactly
+one record; sentinel records carry `None` in all content fields and a
+`reason` from the vocabulary in
+[extraction-codebook.md](extraction-codebook.md). Stage 9 and stages 10–12
+read `records.jsonl` directly. The optional `review.xlsx` is a human
+spot-check artifact written by `extraction-codebook-export`.
 
 ### Stage 9 — extraction-adjudication
 
@@ -192,12 +201,11 @@ laglitsynth screening-abstracts INPUT PROMPT \
     [--model MODEL] [--screening-threshold N] \
     [--base-url URL] [--max-records N] [--concurrency N] [--dry-run]
 
-# Stage 3 — screening-abstracts-export (human review)
+# Stage 3 — screening-abstracts-export (human review, XLSX only)
 laglitsynth screening-abstracts-export \
-    --format csv|xlsx \
     --verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
     --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    [--output PATH] [--n-subset N] [--subset-seed N]
+    [--meta PATH] [--output PATH] [--n-subset N] [--subset-seed N]
 
 # Stage 5 — fulltext-retrieval (automatic OA + Unpaywall into data/pdfs/)
 laglitsynth fulltext-retrieval \
@@ -243,6 +251,12 @@ laglitsynth fulltext-eligibility \
     [--skip-existing] [--max-records N] [--dry-run] \
     [--model MODEL] [--base-url URL]
 
+# Stage 7 — fulltext-eligibility-export (human review, XLSX only)
+laglitsynth fulltext-eligibility-export \
+    --verdicts data/fulltext-eligibility/<run-id>/verdicts.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    [--meta PATH] [--output PATH] [--n-subset N] [--subset-seed N]
+
 # Stage 8 — extraction-codebook
 laglitsynth extraction-codebook \
     --catalogue data/catalogue-dedup/deduplicated.jsonl \
@@ -253,6 +267,13 @@ laglitsynth extraction-codebook \
     [--codebook FILE] [--config FILE] \
     [--skip-existing] [--max-records N] [--dry-run] \
     [--model MODEL] [--base-url URL]
+
+# Stage 8 — extraction-codebook-export (human review, XLSX only)
+laglitsynth extraction-codebook-export \
+    --records data/extraction-codebook/<run-id>/records.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    [--codebook FILE] [--meta PATH] [--output PATH] \
+    [--n-subset N] [--subset-seed N]
 ```
 
 Stages 3, 7 and 8 use the run-id directory model: outputs land at
@@ -511,8 +532,7 @@ context-window change produces a different digest. Stage 8 also folds
 
 ### No plan exists
 
-- Stage 10 (quantitative synthesis) — aggregation logic, output schema,
-  uncertainty propagation from `source_basis`.
+- Stage 10 (quantitative synthesis) — aggregation logic, output schema.
 - Stage 11 (thematic synthesis) — clustering approach, human review
   workflow, taxonomy schema.
 - Stage 12 (narrative synthesis) — template structure, evidence-grounding

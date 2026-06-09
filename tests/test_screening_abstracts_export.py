@@ -1,19 +1,16 @@
-"""Tests for screening_abstracts.export (CSV and XLSX formats)."""
+"""Tests for screening_abstracts.export (XLSX review workbook)."""
 
 from __future__ import annotations
 
-import csv
 from pathlib import Path
 
 import pytest
 from openpyxl import load_workbook
 from pydantic import BaseModel
 
+from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.screening_abstracts.export import (
-    COLUMNS,
     _unique_sheet_name,
-    build_row,
-    export_review_csv,
     export_review_xlsx,
     sample_verdicts,
     short_work_id,
@@ -34,7 +31,7 @@ def _write_inputs(
     works: list[Work],
     verdicts: list[ScreeningVerdict],
     *,
-    output_suffix: str = "csv",
+    output_suffix: str = "xlsx",
 ) -> tuple[Path, Path, Path]:
     catalogue_path = tmp_path / "dedup.jsonl"
     verdicts_path = tmp_path / "verdicts.jsonl"
@@ -42,117 +39,6 @@ def _write_inputs(
     _write_jsonl(catalogue_path, list(works))
     _write_jsonl(verdicts_path, list(verdicts))
     return verdicts_path, catalogue_path, output_path
-
-
-# ── CSV ───────────────────────────────────────────────────────────────────────
-
-
-def test_export_round_trip(tmp_path: Path) -> None:
-    works = [_make_work("W1"), _make_work("W2", abstract=None)]
-    verdicts = [
-        ScreeningVerdict(
-            work_id="W1",
-            relevance_score=80,
-            reason="relevant",
-            seed=42,
-            raw_response='{"relevance_score": 80, "reason": "relevant"}',
-        ),
-        ScreeningVerdict(
-            work_id="W2",
-            relevance_score=None,
-            reason="no-abstract",
-            seed=None,
-            raw_response=None,
-        ),
-    ]
-    verdicts_path, catalogue_path, output_path = _write_inputs(tmp_path, works, verdicts)
-
-    count = export_review_csv(verdicts_path, catalogue_path, output_path)
-
-    assert count == 2
-    with open(output_path, encoding="utf-8-sig", newline="") as f:
-        rows = list(csv.DictReader(f))
-    assert [r["work_id"] for r in rows] == ["W1", "W2"]
-    assert rows[0]["relevance_score"] == "80"
-    assert rows[0]["llm_reason"] == "relevant"
-    assert rows[0]["reviewer_decision"] == ""
-    assert rows[0]["reviewer_reason"] == ""
-    assert rows[0]["abstract"] == "An abstract."
-    # sentinel — empty relevance_score cell, sentinel reason preserved
-    assert rows[1]["relevance_score"] == ""
-    assert rows[1]["llm_reason"] == "no-abstract"
-    assert rows[1]["abstract"] == ""
-
-
-def test_export_special_characters_survive(tmp_path: Path) -> None:
-    tricky_abstract = 'Line 1, with comma\nLine 2 with "quotes" and, more commas'
-    works = [_make_work("W1", abstract=tricky_abstract)]
-    verdicts = [
-        ScreeningVerdict(
-            work_id="W1",
-            relevance_score=50,
-            reason='Uses "X, Y"',
-            seed=1,
-        )
-    ]
-    verdicts_path, catalogue_path, output_path = _write_inputs(tmp_path, works, verdicts)
-
-    export_review_csv(verdicts_path, catalogue_path, output_path)
-
-    with open(output_path, encoding="utf-8-sig", newline="") as f:
-        rows = list(csv.DictReader(f))
-    assert rows[0]["abstract"] == tricky_abstract
-    assert rows[0]["llm_reason"] == 'Uses "X, Y"'
-
-
-def test_export_raises_on_missing_work(tmp_path: Path) -> None:
-    works = [_make_work("W1")]
-    verdicts = [
-        ScreeningVerdict(work_id="W_missing", relevance_score=None, reason="?"),
-    ]
-    verdicts_path, catalogue_path, output_path = _write_inputs(tmp_path, works, verdicts)
-
-    with pytest.raises(ValueError, match="W_missing"):
-        export_review_csv(verdicts_path, catalogue_path, output_path)
-
-
-def test_export_column_order(tmp_path: Path) -> None:
-    works = [_make_work("W1")]
-    verdicts = [ScreeningVerdict(work_id="W1", relevance_score=80, reason="ok", seed=1)]
-    verdicts_path, catalogue_path, output_path = _write_inputs(tmp_path, works, verdicts)
-
-    export_review_csv(verdicts_path, catalogue_path, output_path)
-
-    with open(output_path, encoding="utf-8-sig", newline="") as f:
-        header = next(csv.reader(f))
-    assert tuple(header) == COLUMNS
-
-
-def test_export_writes_utf8_bom(tmp_path: Path) -> None:
-    works = [_make_work("W1")]
-    verdicts = [ScreeningVerdict(work_id="W1", relevance_score=80, reason="ok", seed=1)]
-    verdicts_path, catalogue_path, output_path = _write_inputs(tmp_path, works, verdicts)
-
-    export_review_csv(verdicts_path, catalogue_path, output_path)
-
-    with open(output_path, "rb") as f:
-        head = f.read(3)
-    assert head == b"\xef\xbb\xbf"
-
-
-def test_build_row_empty_fields() -> None:
-    work = _make_work(
-        "W1", title=None, doi=None, publication_year=None, abstract=None
-    )
-    verdict = ScreeningVerdict(work_id="W1", relevance_score=None, reason=None)
-    row = build_row(verdict, work)
-    assert row["title"] == ""
-    assert row["doi"] == ""
-    assert row["publication_year"] == ""
-    assert row["abstract"] == ""
-    assert row["relevance_score"] == ""
-    assert row["llm_reason"] == ""
-    assert row["raw_response"] == ""
 
 
 # ── XLSX ──────────────────────────────────────────────────────────────────────
@@ -498,83 +384,7 @@ def test_xlsx_export_raises_on_missing_work(tmp_path: Path) -> None:
 # ── CLI smoke ─────────────────────────────────────────────────────────────────
 
 
-def test_cli_csv_default_output(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    from laglitsynth.cli import main
-
-    works = [_make_work("W1")]
-    verdicts = [ScreeningVerdict(work_id="W1", relevance_score=80, reason="ok", seed=1)]
-    verdicts_path, catalogue_path, _ = _write_inputs(tmp_path, works, verdicts)
-
-    main(
-        [
-            "screening-abstracts-export",
-            "--format",
-            "csv",
-            "--verdicts",
-            str(verdicts_path),
-            "--catalogue",
-            str(catalogue_path),
-        ]
-    )
-
-    # Default resolves to <verdicts parent>/review.csv
-    assert (tmp_path / "review.csv").exists()
-
-
-def test_cli_csv_custom_output(tmp_path: Path) -> None:
-    from laglitsynth.cli import main
-
-    works = [_make_work("W1")]
-    verdicts = [ScreeningVerdict(work_id="W1", relevance_score=80, reason="ok", seed=1)]
-    verdicts_path, catalogue_path, _ = _write_inputs(tmp_path, works, verdicts)
-    custom = tmp_path / "custom" / "my-review.csv"
-
-    main(
-        [
-            "screening-abstracts-export",
-            "--format",
-            "csv",
-            "--verdicts",
-            str(verdicts_path),
-            "--catalogue",
-            str(catalogue_path),
-            "--output",
-            str(custom),
-        ]
-    )
-
-    assert custom.exists()
-
-
-def test_cli_csv_rejects_n_subset(tmp_path: Path) -> None:
-    """--n-subset with --format csv must fail with a clear error."""
-    from laglitsynth.cli import main
-
-    works = [_make_work("W1")]
-    verdicts = [ScreeningVerdict(work_id="W1", relevance_score=80, reason="ok", seed=1)]
-    verdicts_path, catalogue_path, _ = _write_inputs(tmp_path, works, verdicts)
-
-    with pytest.raises(SystemExit) as exc_info:
-        main(
-            [
-                "screening-abstracts-export",
-                "--format",
-                "csv",
-                "--verdicts",
-                str(verdicts_path),
-                "--catalogue",
-                str(catalogue_path),
-                "--n-subset",
-                "10",
-            ]
-        )
-
-    assert exc_info.value.code == "--n-subset and --subset-seed are only valid with --format xlsx"
-
-
-def test_cli_xlsx_default_output(tmp_path: Path) -> None:
+def test_cli_default_output(tmp_path: Path) -> None:
     from laglitsynth.cli import main
 
     works = [_make_work("https://openalex.org/W1")]
@@ -586,15 +396,11 @@ def test_cli_xlsx_default_output(tmp_path: Path) -> None:
             seed=1,
         )
     ]
-    verdicts_path, catalogue_path, _ = _write_inputs(
-        tmp_path, works, verdicts, output_suffix="xlsx"
-    )
+    verdicts_path, catalogue_path, _ = _write_inputs(tmp_path, works, verdicts)
 
     main(
         [
             "screening-abstracts-export",
-            "--format",
-            "xlsx",
             "--verdicts",
             str(verdicts_path),
             "--catalogue",
@@ -602,11 +408,41 @@ def test_cli_xlsx_default_output(tmp_path: Path) -> None:
         ]
     )
 
+    # Default resolves to <verdicts parent>/review.xlsx
     assert (tmp_path / "review.xlsx").exists()
 
 
-def test_cli_xlsx_subset(tmp_path: Path) -> None:
-    """--format xlsx --n-subset N produces a per-work-tab workbook with N sheets."""
+def test_cli_rejects_format_flag(tmp_path: Path) -> None:
+    """--format is gone: passing it is an unknown argument."""
+    from laglitsynth.cli import main
+
+    works = [_make_work("https://openalex.org/W1")]
+    verdicts = [
+        ScreeningVerdict(
+            work_id="https://openalex.org/W1",
+            relevance_score=80,
+            reason="ok",
+            seed=1,
+        )
+    ]
+    verdicts_path, catalogue_path, _ = _write_inputs(tmp_path, works, verdicts)
+
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "screening-abstracts-export",
+                "--format",
+                "csv",
+                "--verdicts",
+                str(verdicts_path),
+                "--catalogue",
+                str(catalogue_path),
+            ]
+        )
+
+
+def test_cli_subset(tmp_path: Path) -> None:
+    """--n-subset N produces a per-work-tab workbook with N sheets."""
     from laglitsynth.cli import main
 
     works = [_make_work(f"https://openalex.org/W{i}") for i in range(6)]
@@ -619,16 +455,12 @@ def test_cli_xlsx_subset(tmp_path: Path) -> None:
         )
         for i in range(6)
     ]
-    verdicts_path, catalogue_path, _ = _write_inputs(
-        tmp_path, works, verdicts, output_suffix="xlsx"
-    )
+    verdicts_path, catalogue_path, _ = _write_inputs(tmp_path, works, verdicts)
     output = tmp_path / "sub.xlsx"
 
     main(
         [
             "screening-abstracts-export",
-            "--format",
-            "xlsx",
             "--verdicts",
             str(verdicts_path),
             "--catalogue",

@@ -4,9 +4,12 @@ One LLM pass per paper that fills a structured codebook record
 capturing numerical choices, reproducibility indicators, and
 sub-discipline tags. The stage joins the deduplicated catalogue against
 the stage 7 eligibility verdict sidecar to determine eligible works,
-prefers the full text, falls back to the abstract, and emits a record
-sidecar in the same flag-don't-filter shape as [screening](screening-abstracts.md)
-and [eligibility](eligibility.md).
+extracts from the full text, and emits a record sidecar in the same
+flag-don't-filter shape as [screening](screening-abstracts.md) and
+[eligibility](eligibility.md). Like stage 7, it is **full-text-only**:
+an eligible work without a usable full-text extraction is not processed
+(no record row, no count), because the codebook fields turn on
+numerical-method detail abstracts do not carry.
 
 This is the first real run of phase 2 of the codebook: a best-guess
 schema populated by the LLM against real papers. Records feed stage 9
@@ -20,10 +23,10 @@ the default model before the first run: `ollama pull llama3.1:8b` (~5 GB).
 
 ## Prototype scope
 
-A single LLM call per paper over the flattened body (or the abstract
-for abstract-only works). Same flag-don't-filter pattern as
-[eligibility](eligibility.md): structured JSON output, Pydantic
-validation, one record per input work, sentinel `reason` for skips.
+A single LLM call per paper over the flattened full-text body. Same
+flag-don't-filter pattern as [eligibility](eligibility.md): structured
+JSON output, Pydantic validation, one record per processed work,
+sentinel `reason` for skips.
 
 The seed codebook fields — identification, numerical choices,
 reproducibility indicators, extraction metadata — are defined in
@@ -53,15 +56,18 @@ The stage consumes:
 - The stage 7 eligibility verdict sidecar
   ([`EligibilityVerdict`](../src/laglitsynth/fulltext_eligibility/models.py)
   records). The stage joins this against the catalogue to obtain the
-  eligible work set; the full `Work` record is retained to support the
-  abstract fallback path.
+  eligible work set; the catalogue is required for the verdict↔catalogue
+  consistency check and for the bibliographic block the review export
+  attaches to each record.
 - The extraction JSONL
   ([`ExtractedDocument`](../src/laglitsynth/fulltext_extraction/models.py)
   records from [stage 6](fulltext-extraction.md)).
 
-Works with a usable `ExtractedDocument` are extracted on their full
-text. Works without one fall back to the abstract. Works with neither
-are recorded with a sentinel `reason` and no LLM call.
+Only eligible works with a matching `ExtractedDocument` are processed:
+the eligible set is gated on extraction presence, so a work without full
+text never enters the loop, produces no record row, and is not counted.
+A work whose extraction parses but renders empty TEI is recorded with a
+`tei-parse-failure` sentinel.
 
 ## Data model
 
@@ -76,21 +82,23 @@ for the runtime construction (it composes the identification block on
 top of the codebook-driven payload model via
 `pydantic.create_model`).
 
-The record carries an identification block (`work_id`, `source_basis`,
-`reason`, `seed`, `truncated`, `raw_response`) plus the content fields
-from the loaded codebook. Every content value is paired with a
-`*_context: str | None` verbatim snippet (unless the YAML sets
-`context: false` on that field). Sentinel records have `reason` set
-and every content field `None`; a successful record has `reason=None`.
+The record carries an identification block (`work_id`, `reason`,
+`seed`, `truncated`, `raw_response`) plus the content fields from the
+loaded codebook. Because every record is full-text-based, there is no
+`source_basis` field — the basis is implicit. Every content value is
+paired with a `*_context: str | None` verbatim snippet (unless the YAML
+sets `context: false` on that field). Sentinel records have `reason`
+set and every content field `None`; a successful record has
+`reason=None`.
 
 A successful-but-truncated record has `reason=None` and
-`truncated=True`: the LLM answered, but on a shortened body. Abstract
-and sentinel records are never truncated.
+`truncated=True`: the LLM answered, but on a shortened body. Sentinel
+records are never truncated.
 
 `raw_response` carries the LLM's message text before parsing. Set on
 successful records and on `llm-parse-failure` sentinels so an operator
-can see what the model actually said; `None` on sentinels emitted
-without an LLM call (`no-source`, `tei-parse-failure`).
+can see what the model actually said; `None` on the `tei-parse-failure`
+sentinel emitted without an LLM call.
 
 ### ExtractionCodebookMeta
 
@@ -104,12 +112,10 @@ class ExtractionCodebookMeta(BaseModel):
     input_extractions: str
     input_count: int
     full_text_count: int
-    abstract_only_count: int
-    skipped_count: int          # no-source + tei-parse-failure
+    skipped_count: int          # tei-parse-failure only
     llm_parse_failure_count: int
     llm_timeout_count: int
     truncated_count: int
-    by_source_basis: dict[str, int]
 ```
 
 `run` and `llm` are the shared reproducibility nests from
@@ -119,6 +125,13 @@ carry `tool`, `tool_version`, `run_at`, `validation_skipped`, `model`,
 rendered codebook system prompt, `USER_TEMPLATE`, the Ollama `num_ctx`
 setting, and `CHAR_BUDGET`, so any prompt, codebook, context-window,
 or truncation-budget change shifts the hash.
+
+`input_count` is the number of works that reached the stage (eligible
+and with a full-text extraction). There is no `abstract_only_count` or
+`by_source_basis` — full text is the only basis. The review export
+embeds the criterion by reading it straight from the codebook spec
+(`ctx.system_prompt`), which it loads anyway to reconstruct the record
+model, so the meta does not duplicate it.
 
 ## Storage layout
 
@@ -136,51 +149,30 @@ stage uses `records.jsonl` to match the conceptual record name and to
 avoid the collision. There is no derived convenience file; stage 9
 and stages 10–12 read `records.jsonl` directly.
 
-## Fallback cascade
+## Per-work flow
 
-For each input work, in catalogue order:
+The eligible set is gated on extraction presence before the loop, so
+each work reaching `_extract_one` has an `ExtractedDocument`. For each
+such work, in catalogue order:
 
-1. If an `ExtractedDocument` exists and its
-   [`sections()`](../src/laglitsynth/fulltext_extraction/tei.py) is
-   non-empty, render the full text and take the `full_text` branch.
-2. Else, if `work.abstract` is non-empty, render the abstract and
-   take the `abstract_only` branch.
-3. Else, record `source_basis="none"`, `reason="no-source"`,
-   every content field `None`. No LLM call.
-
-Malformed TEI (`sections()` raises `lxml.etree.XMLSyntaxError`) is
-recorded as `reason="tei-parse-failure"` with `source_basis="full_text"`
-and no abstract fallback — same operator-visible pattern as
-[eligibility](eligibility.md).
+1. Render the TEI. If it raises `lxml.etree.XMLSyntaxError`, record a
+   `tei-parse-failure` sentinel (no LLM call).
+2. If the render is empty (valid XML, no body content), record a
+   `tei-parse-failure` sentinel (no LLM call).
+3. Otherwise call the LLM and record the result.
 
 ## Sentinel reasons
 
 All sentinels set every content field `None` and `seed=None`.
 
-| Reason | `source_basis` | Trigger |
-|---|---|---|
-| `no-source` | `none` | No `ExtractedDocument`, empty TEI body, and no abstract. |
-| `tei-parse-failure` | `full_text` | `sections()` raises `lxml.etree.XMLSyntaxError`. No abstract fallback — a malformed TEI is an operator-visible bug. |
-| `llm-parse-failure` | whichever branch called the LLM | The LLM response did not validate against the payload schema. |
-| `llm-timeout` | whichever branch called the LLM | The OpenAI client raised `APITimeoutError` / `APIConnectionError` after all retries exhausted. The OpenAI client is constructed with `timeout=600s` and `max_retries=3` so a single hang in a long extraction does not kill the stage. |
+| Reason | Trigger |
+|---|---|
+| `tei-parse-failure` | `sections()` raises `lxml.etree.XMLSyntaxError`, or renders empty. A paper with a PDF but unreadable TEI is an operator-visible bug, unlike a plain absence of full text (which is silently skipped). |
+| `llm-parse-failure` | The LLM response did not validate against the payload schema. |
+| `llm-timeout` | The OpenAI client raised `APITimeoutError` / `APIConnectionError` after all retries exhausted. The OpenAI client is constructed with `timeout=600s` and `max_retries=3` so a single hang in a long extraction does not kill the stage. |
 
-Empty-body TEI (valid XML, no content) returns `[]` from `sections()`
-and falls back to the abstract per step 2.
-
-## `source_basis` semantics
-
-`source_basis` records which input the LLM actually saw:
-
-- `full_text` — the flattened TEI body.
-- `abstract_only` — the abstract string from the `Work` record.
-- `none` — no LLM call; `reason="no-source"` records this branch.
-
-Abstract-only records are honestly sparse. The abstract rarely
-contains integration scheme, time step, interpolation, or code
-availability; most numerical fields on those records will legitimately
-be `None`. Downstream synthesis (stage 10) must filter on
-`source_basis` before reporting completeness — an `abstract_only`
-record with everything `None` is expected, not a failure.
+There is no `no-source` sentinel: an eligible work without full text is
+simply not processed, not flagged.
 
 ## Surfacing TEI to the LLM
 
@@ -223,13 +215,15 @@ The resolved output directory is `<data-dir>/extraction-codebook/<run-id>/`.
 ### Arguments
 
 - `--catalogue`: the deduplicated catalogue (`Work` records from stage 2).
-  Required for the abstract fallback path: when TEI is missing, stage 8
-  falls back to `Work.abstract`, so the full `Work` record is needed.
+  Required for the verdict↔catalogue consistency check (every eligibility
+  verdict must name a work the catalogue contains) and for the
+  bibliographic block the review export attaches to each record.
 - `--eligibility-verdicts`: the stage 7 verdict sidecar (`EligibilityVerdict`
   records). The stage joins this against the catalogue to build the eligible
   work set. Path pattern: `data/fulltext-eligibility/<run-id>/verdicts.jsonl`.
 - `--extractions`: the extraction JSONL (`ExtractedDocument` records).
-  Works without a matching record fall back to the abstract.
+  Eligible works without a matching record are skipped (not processed,
+  not counted).
 - `--extraction-output-dir`: directory that
   `ExtractedDocument.tei_path` is relative to. Defaults to the parent
   of `--extractions`. See
@@ -337,7 +331,7 @@ the digest is recorded as `meta.llm.prompt_sha256`.
 ```
 System: <spec.system_prompt with {fields} substituted>
 
-User: <source_basis>:
+User: full_text:
 <rendered text>
 ```
 
@@ -357,6 +351,47 @@ default) and re-run. This is green-field prototyping — there is no
 migration path and no backwards compatibility
 ([AGENTS.md](../AGENTS.md)).
 
+## Review export
+
+`extraction-codebook-export` writes an XLSX review workbook
+([`export.py`](../src/laglitsynth/extraction_codebook/export.py)) for
+human spot-checking the extraction stage and tuning its codebook /
+prompt. It is XLSX-only — the JSONL sidecar is the machine-readable
+form. The workbook has an `Index` sheet (one row per sampled work,
+bibliographic columns plus a hyperlink to the per-work tab, as a light
+navigation aid) and one tab per sampled work. The per-work tab is the
+working surface: a bibliographic block, then one row per codebook field
+with columns `field | value | context | reviewer_correction`, then a
+collapsed LLM-meta block. The field list is driven off the codebook
+(the record model is codebook-built), so a non-default codebook's field
+set follows automatically — nothing is hard-coded. The criterion is read
+from the `--codebook` spec itself (the export loads it anyway to
+reconstruct the record model); `extraction-codebook-meta.json` supplies
+only the LLM fingerprint.
+
+Because the record model is built dynamically from the codebook, the
+export takes a `--codebook` argument to reconstruct it (defaulting to
+the shipped codebook); the reviewer must pass the same codebook the run
+used.
+
+```
+laglitsynth extraction-codebook-export \
+    --records data/extraction-codebook/<run-id>/records.jsonl \
+    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    [--codebook examples/codebooks/lagrangian-oceanography.yaml] \
+    [--meta data/extraction-codebook/<run-id>/extraction-codebook-meta.json] \
+    [--output <records parent>/review.xlsx] \
+    [--n-subset N] [--subset-seed 0]
+```
+
+`--n-subset` / `--subset-seed` draw a reproducible random sample (the
+intended workflow is digging into a subset and generalizing, not a wide
+all-works scan); unset or `>=` the record count emits the full set in
+record order. A record whose `work_id` is absent from the catalogue
+raises a `ValueError` naming the offending id. Stage 9
+(`extraction-adjudication`) will read the reviewer columns back in — that
+ingestion is a separate plan.
+
 ## What to defer
 
 - Two-pass retrieval per [two-pass-extraction.md](two-pass-extraction.md).
@@ -368,5 +403,5 @@ migration path and no backwards compatibility
   after human review clusters the LLM's actual vocabulary.
 - Multi-run consensus. Single call per paper for now.
 - Branching on `ExtractedDocument.extraction_status`. Malformed or
-  empty TEI falls back to abstract; re-evaluate if phase 3 surfaces
-  silent bad records.
+  empty TEI records a `tei-parse-failure` sentinel; re-evaluate if
+  phase 3 surfaces silent bad records.

@@ -100,11 +100,11 @@ Full-text assessment of whether each work meets the review's eligibility
 criteria. Distinct from screening (which uses only title and abstract).
 Reading the full text may reveal that a paper is not actually about
 computational Lagrangian methods, or that it is a review/meta-analysis
-rather than primary research. The stage prefers the extracted full text,
-falls back to the abstract when no `ExtractedDocument` is available, and
-records a sentinel verdict when neither source exists or the TEI is
-malformed. See [eligibility.md](eligibility.md) for the verdict shape
-and sentinel reasons.
+rather than primary research. The stage is **full-text-only**: it assesses
+only works that have a usable `ExtractedDocument`, skipping (not flagging)
+works without full text, and records a `tei-parse-failure` sentinel when
+the TEI is malformed or renders empty. See [eligibility.md](eligibility.md)
+for the verdict shape and sentinel reasons.
 
 - **Consumes:** deduplicated catalogue, stage 3 screening verdict sidecar,
   screening threshold, full-text corpus, eligibility criteria (defined in
@@ -117,10 +117,10 @@ An LLM processes each paper against the codebook, extracting: sub-discipline
 tags (e.g. water parcels, tracers, objects — not a fixed set), numerical integration scheme,
 time-step strategy, interpolation method, reproducibility indicators (code
 and method availability), and context snippets for numerical choices.
-Each extraction record flags its source basis (full text vs. abstract-only).
-The stage prefers the extracted full text, falls back to the abstract, and
-records a sentinel `reason` when neither source exists, the TEI is malformed,
-or the LLM response fails to validate. See
+Like stage 7, it is **full-text-only**: it extracts only eligible works
+that have a usable `ExtractedDocument`, skipping (not flagging) those
+without full text, and records a sentinel `reason` when the TEI is
+malformed/empty or the LLM response fails to validate. See
 [extraction-codebook.md](extraction-codebook.md) for the record shape and
 sentinel reasons, and [codebook.md](codebook.md) for the seed field list.
 
@@ -147,8 +147,7 @@ See [Optional extensions](#optional-extensions).*
 Validated extraction records are aggregated to produce quantitative answers to
 RQ1.1 (Reproducibility) and RQ1.2 (Prevalence): fraction of papers providing
 reproducible detail, distribution of each numerical choice, breakdowns by
-sub-discipline. Uncertainty is propagated from the source basis field
-(full-text vs. abstract-only extraction records carry different confidence).
+sub-discipline.
 
 - **Consumes:** validated extraction records
 - **Produces:** `statistics.json` — tabulated counts, proportions, breakdowns
@@ -181,12 +180,12 @@ papers, low-confidence extraction records) are explicitly flagged.
 ## Human spot-checking
 
 Every LLM-driven stage (screening-abstracts, fulltext-eligibility, extraction-codebook)
-produces output exportable as a flat table (e.g. CSV) for human
-spot-checking. The export contains one row per work with the stage's
-verdict or extracted values, the LLM's reasoning, and enough metadata
-(title, work ID) for a reviewer to locate the source. This is the
-general pattern for human oversight: export a sample, review, feed
-corrections back.
+produces an XLSX review workbook for human spot-checking
+(`<stage>-export` subcommands). Each workbook samples a random subset
+(`--n-subset` / `--subset-seed`) and gives each work its own tab as the
+working surface, with an Index sheet for navigation; the JSONL sidecars
+remain the machine-readable form. This is the general pattern for human
+oversight: export a sample, review, feed corrections back.
 
 ## Shared resources
 

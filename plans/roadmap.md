@@ -116,6 +116,21 @@ Update this file when a plan is written, implemented, or archived.
   ([cross-machine.md](../docs/cross-machine.md)); manifest wiring deferred.
   See [fulltext-retrieval.md](../docs/fulltext-retrieval.md).
 
+- [Stages 7–8 full-text-only + review exports](done/fulltext-stages-full-text-only-and-review.md)
+  — `fulltext-eligibility` and `extraction-codebook` no longer fall back to
+  the abstract: a work without a full-text extraction is skipped (no verdict/
+  record row, no count), and the `SourceBasis` field, `no-source` sentinel,
+  `abstract_only` / `by_source_basis` counters, and stage 10's abstract-only
+  uncertainty note are all gone. Empty and malformed TEI both record
+  `tei-parse-failure`. New XLSX-only `fulltext-eligibility-export` /
+  `extraction-codebook-export` subcommands write a sampled review workbook
+  (Index + per-work tabs; stage 8's tab lists each codebook field as
+  `value` / `context` / `reviewer_correction`, driven off the codebook) for
+  spot-checking the LLM stages and tuning prompts. CSV is retired throughout,
+  including stage 3's now-purposeless `--format csv`. See
+  [eligibility.md](../docs/eligibility.md) and
+  [extraction-codebook.md](../docs/extraction-codebook.md).
+
 ## In flight
 
 - [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate is now planned as the [run manifest](run-manifest.md).
@@ -149,11 +164,17 @@ Update this file when a plan is written, implemented, or archived.
   second catalogue source ([wos-starter-api.md](../docs/explorations/wos-starter-api.md)),
   which the diversified-retrieval direction would consume.
 - `ExtractedDocument` quality gate — `extraction_status` enum + metrics.
-  Defer until a stage 9+ consumer arrives — stages 7 and 8 both fell
-  back to source-basis selection instead.
-- Shared CSV-export-for-human-review helper across stages 3, 4, 7, 8,
-  9. Each stage emits JSONL today; human spot-checking uses ad-hoc
-  conversions.
+  Defer until a stage 9+ consumer arrives — stages 7 and 8 are now
+  full-text-only, so a missing or empty extraction is simply skipped
+  (or recorded as `tei-parse-failure`) rather than routed to a fallback.
+- Shared export-for-human-review helper across stages 3, 4, 9. Exports
+  are XLSX-only now (CSV retired); stages 7 and 8 landed as separate
+  self-contained `export.py` modules by design — the
+  [full-text-only plan](done/fulltext-stages-full-text-only-and-review.md)
+  deliberately declined to force a shared abstraction before stage 9
+  shows what it needs. Each stage emits JSONL today; the open question
+  is whether stages 3, 4, and 9 should share scaffolding once stage 9's
+  reviewer-column ingestion is designed.
 
 ## Latest review
 

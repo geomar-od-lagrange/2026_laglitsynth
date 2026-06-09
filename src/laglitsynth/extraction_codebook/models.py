@@ -9,16 +9,11 @@ remain here.
 
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import BaseModel, ConfigDict
 
 from laglitsynth.models import LlmMeta, RunMeta
 
 TOOL_NAME = "laglitsynth.extraction_codebook.extract"
-
-
-SourceBasis = Literal["full_text", "abstract_only", "none"]
 
 
 class ExtractionCodebookMeta(BaseModel):
@@ -30,9 +25,7 @@ class ExtractionCodebookMeta(BaseModel):
     input_extractions: str
     input_count: int
     full_text_count: int
-    abstract_only_count: int
-    skipped_count: int  # no-source + tei-parse-failure
+    skipped_count: int  # tei-parse-failure only
     llm_parse_failure_count: int
     llm_timeout_count: int = 0
     truncated_count: int
-    by_source_basis: dict[str, int]

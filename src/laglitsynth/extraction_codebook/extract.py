@@ -35,7 +35,6 @@ from laglitsynth.extraction_codebook.codebook import (
 from laglitsynth.extraction_codebook.models import (
     TOOL_NAME,
     ExtractionCodebookMeta,
-    SourceBasis,
 )
 from laglitsynth.extraction_codebook.prompts import (
     CHAR_BUDGET,
@@ -69,7 +68,6 @@ _LLM_MAX_RETRIES = 3
 def _sentinel_record(
     work_id: str,
     *,
-    source_basis: SourceBasis,
     reason: str,
     ctx: CodebookContext,
     raw_response: str | None = None,
@@ -78,13 +76,11 @@ def _sentinel_record(
 
     ``raw_response`` is passed through on ``llm-parse-failure`` so an
     operator can see what the LLM actually said; left ``None`` on
-    sentinels emitted without an LLM call (``no-source``,
-    ``tei-parse-failure``).
+    sentinels emitted without an LLM call (``tei-parse-failure``).
     """
     payload_fields = {name: None for name in ctx.payload_field_names}
     record = ctx.record_model(
         work_id=work_id,
-        source_basis=source_basis,
         reason=reason,
         seed=None,
         truncated=False,
@@ -96,7 +92,6 @@ def _sentinel_record(
 
 def extract_codebook(
     work_id: str,
-    source_basis: SourceBasis,
     user_text: str,
     *,
     client: OpenAI,
@@ -108,12 +103,11 @@ def extract_codebook(
     """Call the LLM, validate the payload, compose the full record.
 
     On JSON parse error or ``ValidationError`` returns a
-    ``reason="llm-parse-failure"`` sentinel with the called-branch
-    ``source_basis``, ``seed=None``, ``truncated=False``, every content
-    field ``None``.
+    ``reason="llm-parse-failure"`` sentinel with ``seed=None``,
+    ``truncated=False``, every content field ``None``.
     """
     seed = random.randint(0, 2**31 - 1)
-    prompt = build_user_message(source_basis, user_text)
+    prompt = build_user_message(user_text)
     try:
         response = client.chat.completions.create(
             model=model,
@@ -130,7 +124,6 @@ def extract_codebook(
         logger.warning("LLM timeout for %s: %s", work_id, exc)
         return _sentinel_record(
             work_id,
-            source_basis=source_basis,
             reason="llm-timeout",
             ctx=ctx,
             raw_response=None,
@@ -142,7 +135,6 @@ def extract_codebook(
         logger.warning("LLM parse failure for %s: %s", work_id, exc)
         return _sentinel_record(
             work_id,
-            source_basis=source_basis,
             reason="llm-parse-failure",
             ctx=ctx,
             raw_response=content,
@@ -150,7 +142,6 @@ def extract_codebook(
 
     record = ctx.record_model(
         work_id=work_id,
-        source_basis=source_basis,
         reason=None,
         seed=seed,
         truncated=truncated,
@@ -172,8 +163,9 @@ def _active_eligible_works(
     No screening threshold is re-applied here — stage 7 already gated by
     screening, so the eligibility verdict is the only gate needed.
 
-    The catalogue is required (rather than just the verdict file) because
-    stage 8 falls back to ``Work.abstract`` when TEI is missing.
+    The catalogue is required (rather than just the verdict file) for the
+    verdict↔catalogue consistency check below and for the bibliographic
+    block the export attaches to each record.
 
     Raises ``KeyError`` if a verdict's ``work_id`` is absent from the
     catalogue — this signals a data inconsistency (stage 7 wrote a verdict
@@ -221,6 +213,11 @@ def extract_works(
     for work in works:
         if work.id in skip_ids:
             continue
+        # Full-text-only: a work without an extraction never enters the
+        # loop — no record row, no count. The gap is already visible
+        # upstream (stage 5/6 provenance), so we don't flag it here.
+        if work.id not in extractions:
+            continue
         if max_records is not None and len(eligible) >= max_records:
             break
         eligible.append(work)
@@ -242,55 +239,40 @@ def _extract_one(
     ctx: CodebookContext,
     num_ctx: int = _DEFAULT_NUM_CTX,
 ) -> ExtractionRecordProto:
-    # Step 1: prefer full text when an extraction exists.
-    extracted = extractions.get(work.id)
-    if extracted is not None:
-        try:
-            tei = extracted.open_tei(extraction_output_dir)
-            rendered, truncated = render_fulltext(tei, char_budget=CHAR_BUDGET)
-        except etree.XMLSyntaxError:
-            logger.warning(
-                "Malformed TEI for %s; recording tei-parse-failure", work.id
-            )
-            return _sentinel_record(
-                work.id,
-                source_basis="full_text",
-                reason="tei-parse-failure",
-                ctx=ctx,
-            )
-        if rendered:
-            return extract_codebook(
-                work.id,
-                "full_text",
-                rendered,
-                client=client,
-                model=model,
-                truncated=truncated,
-                ctx=ctx,
-                num_ctx=num_ctx,
-            )
-        # Empty body (valid XML, no content): fall through to abstract.
-
-    # Step 2: fall back to abstract when available.
-    if work.abstract:
-        return extract_codebook(
-            work.id,
-            "abstract_only",
-            work.abstract,
-            client=client,
-            model=model,
-            truncated=False,
-            ctx=ctx,
-            num_ctx=num_ctx,
+    # Full text or nothing: the eligible set is already gated on extraction
+    # presence, so ``extractions[work.id]`` is always set here.
+    extracted = extractions[work.id]
+    try:
+        tei = extracted.open_tei(extraction_output_dir)
+        rendered, truncated = render_fulltext(tei, char_budget=CHAR_BUDGET)
+    except etree.XMLSyntaxError:
+        logger.warning(
+            "Malformed TEI for %s; recording tei-parse-failure", work.id
         )
-
-    # Step 3: no source at all.
-    logger.warning("No source for %s; recording no-source", work.id)
-    return _sentinel_record(
+        return _sentinel_record(
+            work.id,
+            reason="tei-parse-failure",
+            ctx=ctx,
+        )
+    if not rendered:
+        # Valid XML but empty body: broken extraction on a paper we do
+        # have a PDF for — worth surfacing, like malformed TEI.
+        logger.warning(
+            "Empty TEI body for %s; recording tei-parse-failure", work.id
+        )
+        return _sentinel_record(
+            work.id,
+            reason="tei-parse-failure",
+            ctx=ctx,
+        )
+    return extract_codebook(
         work.id,
-        source_basis="none",
-        reason="no-source",
+        rendered,
+        client=client,
+        model=model,
+        truncated=truncated,
         ctx=ctx,
+        num_ctx=num_ctx,
     )
 
 
@@ -307,9 +289,9 @@ def build_subparser(
         required=True,
         help=(
             "Deduplicated catalogue JSONL (data/catalogue-dedup/deduplicated.jsonl). "
-            "Required for the abstract fallback path: when TEI is missing, stage 8 "
-            "falls back to Work.abstract, so the full Work record is needed — not "
-            "just the work_id from the eligibility verdict."
+            "Required for the verdict↔catalogue consistency check (every eligibility "
+            "verdict must name a work the catalogue contains) and for the "
+            "bibliographic block the review export attaches to each record."
         ),
     )
     parser.add_argument(
@@ -454,9 +436,16 @@ def run(args: argparse.Namespace) -> None:
     stats = JsonlReadStats()
     extractions = _load_extractions(args.extractions, stats)
 
-    eligible_works = list(
-        _active_eligible_works(args.catalogue, args.eligibility_verdicts, stats)
-    )
+    # Full-text-only: gate on extraction presence so eligible works without
+    # a PDF never enter the extracted set, get no record row, and are not
+    # counted. The gap is already visible in upstream provenance.
+    eligible_works = [
+        work
+        for work in _active_eligible_works(
+            args.catalogue, args.eligibility_verdicts, stats
+        )
+        if work.id in extractions
+    ]
     total = len(eligible_works)
 
     skip_ids: set[str] = set()
@@ -515,7 +504,7 @@ def run(args: argparse.Namespace) -> None:
         if record.reason is None:
             marker = "truncated" if record.truncated else "ok"
             print(
-                f"  [{index}/{total}] extracted ({record.source_basis}, {marker})"
+                f"  [{index}/{total}] extracted ({marker})"
                 f" — {record.work_id[-12:]}",
                 file=sys.stderr,
             )
@@ -531,17 +520,10 @@ def run(args: argparse.Namespace) -> None:
     all_records: list[ExtractionRecordProto] = prior_records + new_records
 
     full_text_count = sum(
-        1
-        for r in all_records
-        if r.source_basis == "full_text" and r.reason is None
-    )
-    abstract_only_count = sum(
-        1
-        for r in all_records
-        if r.source_basis == "abstract_only" and r.reason is None
+        1 for r in all_records if r.reason is None
     )
     skipped_count = sum(
-        1 for r in all_records if r.reason in ("no-source", "tei-parse-failure")
+        1 for r in all_records if r.reason == "tei-parse-failure"
     )
     llm_parse_failure_count = sum(
         1 for r in all_records if r.reason == "llm-parse-failure"
@@ -549,13 +531,9 @@ def run(args: argparse.Namespace) -> None:
     llm_timeout_count = sum(1 for r in all_records if r.reason == "llm-timeout")
     truncated_count = sum(1 for r in all_records if r.truncated)
 
-    by_source_basis: dict[str, int] = {}
-    for r in all_records:
-        by_source_basis[r.source_basis] = by_source_basis.get(r.source_basis, 0) + 1
-
     print(
-        f"\nDone in {elapsed:.1f}s: {full_text_count} full-text, "
-        f"{abstract_only_count} abstract-only, {skipped_count} skipped, "
+        f"\nDone in {elapsed:.1f}s: {full_text_count} extracted, "
+        f"{skipped_count} skipped, "
         f"{llm_parse_failure_count} llm-parse-failure, "
         f"{llm_timeout_count} llm-timeout, "
         f"{truncated_count} truncated.",
@@ -585,12 +563,10 @@ def run(args: argparse.Namespace) -> None:
             input_extractions=str(args.extractions),
             input_count=total,
             full_text_count=full_text_count,
-            abstract_only_count=abstract_only_count,
             skipped_count=skipped_count,
             llm_parse_failure_count=llm_parse_failure_count,
             llm_timeout_count=llm_timeout_count,
             truncated_count=truncated_count,
-            by_source_basis=by_source_basis,
         ),
     )
     print(f"Run dir: {output_dir}", file=sys.stderr)
