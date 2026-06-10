@@ -148,25 +148,16 @@ def _try_oa_urls(
             urls.append(oa_url)
     if not urls:
         return None
-    last_exc: Exception | None = None
     for url in urls:
         try:
             _download_pdf(url, pdf_dest, client=client, rate_limiter=rate_limiter)
             return PdfSource.oa, url
         except Exception as exc:
             logger.debug("OA download failed for %s: %s", url, exc)
-            last_exc = exc
             continue
-    # All URLs were attempted and all failed — signal failure upward.
-    raise _AllAttemptsFailedError(last_exc)
-
-
-class _AllAttemptsFailedError(Exception):
-    """Raised when every download attempt for a set of URLs failed."""
-
-    def __init__(self, last_exc: Exception | None) -> None:
-        super().__init__(str(last_exc) if last_exc else "all attempts failed")
-        self.last_exc = last_exc
+    # No URLs, or every attempt failed: the caller falls through to Unpaywall
+    # identically in both cases, so a single `None` carries the whole result.
+    return None
 
 
 def _try_unpaywall(
@@ -259,12 +250,9 @@ def _retrieve_one(
 
     # 1. OA URLs
     if has_oa_urls:
-        try:
-            result = _try_oa_urls(work, pdf_dest, client=client, rate_limiter=rate_limiter)
-            if result is not None:
-                return _retrieved(result[0], result[1])
-        except _AllAttemptsFailedError as exc:
-            logger.debug("All OA URLs failed for %s: %s", work.id, exc)
+        result = _try_oa_urls(work, pdf_dest, client=client, rate_limiter=rate_limiter)
+        if result is not None:
+            return _retrieved(result[0], result[1])
 
     # 2. Unpaywall
     if work.doi is not None:
@@ -325,9 +313,12 @@ def build_subparser(
         ),
     )
     parser.add_argument(
-        "--skip-existing",
+        "--refetch",
         action="store_true",
-        help="Skip works that already have a non-missing provenance record",
+        help=(
+            "Re-download works that already have a PDF. By default such works "
+            "are skipped (only missing/unseen works are attempted)."
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -359,9 +350,11 @@ def run(args: argparse.Namespace) -> None:
     # last-write-wins).
     provenance = load_provenance(data_dir)
 
-    # Works with a non-missing record are skipped under --skip-existing.
+    # Retrieval is sticky by default: works that already have a non-missing
+    # provenance record are skipped (only missing/unseen works are attempted).
+    # --refetch opts back into re-downloading held works.
     skip_ids: set[str] = set()
-    if args.skip_existing:
+    if not args.refetch:
         skip_ids = {
             wid
             for wid, rec in provenance.items()
@@ -369,7 +362,8 @@ def run(args: argparse.Namespace) -> None:
         }
         if skip_ids:
             print(
-                f"Skipping {len(skip_ids)} works that already have a PDF.",
+                f"Skipping {len(skip_ids)} works that already have a PDF "
+                f"(use --refetch to re-download).",
                 file=sys.stderr,
             )
 
@@ -406,7 +400,27 @@ def run(args: argparse.Namespace) -> None:
                 rate_limiter=rate_limiter,
             )
             if not args.dry_run:
-                upsert_provenance(data_dir, provenance, record)
+                # No-downgrade guard: a failed attempt yields a `missing`
+                # record, but if a prior non-missing record (with its PDF on
+                # disk) exists, keep it rather than clobber a held PDF's
+                # provenance. Only fires on --refetch (the sticky default
+                # never processes held works), and is what makes --refetch
+                # safe: _download_pdf writes via tmp+rename, so the prior
+                # <stem>.pdf is untouched by a failed re-fetch.
+                prior = provenance.get(work.id)
+                if (
+                    record.source is PdfSource.missing
+                    and prior is not None
+                    and prior.source is not PdfSource.missing
+                ):
+                    logger.debug(
+                        "Keeping prior %s record for %s; re-fetch failed, "
+                        "not downgrading to missing",
+                        prior.source.value,
+                        work.id,
+                    )
+                else:
+                    upsert_provenance(data_dir, provenance, record)
             else:
                 provenance[work.id] = record
 
@@ -441,8 +455,7 @@ def run(args: argparse.Namespace) -> None:
             run=run_meta,
             total_works=total,
             retrieved_count=retrieved_count,
-            abstract_only_count=missing_count,
-            failed_count=0,
+            missing_count=missing_count,
             by_source=dict(by_source),
         ),
     )

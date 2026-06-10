@@ -63,7 +63,7 @@ def _make_passthrough_args(
     args.screening_threshold = threshold
     args.data_dir = tmp_path / data_subdir
     args.email = email
-    args.skip_existing = False
+    args.refetch = False
     args.dry_run = False
     return args
 
@@ -218,10 +218,10 @@ class TestMissing:
         assert record.pdf_path is None
 
 
-class TestSkipExisting:
-    def test_skip_non_missing_retry_missing(self, tmp_path: Path) -> None:
-        # A work with a non-missing record is preserved and never re-fetched;
-        # a `missing` record is retried.
+class TestStickyByDefault:
+    def test_plain_run_skips_held_attempts_missing(self, tmp_path: Path) -> None:
+        # Sticky default: a work with a non-missing record is skipped entirely
+        # (no download attempted, PDF untouched); a `missing` record is retried.
         data_dir = tmp_path / "data"
         works = [
             _make_work("https://openalex.org/W1", doi=None),
@@ -229,7 +229,7 @@ class TestSkipExisting:
         ]
         args = _make_passthrough_args(tmp_path, works)
         args.data_dir = data_dir
-        args.skip_existing = True
+        args.refetch = False
 
         # Seed W1 as already retrieved (oa) and W2 as missing.
         from laglitsynth.fulltext_retrieval.models import PdfProvenanceRecord
@@ -273,11 +273,73 @@ class TestSkipExisting:
             run(args)
 
         final = load_provenance(data_dir)
-        # W1 untouched (still oa, original sha preserved → never re-fetched).
+        # (a) W1 untouched (still oa, original sha preserved, PDF still on disk).
         assert final["https://openalex.org/W1"].source == PdfSource.oa
         assert final["https://openalex.org/W1"].content_sha256 == "seedsha"
-        # W2 retried, still no sources → missing.
+        assert pdf_path.read_bytes() == _pdf_content()
+        # No download was attempted for W1 — the only network calls are for the
+        # retried `missing` work W2 (a no-DOI work has no OA URL, so even W2
+        # makes no call here; the held work is skipped before any attempt).
+        assert client_mock.get.call_count == 0
+        # (b) W2 retried, still no sources → missing.
         assert final["https://openalex.org/W2"].source == PdfSource.missing
+
+    def test_refetch_failure_keeps_prior_record(self, tmp_path: Path) -> None:
+        # (c) --refetch re-attempts a held work; when every download fails the
+        # no-downgrade guard keeps the prior `oa` record with its PDF present
+        # rather than clobbering provenance to `missing`.
+        data_dir = tmp_path / "data"
+        works = [
+            _make_work(
+                "https://openalex.org/W1",
+                doi=None,
+                pdf_url="https://example.com/p.pdf",
+            ),
+        ]
+        args = _make_passthrough_args(tmp_path, works)
+        args.data_dir = data_dir
+        args.refetch = True
+
+        from laglitsynth.fulltext_retrieval.models import PdfProvenanceRecord
+        from laglitsynth.fulltext_retrieval.store import write_provenance
+
+        pdf_path = store_pdf_path(data_dir, "W1")
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(_pdf_content())
+        write_provenance(
+            data_dir,
+            {
+                "https://openalex.org/W1": PdfProvenanceRecord(
+                    work_id="https://openalex.org/W1",
+                    stem="W1",
+                    doi=None,
+                    source=PdfSource.oa,
+                    source_url="https://example.com/p.pdf",
+                    pdf_path="pdfs/W1.pdf",
+                    content_sha256="seedsha",
+                    obtained_at="2026-01-01T00:00:00+00:00",
+                ),
+            },
+        )
+
+        # Every download attempt fails.
+        client_mock = MagicMock(spec=httpx.Client)
+        client_mock.get.side_effect = httpx.ConnectError("connection refused")
+
+        rl = _RateLimiter()
+        with (
+            patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client", return_value=client_mock),
+            patch("laglitsynth.fulltext_retrieval.retrieve._RateLimiter", return_value=rl),
+        ):
+            run(args)
+
+        # The held work was re-attempted (a download call was made)...
+        assert client_mock.get.call_count >= 1
+        # ...but the prior good record is preserved and the PDF is untouched.
+        final = load_provenance(data_dir)
+        assert final["https://openalex.org/W1"].source == PdfSource.oa
+        assert final["https://openalex.org/W1"].content_sha256 == "seedsha"
+        assert pdf_path.read_bytes() == _pdf_content()
 
 
 class TestProvenanceJsonl:
@@ -478,7 +540,7 @@ class TestValidationSkipped:
         args.screening_threshold = 50.0
         args.data_dir = tmp_path / "data"
         args.email = "test@example.com"
-        args.skip_existing = False
+        args.refetch = False
         args.dry_run = False
 
         client_mock = MagicMock(spec=httpx.Client)
@@ -494,6 +556,35 @@ class TestValidationSkipped:
         meta_path = tmp_path / "data" / "fulltext-retrieval" / "retrieval-meta.json"
         meta = json.loads(meta_path.read_text())
         assert meta["run"]["validation_skipped"] == 2
+
+
+class TestRetrievalMeta:
+    def test_missing_count_reflects_unretrieved_tally(self, tmp_path: Path) -> None:
+        # Two no-DOI works with no OA URLs both fall through to `missing`, so
+        # the meta's missing_count is 2 and retrieved_count is 0.
+        works = [
+            _make_work("https://openalex.org/W1", doi=None),
+            _make_work("https://openalex.org/W2", doi=None),
+        ]
+        args = _make_passthrough_args(tmp_path, works)
+
+        client_mock = MagicMock(spec=httpx.Client)
+        client_mock.get.side_effect = httpx.ConnectError("connection refused")
+
+        rl = _RateLimiter()
+        with (
+            patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client", return_value=client_mock),
+            patch("laglitsynth.fulltext_retrieval.retrieve._RateLimiter", return_value=rl),
+        ):
+            run(args)
+
+        meta_path = args.data_dir / "fulltext-retrieval" / "retrieval-meta.json"
+        meta = json.loads(meta_path.read_text())
+        assert meta["total_works"] == 2
+        assert meta["missing_count"] == 2
+        assert meta["retrieved_count"] == 0
+        assert "abstract_only_count" not in meta
+        assert "failed_count" not in meta
 
 
 class TestActiveWorksJoin:

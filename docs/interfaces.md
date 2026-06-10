@@ -214,7 +214,7 @@ laglitsynth fulltext-retrieval \
     --screening-threshold 50 \
     --data-dir data/ \
     --email EMAIL \
-    [--skip-existing] [--dry-run]
+    [--refetch] [--dry-run]
 
 # Stage 5 — fulltext-retrieval-export (handoff bundle for a collaborator)
 laglitsynth fulltext-retrieval-export \
@@ -348,14 +348,15 @@ laglitsynth screening-abstracts \
     "Is this about computational Lagrangian methods in oceanography?" \
     --run-id "$RUN_ID"
 
-# 5. Fulltext retrieval (inline-joins catalogue + stage 3 verdicts)
+# 5. Fulltext retrieval (inline-joins catalogue + stage 3 verdicts).
+#    Sticky by default: re-runs skip works that already have a PDF and
+#    attempt only missing/unseen ones.
 laglitsynth fulltext-retrieval \
     --catalogue data/catalogue-dedup/deduplicated.jsonl \
     --screening-verdicts "data/screening-abstracts/$RUN_ID/verdicts.jsonl" \
     --screening-threshold 50 \
     --data-dir data/ \
-    --email user@example.com \
-    --skip-existing
+    --email user@example.com
 
 # Diversify the still-missing margin via collaborators with library access:
 # export the gap, hand the bundle to a collaborator, import what they return.

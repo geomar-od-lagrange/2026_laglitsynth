@@ -19,7 +19,6 @@ spec itself (loaded anyway to reconstruct the record model);
 from __future__ import annotations
 
 import argparse
-import json
 import random
 import sys
 from pathlib import Path
@@ -39,6 +38,7 @@ from laglitsynth.extraction_codebook.codebook import (
 from laglitsynth.extraction_codebook.extract import DEFAULT_CODEBOOK
 from laglitsynth.extraction_codebook.models import ExtractionCodebookMeta
 from laglitsynth.io import read_jsonl
+from laglitsynth.models import LlmMeta
 
 _SHEET_NAME_MAX_LEN = 31
 _FORBIDDEN_SHEET_CHARS = set("/\\?*[]:")
@@ -183,7 +183,7 @@ def build_work_sheet(
     *,
     field_names: list[str],
     criterion: str,
-    llm_meta: dict[str, object],
+    llm_meta: LlmMeta | None,
 ) -> None:
     """Per-work sheet: biblio block, codebook field table, collapsed LLM-meta.
 
@@ -191,7 +191,9 @@ def build_work_sheet(
     each row pairs the extracted value with its verbatim ``*_context``
     and an empty ``reviewer_correction`` column. ``criterion`` is the
     codebook system prompt, embedded verbatim. ``llm_meta`` carries the
-    model/temperature/prompt_sha256 from ``ExtractionCodebookMeta.llm``.
+    model/temperature/prompt_sha256 from ``ExtractionCodebookMeta.llm``; it is
+    ``None`` when no meta file was found, in which case the fingerprint cells
+    are left blank.
     """
     wrap_top_left = Alignment(wrap_text=True, vertical="top", horizontal="left")
     top_aligned = Alignment(vertical="top")
@@ -304,9 +306,9 @@ def build_work_sheet(
         ("reason", record.reason or ""),
         ("seed", record.seed),
         ("truncated", record.truncated),
-        ("llm_model", str(llm_meta.get("model", ""))),
-        ("llm_temperature", llm_meta.get("temperature")),
-        ("llm_prompt_sha256", str(llm_meta.get("prompt_sha256", ""))),
+        ("llm_model", llm_meta.model if llm_meta else ""),
+        ("llm_temperature", llm_meta.temperature if llm_meta else None),
+        ("llm_prompt_sha256", llm_meta.prompt_sha256 if llm_meta else ""),
         ("llm_raw_response", record.raw_response or ""),
     ]
     for offset, (label, value) in enumerate(llm_rows):
@@ -333,13 +335,13 @@ def _value_field_names(ctx: CodebookContext) -> list[str]:
     return [f.name for f in ctx.spec.fields]
 
 
-def _load_meta(meta_path: Path | None) -> dict[str, object]:
-    """Return the ``llm`` fingerprint dict from an extraction-codebook-meta.json.
+def _load_meta(meta_path: Path | None) -> LlmMeta | None:
+    """Return the ``llm`` fingerprint from an extraction-codebook-meta.json.
 
     The criterion is read from the codebook spec (``ctx.system_prompt``)
     at export time — stage 8 loads the codebook anyway to reconstruct the
-    record model — so this only reads the LLM fingerprint, falling back to
-    an empty dict when the meta is missing.
+    record model — so this only reads the LLM fingerprint, returning ``None``
+    when the meta is missing. A present but malformed meta raises.
     """
     if meta_path is None or not meta_path.exists():
         print(
@@ -348,18 +350,8 @@ def _load_meta(meta_path: Path | None) -> dict[str, object]:
             f"point at the right file.",
             file=sys.stderr,
         )
-        return {}
-    raw = json.loads(meta_path.read_text())
-    try:
-        meta = ExtractionCodebookMeta.model_validate(raw)
-        return {
-            "model": meta.llm.model,
-            "temperature": meta.llm.temperature,
-            "prompt_sha256": meta.llm.prompt_sha256,
-        }
-    except Exception:
-        llm_meta = raw.get("llm", {}) or {}
-        return cast(dict[str, object], llm_meta)
+        return None
+    return ExtractionCodebookMeta.model_validate_json(meta_path.read_text()).llm
 
 
 def export_review_xlsx(

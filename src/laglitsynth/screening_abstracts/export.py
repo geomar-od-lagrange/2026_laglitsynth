@@ -15,7 +15,6 @@ default so the reviewer forms an opinion before peeking.
 from __future__ import annotations
 
 import argparse
-import json
 import random
 import sys
 from pathlib import Path
@@ -27,6 +26,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.io import read_jsonl
+from laglitsynth.models import LlmMeta
 from laglitsynth.screening_abstracts.models import ScreeningMeta, ScreeningVerdict
 
 # ── XLSX ──────────────────────────────────────────────────────────────────────
@@ -197,14 +197,16 @@ def build_work_sheet(
     work: Work,
     *,
     criterion: str,
-    llm_meta: dict[str, object],
+    llm_meta: LlmMeta | None,
 ) -> None:
     """Per-work sheet: bibliographic block, criterion + scoring, LLM details (collapsed).
 
     ``criterion`` is the screening prompt rendered verbatim so the
     reviewer scores against the same question the LLM saw.
     ``llm_meta`` carries the model/temperature/prompt_sha256 from
-    ScreeningMeta.llm so the reviewer can audit the LLM's run.
+    ScreeningMeta.llm so the reviewer can audit the LLM's run; it is ``None``
+    when no meta file was found, in which case the fingerprint cells are left
+    blank.
     """
     wrap_top_left = Alignment(wrap_text=True, vertical="top", horizontal="left")
     top_aligned = Alignment(vertical="top")
@@ -318,17 +320,17 @@ def build_work_sheet(
     llm_model_label = ws.cell(row=20, column=1, value="llm_model")
     llm_model_label.font = _BOLD
     llm_model_label.alignment = top_aligned
-    ws.cell(row=20, column=2, value=str(llm_meta.get("model", "")))
+    ws.cell(row=20, column=2, value=llm_meta.model if llm_meta else "")
 
     llm_temp_label = ws.cell(row=21, column=1, value="llm_temperature")
     llm_temp_label.font = _BOLD
     llm_temp_label.alignment = top_aligned
-    ws.cell(row=21, column=2, value=llm_meta.get("temperature"))
+    ws.cell(row=21, column=2, value=llm_meta.temperature if llm_meta else None)
 
     llm_sha_label = ws.cell(row=22, column=1, value="llm_prompt_sha256")
     llm_sha_label.font = _BOLD
     llm_sha_label.alignment = top_aligned
-    ws.cell(row=22, column=2, value=str(llm_meta.get("prompt_sha256", "")))
+    ws.cell(row=22, column=2, value=llm_meta.prompt_sha256 if llm_meta else "")
 
     llm_raw_label = ws.cell(row=23, column=1, value="llm_raw_response")
     llm_raw_label.font = _BOLD
@@ -347,14 +349,12 @@ def build_work_sheet(
     ws.freeze_panes = "B1"
 
 
-def _load_meta(meta_path: Path | None) -> tuple[str, dict[str, object]]:
-    """Return ``(criterion, llm_meta_dict)`` from a screening-meta.json file.
+def _load_meta(meta_path: Path | None) -> tuple[str, LlmMeta | None]:
+    """Return ``(criterion, llm_meta)`` from a screening-meta.json file.
 
-    Falls back to placeholders when ``meta_path`` is None or missing —
-    the export still works, just without the criterion / LLM
-    fingerprint. ``screening-meta.json`` may pre-date the addition of
-    ``prompt`` to ``ScreeningMeta``, in which case the criterion shows
-    a stub.
+    Returns ``(<placeholder>, None)`` when ``meta_path`` is None or missing —
+    the export still works, just without the criterion / LLM fingerprint. A
+    present but malformed meta raises (there are no older files to tolerate).
     """
     if meta_path is None or not meta_path.exists():
         print(
@@ -363,23 +363,11 @@ def _load_meta(meta_path: Path | None) -> tuple[str, dict[str, object]]:
             f"Pass --meta to point at the right file.",
             file=sys.stderr,
         )
-        return ("<screening criterion not available>", {})
+        return ("<screening criterion not available>", None)
 
-    raw = json.loads(meta_path.read_text())
-    # Use ScreeningMeta to validate, but tolerate older meta files.
-    try:
-        meta = ScreeningMeta.model_validate(raw)
-        criterion = meta.prompt or "<screening criterion not recorded in meta>"
-        llm_meta = {
-            "model": meta.llm.model,
-            "temperature": meta.llm.temperature,
-            "prompt_sha256": meta.llm.prompt_sha256,
-        }
-        return (criterion, llm_meta)
-    except Exception:
-        criterion = raw.get("prompt") or "<screening criterion not recorded in meta>"
-        llm_meta = raw.get("llm", {}) or {}
-        return (criterion, llm_meta)
+    meta = ScreeningMeta.model_validate_json(meta_path.read_text())
+    criterion = meta.prompt or "<screening criterion not recorded in meta>"
+    return (criterion, meta.llm)
 
 
 def export_review_xlsx(

@@ -99,9 +99,15 @@ Every downloaded response is validated by magic bytes (`%PDF`) before it is
 stored, so an HTML error page served with a PDF content-type is rejected.
 Downloads are rate-limited to one request per second per domain. A work with
 no source, or whose every download failed, gets a `missing` record and no
-PDF. `--skip-existing` skips works that already have a non-`missing`
-provenance record; `--dry-run` reports what would be retrieved without
-downloading.
+PDF. Retrieval is sticky by default: a work that already has a non-`missing`
+provenance record is skipped, so a plain run attempts only `missing` and
+never-seen works and never re-downloads or overwrites a PDF already held —
+obtaining PDFs is the scarce resource (rate limits, captchas even for paid
+access), and a "successful" re-fetch could replace a good full text with a
+paywalled stub. `--refetch` opts back into re-downloading held works for the
+rare case where a stored PDF is known bad; a failed re-fetch never downgrades
+the prior record to `missing` or deletes the held PDF. `--dry-run` reports
+what would be retrieved without downloading.
 
 Sci-Hub and shadow libraries, publisher APIs, and Google Scholar scraping
 are all out of scope — legal risk or integration cost not appropriate for a

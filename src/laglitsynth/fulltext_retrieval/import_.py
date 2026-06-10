@@ -27,6 +27,7 @@ import re
 import shutil
 import sys
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pypdf import PdfReader
@@ -77,6 +78,9 @@ def read_manifest(path: Path) -> list[ManifestEntry]:
     """Parse ``pdf-manifest.csv`` into ``ManifestEntry`` rows."""
     entries: list[ManifestEntry] = []
     with open(path, newline="", encoding="utf-8") as f:
+        # The export also writes an ``expected_filename`` column; it is an
+        # advisory round-trip hint for the collaborator (written, never read
+        # back here), so only work_id/stem/doi are pulled into the entry.
         for row in csv.DictReader(f):
             doi = row.get("doi") or None
             entries.append(
@@ -119,6 +123,17 @@ def _load_sidecar(import_dir: Path) -> dict[str, str]:
     return mapping
 
 
+def _strip_trailing_punct(doi: str) -> str:
+    """Drop trailing sentence punctuation a DOI match may pick up from prose.
+
+    ``_DOI_RE`` greedily matches ``[-._;()/:a-z0-9]`` characters, so a DOI
+    rendered in running text as ``10.1234/abc.`` (or followed by ``,;:)``)
+    captures the punctuation. Stripping it lets such a match equal the bare
+    manifest DOI ``10.1234/abc``.
+    """
+    return doi.rstrip(".,;:)")
+
+
 def _embedded_doi(pdf_path: Path) -> str | None:
     """Return a DOI found in the PDF metadata or first-page text, or None."""
     try:
@@ -129,12 +144,12 @@ def _embedded_doi(pdf_path: Path) -> str | None:
                 if isinstance(value, str):
                     m = _DOI_RE.search(value)
                     if m is not None:
-                        return m.group(0)
+                        return _strip_trailing_punct(m.group(0))
         if reader.pages:
             text = reader.pages[0].extract_text() or ""
             m = _DOI_RE.search(text)
             if m is not None:
-                return m.group(0)
+                return _strip_trailing_punct(m.group(0))
     except (PyPdfError, OSError, ValueError) as exc:
         # A malformed PDF yields no embedded DOI; later strategies still apply.
         print(f"  ! could not parse {pdf_path.name} for embedded DOI: {exc}", file=sys.stderr)
@@ -246,8 +261,6 @@ def import_pdfs(
 
 
 def _now() -> str:
-    from datetime import UTC, datetime
-
     return datetime.now(UTC).isoformat(timespec="microseconds")
 
 

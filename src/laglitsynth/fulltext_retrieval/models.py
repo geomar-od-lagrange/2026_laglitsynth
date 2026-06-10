@@ -32,6 +32,5 @@ class RetrievalMeta(BaseModel):
     run: RunMeta
     total_works: int
     retrieved_count: int
-    abstract_only_count: int
-    failed_count: int
+    missing_count: int
     by_source: dict[str, int]

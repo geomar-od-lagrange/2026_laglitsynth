@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from pypdf import PdfWriter
 
@@ -59,6 +59,43 @@ class TestImportByDoi:
         assert rec.source == PdfSource.zotero_import
         assert rec.pdf_path == "pdfs/W1.pdf"
         assert rec.content_sha256 is not None
+
+    def test_first_page_text_doi_with_trailing_period(self, tmp_path: Path) -> None:
+        # The DOI is only resolvable via first-page text, where it is rendered
+        # in running prose with a trailing period (``10.1234/abc.``). The
+        # trailing punctuation must be stripped so it matches the bare manifest
+        # DOI ``10.1234/abc``. Metadata carries no DOI, so only the first-page
+        # text path can resolve this work.
+        import_dir = tmp_path / "incoming"
+        data_dir = tmp_path / "data"
+        manifest = tmp_path / "pdf-manifest.csv"
+        _write_manifest(
+            manifest, [("https://openalex.org/W1", "W1", "10.1234/abc")]
+        )
+        _make_pdf(import_dir / "Some Paper Title.pdf")  # no embedded DOI metadata
+
+        # pypdf cannot render extractable text from a blank page, so stand in a
+        # reader whose metadata has no DOI and whose first page text carries the
+        # DOI followed by a sentence-ending period.
+        fake_page = MagicMock()
+        fake_page.extract_text.return_value = (
+            "Cite as: doi 10.1234/abc. Published 2024."
+        )
+        fake_reader = MagicMock()
+        fake_reader.metadata = None
+        fake_reader.pages = [fake_page]
+
+        with patch(
+            "laglitsynth.fulltext_retrieval.import_.PdfReader",
+            return_value=fake_reader,
+        ):
+            summary, still_missing = import_pdfs(
+                import_dir, manifest, data_dir, PdfSource.zotero_import, overwrite=False
+            )
+
+        assert summary.copied == 1
+        assert still_missing == 0
+        assert load_provenance(data_dir)["https://openalex.org/W1"].stem == "W1"
 
 
 class TestImportByFilenameStem:
