@@ -108,7 +108,7 @@ Update this file when a plan is written, implemented, or archived.
   ([`PdfProvenanceRecord`](../src/laglitsynth/fulltext_retrieval/models.py)),
   replacing the per-run `retrieval.jsonl` / `RetrievalRecord`.
   `fulltext-retrieval` is rewired onto the store (`--data-dir`,
-  provenance-keyed `--skip-existing`, `--manual-dir` / `unretrieved.txt`
+  sticky-by-default retrieval, `--manual-dir` / `unretrieved.txt`
   removed); `fulltext-retrieval-export` emits the DOI/RIS/round-trip-CSV gap
   bundle and `fulltext-retrieval-import` ingests a collaborator's returned
   folder (match by embedded-DOI / stem / sidecar, magic-byte validate,
@@ -130,6 +130,21 @@ Update this file when a plan is written, implemented, or archived.
   including stage 3's now-purposeless `--format csv`. See
   [eligibility.md](../docs/eligibility.md) and
   [extraction-codebook.md](../docs/extraction-codebook.md).
+
+- [PR #20 review fixes](done/pr20-review-fixes.md) — closes the
+  [PR #20 review](https://github.com/geomar-od-lagrange/2026_laglitsynth/pull/20).
+  Full-text retrieval is now sticky by default: a normal run skips every
+  work that already holds a non-`missing` PDF and attempts only
+  `missing`/unseen ones, never overwriting an on-disk PDF (`--skip-existing`
+  removed; `--refetch` opts back into deliberate re-download). A
+  no-downgrade guard at the single `upsert_provenance` write point keeps a
+  failed `--refetch` from clobbering a held PDF with `missing`.
+  `RetrievalMeta.abstract_only_count` → `missing_count` (`failed_count`
+  dropped); `_try_oa_urls` returns `tuple[PdfSource, str] | None` (the
+  `_AllAttemptsFailedError` ceremony deleted); embedded-DOI matching in
+  `fulltext-retrieval-import` strips trailing `.,;:)`; the three export
+  modules' `_load_meta` now returns a typed `LlmMeta | None` instead of
+  falling back to an untyped dict.
 
 ## In flight
 

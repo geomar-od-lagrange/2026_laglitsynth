@@ -21,7 +21,7 @@ default, and a new `--refetch` opts back into deliberate re-download.
 ## Design decisions
 
 Retrieval is sticky by default. A normal
-[`fulltext-retrieval`](../src/laglitsynth/fulltext_retrieval/retrieve.py)
+[`fulltext-retrieval`](../../src/laglitsynth/fulltext_retrieval/retrieve.py)
 run skips every work that already has a non-`missing` provenance record
 and attempts only `missing` (and never-seen) works; it never overwrites
 an on-disk PDF. Obtaining PDFs is the project's main pain point — rate
@@ -60,7 +60,7 @@ malformed meta raises rather than degrading silently.
 `pixi run typecheck` and `pixi run test` pass between each commit.
 
 1. Sticky-by-default retrieval in
-   [retrieve.py](../src/laglitsynth/fulltext_retrieval/retrieve.py)
+   [retrieve.py](../../src/laglitsynth/fulltext_retrieval/retrieve.py)
    `run()`. Replace the `--skip-existing` flag with `--refetch`: the
    skip set (works with a non-`missing` record) is now built *unless*
    `--refetch` is passed, so a plain run skips held works and attempts
@@ -70,11 +70,11 @@ malformed meta raises rather than degrading silently.
    `upsert_provenance`, skip the write when the new record is `missing`
    and the existing record is not (log at debug) — this only fires on
    the `--refetch` path but is what makes it safe. Update
-   [docs/fulltext-retrieval.md](../docs/fulltext-retrieval.md),
-   [docs/interfaces.md](../docs/interfaces.md), and
-   [docs/cross-machine.md](../docs/cross-machine.md) (`grep` for
+   [docs/fulltext-retrieval.md](../../docs/fulltext-retrieval.md),
+   [docs/interfaces.md](../../docs/interfaces.md), and
+   [docs/cross-machine.md](../../docs/cross-machine.md) (`grep` for
    `skip-existing`/`skip_existing` across docs and code first). Tests in
-   [test_fulltext_retrieval.py](../tests/test_fulltext_retrieval.py):
+   [test_fulltext_retrieval.py](../../tests/test_fulltext_retrieval.py):
    (a) plain run skips a work that already has a non-`missing` record
    (no download attempted, PDF untouched); (b) plain run still attempts
    a `missing` work; (c) `--refetch` re-attempts a held work and, when
@@ -83,10 +83,10 @@ malformed meta raises rather than degrading silently.
    cover). Rename/repoint `TestSkipExisting` accordingly.
 
 2. Rename `RetrievalMeta.abstract_only_count` → `missing_count` and drop
-   `failed_count` in [models.py](../src/laglitsynth/fulltext_retrieval/models.py),
+   `failed_count` in [models.py](../../src/laglitsynth/fulltext_retrieval/models.py),
    update the construction site in `retrieve.py` (drop the hard-wired
    `failed_count=0`), and fix the field list in
-   [interfaces.md](../docs/interfaces.md). `grep` for both names first
+   [interfaces.md](../../docs/interfaces.md). `grep` for both names first
    to catch any reader; no test asserts them today, so add one asserting
    `missing_count` reflects the unretrieved tally.
 
@@ -98,16 +98,16 @@ malformed meta raises rather than degrading silently.
    tests stay green (the 403→`missing` path is unchanged in behaviour).
 
 4. Tighten embedded-DOI matching in
-   [import_.py](../src/laglitsynth/fulltext_retrieval/import_.py): strip
+   [import_.py](../../src/laglitsynth/fulltext_retrieval/import_.py): strip
    trailing `.,;:)` from a `_DOI_RE` match before normalising, so a
    first-page-text DOI rendered as `10.1234/abc.` matches manifest
    `10.1234/abc`. Test the first-page-*text* resolution path (currently
    only the metadata path is covered) with a trailing-period DOI.
 
 5. Drop the dead meta `try/except` fallback in all three export modules
-   ([fulltext_eligibility/export.py](../src/laglitsynth/fulltext_eligibility/export.py),
-   [extraction_codebook/export.py](../src/laglitsynth/extraction_codebook/export.py),
-   [screening_abstracts/export.py](../src/laglitsynth/screening_abstracts/export.py)):
+   ([fulltext_eligibility/export.py](../../src/laglitsynth/fulltext_eligibility/export.py),
+   [extraction_codebook/export.py](../../src/laglitsynth/extraction_codebook/export.py),
+   [screening_abstracts/export.py](../../src/laglitsynth/screening_abstracts/export.py)):
    `_load_meta` returns `tuple[str, LlmMeta | None]` (model on success,
    `None` when the file is absent, raise on malformed), and
    `build_work_sheet` takes `LlmMeta | None` and reads typed attributes
@@ -129,13 +129,13 @@ summary proves misleading in practice.
 
 ## Critical files
 
-- [src/laglitsynth/fulltext_retrieval/retrieve.py](../src/laglitsynth/fulltext_retrieval/retrieve.py)
-- [src/laglitsynth/fulltext_retrieval/models.py](../src/laglitsynth/fulltext_retrieval/models.py)
-- [src/laglitsynth/fulltext_retrieval/import_.py](../src/laglitsynth/fulltext_retrieval/import_.py)
-- [src/laglitsynth/fulltext_eligibility/export.py](../src/laglitsynth/fulltext_eligibility/export.py),
-  [src/laglitsynth/extraction_codebook/export.py](../src/laglitsynth/extraction_codebook/export.py),
-  [src/laglitsynth/screening_abstracts/export.py](../src/laglitsynth/screening_abstracts/export.py)
-- [docs/interfaces.md](../docs/interfaces.md)
-- [tests/test_fulltext_retrieval.py](../tests/test_fulltext_retrieval.py),
-  [tests/test_fulltext_retrieval_import.py](../tests/test_fulltext_retrieval_import.py),
+- [src/laglitsynth/fulltext_retrieval/retrieve.py](../../src/laglitsynth/fulltext_retrieval/retrieve.py)
+- [src/laglitsynth/fulltext_retrieval/models.py](../../src/laglitsynth/fulltext_retrieval/models.py)
+- [src/laglitsynth/fulltext_retrieval/import_.py](../../src/laglitsynth/fulltext_retrieval/import_.py)
+- [src/laglitsynth/fulltext_eligibility/export.py](../../src/laglitsynth/fulltext_eligibility/export.py),
+  [src/laglitsynth/extraction_codebook/export.py](../../src/laglitsynth/extraction_codebook/export.py),
+  [src/laglitsynth/screening_abstracts/export.py](../../src/laglitsynth/screening_abstracts/export.py)
+- [docs/interfaces.md](../../docs/interfaces.md)
+- [tests/test_fulltext_retrieval.py](../../tests/test_fulltext_retrieval.py),
+  [tests/test_fulltext_retrieval_import.py](../../tests/test_fulltext_retrieval_import.py),
   and the three `test_*_export.py` files
