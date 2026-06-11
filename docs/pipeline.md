@@ -63,11 +63,14 @@ place. Works without a DOI are skipped and reported. See
 ### 3. screening-abstracts
 
 Applies a local LLM to score each abstract for relevance, assigning a verdict
-and confidence score. The dual output — retained and rejected — allows
-auditing of borderline cases.
+and confidence score. The stage flags rather than filters: it writes one
+`ScreeningVerdict` per work to a sidecar (covering every work, retained and
+rejected alike) and never removes records from the catalogue, so borderline
+cases stay auditable. Downstream stages join the verdict against the
+catalogue and apply their own threshold.
 
 - **Consumes:** deduplicated catalogue
-- **Produces:** screened catalogue, rejected records
+- **Produces:** per-work `ScreeningVerdict` sidecar (`verdicts.jsonl`)
 
 ### 5. fulltext-retrieval
 

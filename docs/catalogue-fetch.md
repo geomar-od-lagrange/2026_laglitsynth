@@ -28,9 +28,15 @@ Each run produces two files in `data/catalogue-fetch/`:
 
 - **`<slug>_<timestamp>.jsonl`** -- one `Work` JSON object per line. Read
   back with `Work.model_validate_json(line)` or the shared
-  `read_works_jsonl()` helper.
-- **`<slug>_<timestamp>.meta.json`** -- sidecar with query metadata (tool
-  name, query string, timestamp, record count).
+  `read_jsonl(path, Work)` helper.
+- **`<slug>_<timestamp>.meta.json`** -- `FetchMeta` sidecar with query
+  metadata: the embedded `run` (tool name, timestamp), `query`,
+  `total_count` (works matched by the query) and `records_written`
+  (works actually written to the JSONL).
+
+The sidecar path is derived from the output path by suffix replacement
+(`with_suffix`), so a custom `-o foo.jsonl` writes its meta to
+`foo.meta.json` — the `.jsonl` suffix is replaced, not appended to.
 
 Timestamped filenames prevent collisions between runs. The slug is the query
 lowercased with non-alphanumeric runs replaced by underscores.
@@ -58,4 +64,4 @@ Downstream tools never see the inverted index format.
   affecting a small fraction of records); the count is written to
   `validation_skipped` in the meta sidecar.
 - Transient API errors (429, 5xx) are retried automatically (3 retries with
-  backoff).
+  a `0.5` backoff factor). Results are paged from OpenAlex at `per_page=200`.

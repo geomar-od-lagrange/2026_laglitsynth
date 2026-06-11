@@ -14,7 +14,7 @@
 #   scripts/run-pipeline.sh [QUERY] [N]
 #
 #   QUERY  OpenAlex search string  (default: "Lagrangian particle tracking")
-#   N      max records per stage   (default: 5)
+#   N      max records fetched at stage 1   (default: 5)
 #
 # Stage gating:
 #   STOP_AFTER_STAGE=N  run stages 1..N and stop (default: 8 — full pipeline).
@@ -104,13 +104,12 @@ run_stage 5 fulltext-retrieval \
         --catalogue "$ROOT/catalogue-dedup/deduplicated.jsonl" \
         --screening-verdicts "$ROOT/screening-abstracts/$RUN_ID/verdicts.jsonl" \
         --screening-threshold 50 \
-        --output-dir "$ROOT/fulltext-retrieval" \
-        --email "$UNPAYWALL_EMAIL" \
-        --skip-existing
+        --data-dir "$ROOT" \
+        --email "$UNPAYWALL_EMAIL"
 
 run_stage 6 fulltext-extraction \
     laglitsynth fulltext-extraction \
-        --pdf-dir "$ROOT/fulltext-retrieval/pdfs" \
+        --pdf-dir "$ROOT/pdfs" \
         --output-dir "$ROOT/fulltext-extraction" \
         --grobid-url "$GROBID_URL" \
         --skip-existing

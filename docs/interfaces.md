@@ -31,10 +31,23 @@ stage's runner — three copies by design. A shared `laglitsynth.resolve`
 module is deferred until stage 9 adds a fourth consumer; see the
 [Resolve module](#resolve-module) note under "Gaps" below.
 
+A catalogue work absent from the upstream verdicts file is **silently
+dropped** — it never enters the active set and produces no output row or
+count. In stages 5 and 7 the join walks the catalogue and skips any work
+with no screening verdict (`_active_works` does `if sv is None: continue`);
+in stage 8 the join walks the eligibility verdicts and keeps only
+`eligible=True` ones, so a work without a verdict simply never appears.
+The practical consequence is the same in all three: running against a
+partial or stale verdicts file yields fewer works than the catalogue
+holds, with no warning. (Stage 8 does raise on the opposite
+inconsistency — a verdict whose `work_id` is missing from the catalogue.)
+
 Thresholds are CLI flags (e.g. `--screening-threshold 50`). Each run's
 threshold is recorded in the stage's meta sidecar for provenance. A
 pipeline-level config file may replace CLI flags once thresholds are tuned
-on real data.
+on real data. The flag's type differs by stage: stages 5 and 7 take
+`--screening-threshold` as a `float` (default `50.0`, so fractional
+cutoffs are allowed), while stage 3 takes it as an `int` (default `50`).
 
 ## Artifact map
 
@@ -89,7 +102,7 @@ output.
 |---|---|---|
 | `data/pdfs/<stem>.pdf` | (binary) | The persistent, work-keyed PDF store: one PDF per work, shared across searches |
 | `data/pdfs/provenance.jsonl` | [`PdfProvenanceRecord`](../src/laglitsynth/fulltext_retrieval/models.py) | Per-work store state: where its one PDF came from, or that it is still `missing` (whole-file, last-write-wins, single writer) |
-| `data/fulltext-retrieval/retrieval-meta.json` | [`RetrievalMeta`](../src/laglitsynth/fulltext_retrieval/models.py) | Per-invocation counts by `PdfSource` |
+| `data/fulltext-retrieval/retrieval-meta.json` | [`RetrievalMeta`](../src/laglitsynth/fulltext_retrieval/models.py) | Per-invocation counts: `total_works`, `retrieved_count`, `missing_count`, and `by_source` (a `dict[str, int]` keyed by `PdfSource`) |
 | `data/pdfs/export/{dois.txt,missing.ris,pdf-manifest.csv}` | (plain text / CSV) | Export bundle for a collaborator: still-missing works as DOI links, RIS, and the round-trip stem map |
 
 Stage 5 joins the deduplicated catalogue against stage 3's `verdicts.jsonl`
@@ -249,7 +262,8 @@ laglitsynth fulltext-eligibility \
     [--data-dir DIR] [--run-id ID] \
     [--eligibility-criteria FILE] [--config FILE] \
     [--skip-existing] [--max-records N] [--dry-run] \
-    [--model MODEL] [--base-url URL]
+    [--model MODEL] [--base-url URL] \
+    [--concurrency N] [--num-ctx N]
 
 # Stage 7 — fulltext-eligibility-export (human review, XLSX only)
 laglitsynth fulltext-eligibility-export \
@@ -266,7 +280,8 @@ laglitsynth extraction-codebook \
     [--data-dir DIR] [--run-id ID] \
     [--codebook FILE] [--config FILE] \
     [--skip-existing] [--max-records N] [--dry-run] \
-    [--model MODEL] [--base-url URL]
+    [--model MODEL] [--base-url URL] \
+    [--concurrency N] [--num-ctx N]
 
 # Stage 8 — extraction-codebook-export (human review, XLSX only)
 laglitsynth extraction-codebook-export \
@@ -278,6 +293,11 @@ laglitsynth extraction-codebook-export \
 
 Stages 3, 7 and 8 use the run-id directory model: outputs land at
 `<data-dir>/<stage-subdir>/<run-id>/`. See [configs.md](configs.md).
+
+On stages 7 and 8, `--concurrency` (default `1`) sets the number of
+in-flight LLM requests and `--num-ctx` (default `32768`) sets the
+Ollama context-window hint passed via `extra_body`. See
+[llm-concurrency.md](llm-concurrency.md) and [bake-model.md](bake-model.md).
 
 Stages 1 and 3 use positional arguments. All other subcommands use
 `--input` / `--output-dir` keyword flags. Stages 1 and 3 should be

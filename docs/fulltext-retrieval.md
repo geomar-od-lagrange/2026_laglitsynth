@@ -13,6 +13,13 @@ catalogue joined against stage 3's verdict sidecar at a caller-supplied
 `--screening-threshold`. Works at or above the threshold (and works whose
 score is `None`, the sentinel reasons) are in scope.
 
+The join walks the catalogue and **silently drops** any work absent from
+the screening verdicts file: the `_active_works` helper does
+`if sv is None: continue`, so a work with no screening verdict produces no
+retrieval attempt and no record, without warning. Running against a partial
+or stale verdicts file therefore retrieves fewer works than the catalogue
+holds — confirm the verdicts file covers the catalogue before a run.
+
 ## The persistent PDF store
 
 The store is one directory, `data/pdfs/`, holding `data/pdfs/<stem>.pdf` for
@@ -97,7 +104,11 @@ success:
 
 Every downloaded response is validated by magic bytes (`%PDF`) before it is
 stored, so an HTML error page served with a PDF content-type is rejected.
-Downloads are rate-limited to one request per second per domain. A work with
+Downloads are rate-limited to one request per second per domain. The HTTP
+client carries a per-request `timeout=30.0` seconds (distinct from the
+per-domain rate limit — a slow server aborts at 30s rather than stalling the
+run) and sets a `User-Agent: laglitsynth/0.1 (mailto:{email})` header on
+every request. A work with
 no source, or whose every download failed, gets a `missing` record and no
 PDF. Retrieval is sticky by default: a work that already has a non-`missing`
 provenance record is skipped, so a plain run attempts only `missing` and

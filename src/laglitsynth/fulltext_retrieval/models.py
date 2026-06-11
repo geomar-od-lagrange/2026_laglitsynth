@@ -22,7 +22,7 @@ class PdfProvenanceRecord(BaseModel):
     doi: str | None  # None for DOI-less works
     source: PdfSource
     source_url: str | None  # the URL a PDF was fetched from, when applicable
-    pdf_path: str | None  # "data/pdfs/<stem>.pdf" when source != missing, else None
+    pdf_path: str | None  # "pdfs/<stem>.pdf" (under data-dir) when source != missing, else None
     content_sha256: str | None  # of the PDF bytes; None when missing
     obtained_at: str  # ISO-8601 UTC of the record
 

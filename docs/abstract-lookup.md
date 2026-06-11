@@ -25,7 +25,9 @@ queried for that work.
 
 `GET /graph/v1/paper/DOI:{doi}?fields=abstract` returns a plain-text
 abstract — the best single DOI-to-abstract source. Public; an optional API
-key (`--api-key`, sent as the `x-api-key` header) raises rate limits.
+key (`--api-key`, sent as the `x-api-key` header) raises rate limits. When
+`--api-key` is omitted the key falls back to `SEMANTIC_SCHOLAR_API_KEY` in
+`.env` (announced as `Loaded SEMANTIC_SCHOLAR_API_KEY from .env` on stderr).
 
 ### 2. OpenAlex
 
@@ -46,11 +48,13 @@ source has an abstract keeps `abstract=None`, never `""`.
 ## Politeness and resumability
 
 `--email` (with an `ABSTRACT_LOOKUP_EMAIL` `.env` fallback) is sent as the
-Crossref / Semantic Scholar / OpenAlex polite contact. A `429` response is
-retried a bounded number of times, honouring `Retry-After` when present and
-otherwise backing off exponentially, capped so a misbehaving header cannot
-stall a run. A source that errors is logged and skipped so one flaky source
-never aborts the cascade.
+Crossref / Semantic Scholar / OpenAlex polite contact; every request also
+carries a `User-Agent: laglitsynth (mailto:{email})` header. A `429`
+response is retried up to `MAX_RATE_LIMIT_RETRIES = 3` times, honouring
+`Retry-After` when present and otherwise backing off exponentially, capped
+at `MAX_BACKOFF_SECONDS = 30.0` so a misbehaving header cannot stall a run.
+A source that errors is logged and skipped so one flaky source never aborts
+the cascade.
 
 `--skip-existing` re-reads the existing sidecar and carries forward every work
 whose abstract was already resolved, looking up only the works still missing

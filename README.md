@@ -71,10 +71,12 @@ env-var leakage into the Python side.
 
 Defaults that apply to both local and NESH runs:
 
-- `N=5` (local) or `N=10` (NESH) — max records pulled from OpenAlex
-  and propagated as `--max-records` to each downstream stage. Override
-  as the runner's second positional arg (locally) or via `N=...` in
-  `sbatch --export=` (NESH).
+- `N=5` (local) or `N=10` (NESH) — max records pulled from OpenAlex.
+  The runner passes `--max-records "$N"` to stage 1 (catalogue-fetch)
+  only; downstream stages consume the already-capped catalogue, so the
+  cap propagates through the data rather than as a re-passed flag.
+  Override as the runner's second positional arg (locally) or via
+  `N=...` in `sbatch --export=` (NESH).
 - `STOP_AFTER_STAGE=8` — full pipeline. Set to a smaller integer to
   cut runs short while iterating on upstream stages.
 - Models: `gemma3:4b` for stages 3 and 7, `llama3.1:8b` for stage 8.
@@ -160,8 +162,11 @@ sbatch \
 Notes:
 
 - Stage 8 (extraction-codebook) is the throughput floor; budget
-  `--time` against it. Stages 7 and 8 do not yet honour
-  `LLM_CONCURRENCY` — they call Ollama sequentially.
+  `--time` against it. Stages 7 and 8 both honour `--concurrency`
+  (dispatching through `laglitsynth.concurrency.map_concurrent`); the
+  runner forwards `LLM_CONCURRENCY` as that flag. Stage 8 defaults to
+  `--concurrency 1` because its TEI prompt is prefill-bound and Ollama
+  serialises prefill across requests.
 - Each stage's output is truncated at run start, so a wall-clock kill
   mid-stage means re-running that stage from scratch on the next
   submission. If you expect a tight budget, prefer running with

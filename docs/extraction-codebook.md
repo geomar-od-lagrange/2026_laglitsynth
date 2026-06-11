@@ -95,6 +95,14 @@ A successful-but-truncated record has `reason=None` and
 `truncated=True`: the LLM answered, but on a shortened body. Sentinel
 records are never truncated.
 
+Every content field is `str | None`, so the LLM's natural-JSON answers
+are coerced before validation (`_coerce_llm_types` in
+[`codebook.py`](../src/laglitsynth/extraction_codebook/codebook.py)): a
+JSON boolean becomes the literal string `"yes"` or `"no"`, a JSON list
+is joined with `" / "` (an empty list becomes `None`), and any other
+non-string value is stringified. `None` passes through unchanged. This
+flattens common type mismatches rather than failing the whole record.
+
 `raw_response` carries the LLM's message text before parsing. Set on
 successful records and on `llm-parse-failure` sentinels so an operator
 can see what the model actually said; `None` on the `tei-parse-failure`
@@ -189,10 +197,12 @@ paragraph boundaries: the last paragraph that would push the body over
 budget is dropped whole rather than cut mid-sentence. The returned
 `truncated` flag is carried on the record.
 
-`CHAR_BUDGET` is a tuning placeholder at ship time; it will be tuned on
-the first smoke run against real papers. Two-pass retrieval remains
-the principled solution once phase 3 identifies which fields suffer
-from attention dilution.
+`CHAR_BUDGET` is `100_000`, sized empirically rather than guessed: on
+the first real run (`nesh-pipeline-22064514`, N=57) the largest paper
+rendered to 86,968 chars, so 100k removes truncation on every observed
+paper while keeping a safety margin against larger outliers. Two-pass
+retrieval remains the principled solution for very long papers once
+phase 3 identifies which fields suffer from attention dilution.
 
 ## CLI interface
 
@@ -357,12 +367,19 @@ migration path and no backwards compatibility
 ([`export.py`](../src/laglitsynth/extraction_codebook/export.py)) for
 human spot-checking the extraction stage and tuning its codebook /
 prompt. It is XLSX-only — the JSONL sidecar is the machine-readable
-form. The workbook has an `Index` sheet (one row per sampled work,
-bibliographic columns plus a hyperlink to the per-work tab, as a light
-navigation aid) and one tab per sampled work. The per-work tab is the
-working surface: a bibliographic block, then one row per codebook field
-with columns `field | value | context | reviewer_correction`, then a
-collapsed LLM-meta block. The field list is driven off the codebook
+form. The workbook has an `Index` sheet and one tab per sampled work.
+The `Index` opens with three reviewer-identity rows
+(`reviewer_name` / `reviewer_email` / `review_date`, with placeholder
+values to fill in) above a table with one row per sampled work
+(bibliographic columns plus a hyperlink to the per-work tab, as a light
+navigation aid). The per-work tab is the working surface: a back-to-Index
+link, a bibliographic block, the embedded criterion, then one row per
+codebook field with columns `field | value | context |
+reviewer_correction` (the correction column pre-filled with a
+"leave blank if right" placeholder), a `reviewer_remarks` row, and
+finally a collapsed LLM-meta block (reason, seed, truncated, model,
+temperature, prompt_sha256, raw_response — hidden behind an outline
+toggle). The field list is driven off the codebook
 (the record model is codebook-built), so a non-default codebook's field
 set follows automatically — nothing is hard-coded. The criterion is read
 from the `--codebook` spec itself (the export loads it anyway to

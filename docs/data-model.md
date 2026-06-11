@@ -17,9 +17,9 @@ types used by the pipeline's own internal records — `RunMeta` and `LlmMeta`
 
 Stage 2 deduplication introduces [`DroppedRecord`](../src/laglitsynth/catalogue_dedup/models.py)
 in [`src/laglitsynth/catalogue_dedup/models.py`](../src/laglitsynth/catalogue_dedup/models.py),
-recording each dropped duplicate's `work_id`, the surviving record's `work_id`,
-and the matching rule that triggered the drop (`openalex_id`, `doi`, or
-`title_author_year`).
+with fields `dropped_work_id` (the dropped duplicate), `survived_work_id`
+(the surviving record), and `rule` (the matching rule that triggered the
+drop: `openalex_id`, `doi`, or `title_author_year`).
 
 ## Shared run-level types
 
@@ -69,6 +69,16 @@ where applicable, `llm: LlmMeta`. All pipeline-owned models carry
 - **Nullable where OpenAlex is nullable.** Many fields that the OpenAlex schema
   documents as required can be `null` in practice (errata, old records, data
   quality issues). The models accept `None` rather than skipping records.
+- **Mandatory `Work` fields.** A handful of fields carry no default and
+  must be present (and the right type) for a record to validate:
+  `authorships`, `biblio`, `cited_by_count`, `referenced_works`,
+  `keywords`, and `topics`. A record missing any of these fails
+  `Work` validation and is skipped at read time, incrementing
+  `validation_skipped` — so a `validation_skipped` count traces back to
+  records that lacked one of these fields.
+- **`is_retracted: bool | None`.** OpenAlex's retraction flag is carried
+  through on `Work` (nullable when OpenAlex omits it) so the review can
+  surface or exclude retracted papers.
 - **`publication_date` is `date | None`**, not a string. Pydantic validates the
   format; downstream code gets a real date object.
 - **Abstract stored as plain text.** Reconstructed from OpenAlex's inverted

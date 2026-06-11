@@ -42,7 +42,12 @@ The stage consumes three artifacts:
   records from [`catalogue-dedup`](catalogue-dedup.md)).
 - The stage 3 screening verdict sidecar ([`ScreeningVerdict`](../src/laglitsynth/screening_abstracts/models.py)
   records), plus a `--screening-threshold` cutoff. The stage joins these at
-  read time to determine which works to assess.
+  read time to determine which works to assess. The join walks the catalogue
+  and **silently drops** any work absent from the screening verdicts file
+  (`_active_works` does `if sv is None: continue`): a work with no screening
+  verdict is not assessed, produces no verdict row, and is not counted — with
+  no warning. Running against a partial or stale verdicts file therefore
+  assesses fewer works than the catalogue holds.
 - The extraction JSONL ([`ExtractedDocument`](../src/laglitsynth/fulltext_extraction/models.py)
   records from [`fulltext-extraction`](fulltext-extraction.md)).
 
@@ -281,13 +286,18 @@ random seed recorded on the verdict. Same shape as
 ([`export.py`](../src/laglitsynth/fulltext_eligibility/export.py)) for
 human spot-checking the LLM stage and tuning its prompt. It is XLSX-only
 — the JSONL sidecar is the machine-readable form. The workbook has an
-`Index` sheet (one row per sampled work, with the `eligible` /
-`llm_reason` verdict inline and a hyperlink to the per-work tab, as a
-light navigation aid) and one tab per sampled work. The per-work tab is
-the working surface: a bibliographic block, the eligibility criterion
-pulled verbatim from `eligibility-meta.json` so the reviewer sees the
-same question the LLM saw, reviewer placeholders (`reviewer_eligible` /
-`reviewer_reason`), and a collapsed LLM-verdict block.
+`Index` sheet and one tab per sampled work. The `Index` opens with three
+reviewer-identity rows (`reviewer_name` / `reviewer_email` /
+`review_date`, with placeholder values to fill in) above a table with one
+row per sampled work (bibliographic columns, the `eligible` / `llm_reason`
+verdict inline, and a hyperlink to the per-work tab, as a light navigation
+aid). The per-work tab is the working surface: a back-to-Index link, a
+bibliographic block, the eligibility criterion pulled verbatim from
+`eligibility-meta.json` so the reviewer sees the same question the LLM saw,
+a structured reviewer block (`reviewer_eligible` / `reviewer_reason` /
+`reviewer_remarks`, pre-filled with placeholders), and finally a collapsed
+LLM-verdict block (the model's `eligible`, `reason`, seed, and fingerprint
+hidden behind an outline toggle).
 
 ```
 laglitsynth fulltext-eligibility-export \

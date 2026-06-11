@@ -122,6 +122,12 @@ The meta sidecar nests two shared blocks:
 - **`llm`** (`LlmMeta`): `model`, `temperature` (explicit; currently `0.8`),
   `prompt_sha256` (sha256 of `SYSTEM_PROMPT + "\n" + user prompt`, 64 hex chars).
 
+Alongside `above_threshold_count`, `below_threshold_count`, and
+`skipped_count`, the meta records two failure counters:
+`llm_parse_failure_count` (LLM responses that did not validate against the
+verdict schema) and `llm_timeout_count` (calls that timed out or lost the
+connection after retries). Both are `0` for a clean run.
+
 The `prompt_sha256` is stable across runs with the same prompt wording.
 Comparing it across meta files confirms that two runs used identical prompts.
 

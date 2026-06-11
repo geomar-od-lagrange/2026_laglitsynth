@@ -35,8 +35,10 @@ different TEI structures. Common failure modes:
 - Figure captions interleaved with body paragraphs.
 - Two-column layouts cause paragraph-level text reordering.
 
-The TEI parser must fall back gracefully — if no `<div>` sections are found,
-treat the full body as a single "Body" section rather than crashing.
+The TEI parser must not crash on these shapes. When no top-level `<div>`
+sections are found, `sections()` returns an empty list (there is no
+synthetic single-"Body" fallback); stages 7/8 record that empty result
+as a `tei-parse-failure` sentinel.
 
 ## Infrastructure weight
 
@@ -45,8 +47,8 @@ GROBID is a Java application, best run as a Docker container
 
 - The Docker image is amd64-only. On Apple Silicon it runs under Rosetta
   emulation — functional but slower.
-- Startup takes 30-60 seconds (model loading). The health-check endpoint is
-  `GET /api/isalive`.
+- Startup takes ~30-60 seconds (model loading; up to ~90s on a cold NESH
+  node). The health-check endpoint is `GET /api/isalive`.
 - Memory footprint is ~2 GB.
 - The processing endpoint is `POST /api/processFulltextDocument` with the PDF
   as multipart form data. Timeout should be at least 120 seconds per paper.

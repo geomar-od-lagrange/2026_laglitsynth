@@ -146,6 +146,21 @@ Update this file when a plan is written, implemented, or archived.
   modules' `_load_meta` now returns a typed `LlmMeta | None` instead of
   falling back to an untyped dict.
 
+- [Doc/code consistency fixes](done/doc-code-consistency-fixes.md) —
+  closes a three-agent documentation audit (440 doc facts extracted,
+  checked against code, gaps found; spot-check validated). Fixes one real
+  regression — `scripts/run-pipeline.sh` (and NESH via the sbatch) passed
+  the removed `--output-dir`/`--skip-existing` to `fulltext-retrieval`, so
+  it could not reach stages 5–8; now `--data-dir "$ROOT"` with sticky
+  default and stage-6 `--pdf-dir "$ROOT/pdfs"`. Plus ~16 docs corrected to
+  match code: `--grobid-url` optional (+ `--timeout`), the dead
+  extraction-quality-gate claim removed, `read_works_jsonl` →
+  `read_jsonl`, stage-3 output is the verdict sidecar only, `DroppedRecord`
+  field names, no `source_basis` field, stages 7/8 honour `--concurrency`,
+  and newly-documented behaviours (silent-drop of works absent from the
+  verdicts file, download timeout, retry constants, Ollama model-pulled
+  preflight, XLSX review-export layouts).
+
 ## In flight
 
 - [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate is now planned as the [run manifest](run-manifest.md).

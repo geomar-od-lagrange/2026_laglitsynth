@@ -18,7 +18,8 @@ Start the GROBID container before running this stage:
 docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0
 ```
 
-GROBID takes 30–60 seconds to start. Health check: `GET http://localhost:8070/api/isalive`.
+GROBID takes ~30–60 seconds to start (up to ~90s on a cold NESH node).
+Health check: `GET http://localhost:8070/api/isalive`.
 See [external-services.md](external-services.md) for the full setup (Apple
 Silicon Rosetta workaround, memory requirements, `docker compose` file).
 
@@ -42,7 +43,8 @@ From [grobid-lessons.md](grobid-lessons.md):
 - Run GROBID as a Docker container (`lfoppiano/grobid:0.8.0`).
 - amd64-only image; runs under Rosetta on Apple Silicon (slower but
   functional).
-- Startup takes 30–60 seconds. Health check: `GET /api/isalive`.
+- Startup takes ~30–60 seconds (up to ~90s on a cold NESH node). Health
+  check: `GET /api/isalive`.
 - Memory footprint: ~2 GB.
 - Processing endpoint: `POST /api/processFulltextDocument` with the PDF as
   multipart form data.
@@ -74,21 +76,15 @@ Known TEI shape details the parser handles:
 Nested `<div>` hierarchy is preserved via `Section.children`, so
 sub-sections (Methods → Sub-methods) remain reachable.
 
-### Extraction quality gate
+### GROBID failures
 
-GROBID failures are binary in practice: the output is either clearly
-usable (full sentences in paragraphs, recognisable headings) or clearly
-broken (garbled text from column-gap misreads, OCR artefacts, or
-non-standard layouts). An automated quality gate catches the obvious
-failures before they flow downstream.
-
-Action: investigate whether GROBID exposes quality scores or flags
-programmatically (e.g. confidence on parsed elements). If GROBID does
-not provide usable quality signals, implement simple heuristics as a
-fallback: median sentence length, character-class entropy, ratio of
-non-ASCII characters. Documents that fail the quality gate are flagged
-in the extraction record and excluded from downstream LLM stages. This
-is flagged for implementation alongside the TEI parser, not deferred.
+A GROBID failure produces no record at all: the PDF is logged as failed
+and counted in `ExtractionMeta.failed_count`, but no `ExtractedDocument`
+is written, so the absence is the only signal. `ExtractedDocument`
+carries no quality field — there is no extraction-time quality gate.
+The check for empty or malformed TEI lives downstream: stages 7/8 record
+a document whose TEI has no parseable sections as a `tei-parse-failure`
+sentinel.
 
 ### Metadata authority
 
@@ -180,6 +176,9 @@ class ExtractionMeta(BaseModel):
     invalid_stem_count: int
 ```
 
+`grobid_version` is read from the GROBID `/api/version` probe at startup;
+if that probe fails it falls back to the literal string `"unknown"`.
+
 ## Storage layout
 
 ```
@@ -202,19 +201,23 @@ consumed by downstream stages (eligibility, data extraction).
 
 ```
 laglitsynth fulltext-extraction \
-    --pdf-dir data/fulltext-retrieval/pdfs/ \
+    --pdf-dir data/pdfs/ \
     --output-dir data/fulltext-extraction/ \
-    --grobid-url http://localhost:8070 \
+    [--grobid-url http://localhost:8070] \
+    [--timeout 120] \
     [--skip-existing]
 ```
 
 ### Arguments
 
-- `--pdf-dir`: directory containing retrieved PDFs.
+- `--pdf-dir`: directory containing retrieved PDFs (the PDF store, e.g.
+  `data/pdfs/`).
 - `--output-dir`: where to write extraction records, metadata, and TEI
   files.
-- `--grobid-url`: GROBID API endpoint. Required — there is no non-GROBID
-  path for now.
+- `--grobid-url`: GROBID API endpoint. Optional; defaults to
+  `http://localhost:8070`.
+- `--timeout`: per-paper GROBID timeout in seconds. Optional; defaults to
+  `120.0`.
 - `--skip-existing`: do not re-extract PDFs that already have an
   `ExtractedDocument` record.
 
@@ -245,7 +248,7 @@ If GROBID goes down mid-corpus, restart the container and re-run with
 ```bash
 docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0  # restart GROBID
 laglitsynth fulltext-extraction \
-    --pdf-dir data/fulltext-retrieval/pdfs/ \
+    --pdf-dir data/pdfs/ \
     --output-dir data/fulltext-extraction/ \
     --grobid-url http://localhost:8070 \
     --skip-existing

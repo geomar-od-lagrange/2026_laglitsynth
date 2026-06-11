@@ -61,6 +61,15 @@ ollama pull llama3.1:8b
 it returns empty JSON. See [extraction-codebook.md](extraction-codebook.md)
 for model-sizing guidance.
 
+Every LLM stage runs a preflight check
+([`src/laglitsynth/ollama.py`](../src/laglitsynth/ollama.py)) before
+processing any work: it validates the `--base-url`, confirms the Ollama
+server is reachable, and confirms the requested `--model` (a plain tag
+or a baked tag) is actually pulled. If the model is missing the run
+aborts immediately with `Ollama responds at <url> but model 'X' is not
+pulled. Run \`ollama pull X\` first.` — so pull (or bake) the model
+before launching the stage.
+
 ### Bake Modelfiles for `num_ctx`
 
 Ollama's OpenAI-compatible endpoint accepts a `num_ctx` hint via
@@ -123,8 +132,9 @@ softwareupdate --install-rosetta
 docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0
 ```
 
-Startup takes 30–60 seconds while the JVM and models load. Poll the
-health endpoint before running stage 6:
+Startup takes ~30–60 seconds while the JVM and models load (up to ~90s
+on a cold NESH node — see the NESH section below). Poll the health
+endpoint before running stage 6:
 
 ```bash
 curl http://localhost:8070/api/isalive
@@ -181,12 +191,15 @@ restart the container and re-run with `--skip-existing`:
 ```bash
 docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0 &
 # wait for /api/isalive ...
-laglitsynth fulltext-extraction --skip-existing --run-id <existing-run-id> ...
+laglitsynth fulltext-extraction --skip-existing \
+    --pdf-dir data/pdfs/ --output-dir data/fulltext-extraction/ ...
 ```
 
-`--skip-existing` loads any prior `extraction-records.jsonl` from the
-run directory and skips `work_id`s that already have a completed record.
-Only new or previously failed PDFs are submitted to GROBID.
+Stage 6 takes `--pdf-dir`, `--output-dir`, `--grobid-url`, `--timeout`,
+and `--skip-existing`; it has no `--run-id` flag. `--skip-existing`
+loads any prior `extraction.jsonl` from the output directory and skips
+`work_id`s that already have a completed record. Only new or previously
+failed PDFs are submitted to GROBID.
 
 ## NESH HPC cluster
 
