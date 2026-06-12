@@ -1,9 +1,16 @@
 # screening-abstracts
 
 Screen a JSONL file of `Work` records by sending each abstract to a local
-Ollama-hosted LLM with a relevance prompt. Outputs a `ScreeningVerdict`
-sidecar covering every work in the input — one verdict per work regardless
-of score.
+Ollama-hosted LLM whose system prompt — the classifier contract plus the
+relevance criterion — is loaded from an external screening-criteria YAML.
+Outputs a `ScreeningVerdict` sidecar covering every work in the input — one
+verdict per work regardless of score.
+
+The system prompt lives in a screening-criteria YAML (default
+[`examples/screening-criteria/lagrangian-oceanography.yaml`](../examples/screening-criteria/lagrangian-oceanography.yaml)),
+exactly as stage 7 loads its eligibility-criteria YAML. Swapping the review
+topic is configuration work — edit the `system_prompt` field — not a code
+change.
 
 ## Prerequisites
 
@@ -13,24 +20,27 @@ Quick start: `ollama pull gemma3:4b` (the default model, ~2.5 GB).
 ## Usage
 
 ```bash
-# basic screening
-laglitsynth screening-abstracts data/catalogue-dedup/deduplicated.jsonl \
-  "Is this abstract about Lagrangian particle tracking in submesoscale dynamics?"
+# basic screening (uses the default screening-criteria YAML)
+laglitsynth screening-abstracts data/catalogue-dedup/deduplicated.jsonl
 
-# stricter threshold
-laglitsynth screening-abstracts input.jsonl "..." --screening-threshold 70
+# point at a different review topic
+laglitsynth screening-abstracts input.jsonl \
+  --screening-criteria examples/screening-criteria/my-topic.yaml
+
+# stricter threshold (float)
+laglitsynth screening-abstracts input.jsonl --screening-threshold 70
 
 # bucket root override (e.g. for sweeps writing into a sibling tree)
-laglitsynth screening-abstracts input.jsonl "..." --data-dir runs/sweep-A
+laglitsynth screening-abstracts input.jsonl --data-dir runs/sweep-A
 
 # pin the run-id (otherwise a fresh <iso>_<12hex> is generated)
-laglitsynth screening-abstracts input.jsonl "..." --run-id 2026-05-03T14-30-00_abc123def456
+laglitsynth screening-abstracts input.jsonl --run-id 2026-05-03T14-30-00_abc123def456
 
 # rerun with the configuration of a prior run (fresh run-id)
-laglitsynth screening-abstracts input.jsonl "..." --config data/screening-abstracts/<run-id>/config.yaml
+laglitsynth screening-abstracts input.jsonl --config data/screening-abstracts/<run-id>/config.yaml
 
 # prompt tuning: process first 20 works, print verdicts, don't write output
-laglitsynth screening-abstracts input.jsonl "..." --dry-run --max-records 20
+laglitsynth screening-abstracts input.jsonl --dry-run --max-records 20
 ```
 
 ## CLI arguments
@@ -38,12 +48,12 @@ laglitsynth screening-abstracts input.jsonl "..." --dry-run --max-records 20
 | Argument | Description |
 |---|---|
 | `INPUT` (positional) | Input JSONL file path (required). |
-| `PROMPT` (positional) | Relevance screening prompt string (required). |
+| `--screening-criteria` | Screening-criteria YAML carrying a `system_prompt` field (default: [`examples/screening-criteria/lagrangian-oceanography.yaml`](../examples/screening-criteria/lagrangian-oceanography.yaml)). |
 | `--data-dir` | Bucket root for stage outputs (default: `data/`). |
 | `--run-id` | Run identifier (default: generated `<iso>_<12hex>`). |
 | `--config` | YAML config file whose values seed argparse defaults; explicit CLI flags override. |
 | `--model` | Ollama model name (default: `gemma3:4b`). |
-| `--screening-threshold` | Relevance score cutoff, 0--100 (default: 50). |
+| `--screening-threshold` | Relevance score cutoff, 0--100 as a `float` (default: `50.0`). |
 | `--base-url` | Ollama API base URL (default: `http://localhost:11434`). |
 | `--max-records` | Process only the first N works. Useful with `--dry-run`. |
 | `--dry-run` | Print verdicts to stderr without writing any output files. |
@@ -51,8 +61,32 @@ laglitsynth screening-abstracts input.jsonl "..." --dry-run --max-records 20
 
 The resolved output directory is `<data-dir>/screening-abstracts/<run-id>/`.
 See [configs.md](configs.md) for the config-file precedence rule and the
-inlining behaviour of file-valued args (none on this stage; the codebook
-and eligibility-criteria stages inline their YAML on save).
+inlining behaviour of file-valued args: the `screening_criteria` YAML is
+inlined into the saved `config.yaml` on every run (like the eligibility-criteria
+and codebook stages) so a run stays interpretable after the source file moves.
+
+## Screening-criteria YAML
+
+The `system_prompt` field carries the whole system message: the classifier
+contract (return JSON with `relevance_score` 0--100 and `reason`, JSON only)
+and the relevance criterion (the question the work is scored against). The
+shape mirrors the stage-7 eligibility-criteria YAML, so the same loader reads
+both. The user message is then just the work listing —
+`title`/`authors`/`year`/`abstract` — with no criterion prefix; the criterion
+lives entirely in the system prompt.
+
+```yaml
+id: lagrangian-oceanography
+description: |
+  Relevance criterion for a systematic review ...
+system_prompt: |-
+  You are a relevance classifier for academic paper abstracts.
+  ...
+  On a scale from 0% (not relevant) to 100% (perfectly relevant), how
+  relevant is this work to Lagrangian particle tracking in oceanography?
+  ...
+  Return ONLY the JSON object, nothing else.
+```
 
 ## Output format
 
@@ -61,10 +95,11 @@ Each run produces three files in `<data-dir>/screening-abstracts/<run-id>/`:
 - **`verdicts.jsonl`** — one `ScreeningVerdict` per input work, appended
   per-record so a partial file from a killed run is still valid JSONL.
 - **`screening-meta.json`** — `ScreeningMeta` sidecar with nested `run`
-  and `llm` blocks, threshold, input path, input count, prompt, and
-  above/below/skipped counts. Written upfront with zeroed counts when
-  the run starts and rewritten with the real counts at the end, so a
-  mid-run reviewer export still sees the criterion + LLM fingerprint.
+  and `llm` blocks, threshold, input path, input count, `criterion` (the
+  loaded `system_prompt`), and above/below/skipped counts. Written upfront
+  with zeroed counts when the run starts and rewritten with the real counts
+  at the end, so a mid-run reviewer export still sees the criterion + LLM
+  fingerprint.
 - **`config.yaml`** — fully-resolved CLI+config values for this run,
   excluding `run_id` and `--config` itself. Replay via
   `--config <run-dir>/config.yaml` (a fresh run-id is generated).
@@ -100,11 +135,11 @@ sentinels; it is `None` on `no-abstract` and `llm-timeout` sentinels.
 
 ### LLM input format
 
-The user message sent to the LLM contains the criterion plus a
-"standard literature listing" block — title, authors, year, abstract —
-so the human reviewer (who sees the same fields) and the LLM score
-against symmetric context. Missing title or year render as
-`<unknown>`; an empty author list renders as `<unknown>`. Works with
+The system message is the loaded `system_prompt` (contract + criterion).
+The user message is a bare "standard literature listing" block — title,
+authors, year, abstract — so the human reviewer (who sees the same fields)
+and the LLM score against symmetric context. Missing title or year render
+as `<unknown>`; an empty author list renders as `<unknown>`. Works with
 no abstract get the `no-abstract` sentinel and skip the LLM call.
 
 ### Timeouts and retries
@@ -120,7 +155,11 @@ The meta sidecar nests two shared blocks:
 
 - **`run`** (`RunMeta`): `tool`, `tool_version`, `run_at`, `validation_skipped`.
 - **`llm`** (`LlmMeta`): `model`, `temperature` (explicit; currently `0.8`),
-  `prompt_sha256` (sha256 of `SYSTEM_PROMPT + "\n" + user prompt`, 64 hex chars).
+  `prompt_sha256` (sha256 of `system_prompt + "\n" + USER_TEMPLATE`, 64 hex
+  chars, where `USER_TEMPLATE` is the user-render marker).
+
+The loaded `system_prompt` is also stored verbatim on the meta as
+`criterion`, so the reviewer export embeds the exact question the LLM saw.
 
 Alongside `above_threshold_count`, `below_threshold_count`, and
 `skipped_count`, the meta records two failure counters:
@@ -133,19 +172,20 @@ Comparing it across meta files confirms that two runs used identical prompts.
 
 ## Tips for prompt tuning
 
-Use `--dry-run --max-records N` to iterate on your prompt without writing
-output files. This processes the first N works and prints each verdict to
-stderr so you can quickly check whether the LLM is scoring sensibly.
+Use `--dry-run --max-records N` to iterate on your screening criteria
+without writing output files. This processes the first N works and prints
+each verdict to stderr so you can quickly check whether the LLM is scoring
+sensibly.
 
 ```bash
 laglitsynth screening-abstracts input.jsonl \
-  "Does this abstract study Lagrangian particle dispersion?" \
+  --screening-criteria examples/screening-criteria/my-topic.yaml \
   --dry-run --max-records 10
 ```
 
-Adjust the prompt wording and `--screening-threshold` until the
-above/below split looks right, then run without `--dry-run` for the full
-set.
+Edit the `system_prompt` field in the screening-criteria YAML and adjust
+`--screening-threshold` until the above/below split looks right, then run
+without `--dry-run` for the full set.
 
 ## Reproducibility
 
@@ -191,7 +231,7 @@ laglitsynth screening-abstracts-export \
 
 Default output: `<verdicts parent>/review.xlsx`. Override with `--output`.
 `--meta` defaults to `<verdicts parent>/screening-meta.json` and is read
-to embed the screening criterion (the user prompt) and the LLM
+to embed the screening criterion (the loaded `system_prompt`) and the LLM
 fingerprint (`model`, `temperature`, `prompt_sha256`) into each per-work
 sheet. A `work_id` present in the verdicts file but absent from the
 catalogue aborts the export — the two inputs are expected to come from
@@ -219,7 +259,7 @@ Each per-work `W<id>` sheet uses a vertical `Field | Value` layout:
 - Row 1: `← back to Index` hyperlink.
 - Rows 3–9: `title`, `authors`, `journal`, `publication_year`, `doi`
   (clickable), `openalex` (clickable), `abstract` (wrapped).
-- Row 11: `criterion` — the screening prompt verbatim from
+- Row 11: `criterion` — the loaded `system_prompt` verbatim from
   `screening-meta.json`.
 - Row 12: `scoring_instructions` — `Score 0% (not relevant) to 100%
   (perfectly relevant)`.

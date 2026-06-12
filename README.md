@@ -64,10 +64,22 @@ implemented stage has its own doc under [`docs/`](docs/).
 
 ## Running the pipeline
 
-[`scripts/run-pipeline.sh`](scripts/run-pipeline.sh) runs stages 1..8
-end-to-end, writing outputs under `data/run/`. The runner sources
-`.env` and passes `--api-key` / `--email` as flags to the tools — no
-env-var leakage into the Python side.
+[`scripts/run-pipeline.sh [config.yaml]`](scripts/run-pipeline.sh) runs
+stages 1..8 end-to-end, writing outputs under `data/run/`. The runner
+sources `.env` and passes `--api-key` / `--email` as flags to the tools
+— no env-var leakage into the Python side.
+
+The optional positional is a **per-review config** — one YAML that pins
+the query, year window, record cap, criteria/codebook paths, and the
+per-stage models/thresholds/context/concurrency. The runner validates it
+via `laglitsynth review-config` and applies **env > config > default**
+precedence to every knob. With no argument it uses the committed default
+[`examples/reviews/lagrangian-oceanography.yaml`](examples/reviews/lagrangian-oceanography.yaml),
+which reproduces the historical smoke run, so the no-arg invocation
+behaves exactly as before. The historical `QUERY` and `N` env overrides
+still work and still win over the config. See
+[`docs/configs.md`](docs/configs.md#per-review-config-the-runners-config)
+for the config shape and the full `CFG_*` knob list.
 
 Defaults that apply to both local and NESH runs:
 
@@ -75,8 +87,8 @@ Defaults that apply to both local and NESH runs:
   The runner passes `--max-records "$N"` to stage 1 (catalogue-fetch)
   only; downstream stages consume the already-capped catalogue, so the
   cap propagates through the data rather than as a re-passed flag.
-  Override as the runner's second positional arg (locally) or via
-  `N=...` in `sbatch --export=` (NESH).
+  Override via `N=...` (env, or `sbatch --export=` on NESH), or pin it
+  as `max_records` in a review config.
 - `STOP_AFTER_STAGE=8` — full pipeline. Set to a smaller integer to
   cut runs short while iterating on upstream stages.
 - Models: `gemma3:4b` for stages 3 and 7, `llama3.1:8b` for stage 8.
@@ -92,8 +104,9 @@ runner:
 ollama serve                                                # stages 3, 7, 8
 docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0         # stage 6
 
-scripts/run-pipeline.sh                                     # defaults, N=5
-scripts/run-pipeline.sh "particle dispersion" 200           # custom query, N=200
+scripts/run-pipeline.sh                                     # default review config, N=5
+scripts/run-pipeline.sh examples/reviews/my-review.yaml     # a pinned review config
+QUERY="particle dispersion" N=200 scripts/run-pipeline.sh   # env overrides win over the config
 STOP_AFTER_STAGE=3 scripts/run-pipeline.sh                  # stages 1..3 only
 ```
 

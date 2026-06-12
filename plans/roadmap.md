@@ -161,6 +161,24 @@ Update this file when a plan is written, implemented, or archived.
   verdicts file, download timeout, retry constants, Ollama model-pulled
   preflight, XLSX review-export layouts).
 
+- [Per-review config, externalized screening prompt, knob cleanups](done/runner-review-config-and-screening-criteria.md)
+  — acts on the UI-knobs investigation. The runner is now driven by one
+  per-review YAML: `scripts/run-pipeline.sh [config.yaml]` reads a typed
+  [`ReviewConfig`](../src/laglitsynth/review.py) via a `review-config`
+  emitter subcommand and applies env > config > default precedence,
+  replacing scattered positionals and the two hardcoded threshold
+  literals. Stage 3's screening prompt is externalized to a
+  `--screening-criteria` YAML (a shared
+  [`load_system_prompt`](../src/laglitsynth/prompts.py)), mirroring
+  stages 7/8 — the last un-externalized LLM system prompt. The two corpus
+  thresholds stay independently settable (`RETRIEVAL_THRESHOLD` /
+  `ELIGIBILITY_THRESHOLD`, shared `SCREENING_THRESHOLD` default) with
+  unified float handling. `--consolidate-citations` exposed on stage 6;
+  `--from-year`/`--to-year` threaded into the runner; `.env.example`
+  gains the two missing keys. Deferred: a sweep/matrix driver (investigation
+  direction 4) and abstract-lookup runner wiring (waits on the screening
+  `--abstracts` overlay, PR #19).
+
 ## In flight
 
 - [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate is now planned as the [run manifest](run-manifest.md).

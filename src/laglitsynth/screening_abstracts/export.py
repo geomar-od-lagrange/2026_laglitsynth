@@ -4,9 +4,9 @@ Single subcommand ``screening-abstracts-export`` that writes a workbook with
 an ``Index`` sheet plus one tab per included work. Per-work tabs use a
 vertical ``Field | Value`` layout so abstract and ``raw_response`` wrap
 vertically without horizontal scrolling. The output also pulls the screening
-criterion (the user prompt) from ``screening-meta.json`` so the reviewer sees
-the same question the LLM saw, verbatim. The LLM verdict block is collapsed by
-default so the reviewer forms an opinion before peeking.
+criterion (the loaded ``system_prompt``) from ``screening-meta.json`` so the
+reviewer sees the same question the LLM saw, verbatim. The LLM verdict block is
+collapsed by default so the reviewer forms an opinion before peeking.
 
 ``--n-subset`` + ``--subset-seed`` draw a reproducible random sample;
 ``n_subset >= len(verdicts)`` (or unset) emits the full set in verdict order.
@@ -201,8 +201,8 @@ def build_work_sheet(
 ) -> None:
     """Per-work sheet: bibliographic block, criterion + scoring, LLM details (collapsed).
 
-    ``criterion`` is the screening prompt rendered verbatim so the
-    reviewer scores against the same question the LLM saw.
+    ``criterion`` is the screening-criteria system prompt rendered verbatim
+    so the reviewer scores against the same question the LLM saw.
     ``llm_meta`` carries the model/temperature/prompt_sha256 from
     ScreeningMeta.llm so the reviewer can audit the LLM's run; it is ``None``
     when no meta file was found, in which case the fingerprint cells are left
@@ -366,7 +366,7 @@ def _load_meta(meta_path: Path | None) -> tuple[str, LlmMeta | None]:
         return ("<screening criterion not available>", None)
 
     meta = ScreeningMeta.model_validate_json(meta_path.read_text())
-    criterion = meta.prompt or "<screening criterion not recorded in meta>"
+    criterion = meta.criterion or "<screening criterion not recorded in meta>"
     return (criterion, meta.llm)
 
 

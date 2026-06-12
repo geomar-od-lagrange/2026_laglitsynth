@@ -35,6 +35,17 @@
 #   sbatch --export=ALL,QUERY="particle dispersion",N=20 scripts/nesh-pipeline.sbatch
 #   sbatch --export=ALL,STOP_AFTER_STAGE=3,N=200 scripts/nesh-pipeline.sbatch
 #
+# run-pipeline.sh now takes an optional per-review config YAML, but this
+# job keeps driving it through the QUERY / N (and STOP_AFTER_STAGE,
+# *_MODEL, *_NUM_CTX, …) env overrides — they still win over any config
+# under the runner's env > config > default precedence. So we invoke the
+# runner with NO positional: it uses its default config
+# (examples/reviews/lagrangian-oceanography.yaml) and the env exports
+# below override the knobs this job cares about. The documented
+# --export=ALL,STOP_AFTER_STAGE=3,N=200 workflow is unchanged. To drive a
+# different review from NESH, set REVIEW_CONFIG=path/to/review.yaml (it is
+# forwarded as the runner's positional argument).
+#
 # Per-stage Ollama runner sizing — see plans/done/ollama-num-ctx-per-model.md.
 # Each LLM stage gets its own synthesised Ollama tag (laglit-screen,
 # laglit-eligibility, laglit-extract) created from the upstream model
@@ -196,10 +207,14 @@ SCREENING_MODEL=laglit-screen
 ELIGIBILITY_MODEL=laglit-eligibility
 EXTRACTION_MODEL=laglit-extract
 
-# Run the smoke-test end-to-end.
+# Run the smoke-test end-to-end. QUERY / N reach the runner as env
+# overrides (exported below), not as positionals — the runner reads them
+# under env > config > default. The only positional is the optional
+# per-review config (REVIEW_CONFIG); unset means the runner's default.
 export OLLAMA_BASE="http://127.0.0.1:11434"
 export GROBID_URL="http://localhost:8070"
 export SCREENING_MODEL ELIGIBILITY_MODEL EXTRACTION_MODEL LLM_CONCURRENCY
+export QUERY N
 export STOP_AFTER_STAGE="${STOP_AFTER_STAGE:-8}"
 
-pixi run scripts/run-pipeline.sh "$QUERY" "$N"
+pixi run scripts/run-pipeline.sh ${REVIEW_CONFIG:+"$REVIEW_CONFIG"}

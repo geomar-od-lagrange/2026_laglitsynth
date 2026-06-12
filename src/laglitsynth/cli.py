@@ -20,6 +20,7 @@ from laglitsynth.fulltext_retrieval.export import build_subparser as build_retri
 from laglitsynth.fulltext_retrieval.import_ import build_subparser as build_retrieval_import_subparser
 from laglitsynth.fulltext_retrieval.retrieve import build_subparser as build_retrieval_subparser
 from laglitsynth.ids import build_subparser as build_run_id_subparser
+from laglitsynth.review import build_subparser as build_review_config_subparser
 from laglitsynth.screening_abstracts.export import build_subparser as build_screening_export_subparser
 from laglitsynth.screening_abstracts.screen import build_subparser as build_screening_subparser
 
@@ -39,6 +40,7 @@ _BUILDERS = (
     build_extraction_codebook_subparser,
     build_extraction_codebook_export_subparser,
     build_run_id_subparser,
+    build_review_config_subparser,
 )
 
 

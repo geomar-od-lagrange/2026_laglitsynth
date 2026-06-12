@@ -45,9 +45,8 @@ inconsistency — a verdict whose `work_id` is missing from the catalogue.)
 Thresholds are CLI flags (e.g. `--screening-threshold 50`). Each run's
 threshold is recorded in the stage's meta sidecar for provenance. A
 pipeline-level config file may replace CLI flags once thresholds are tuned
-on real data. The flag's type differs by stage: stages 5 and 7 take
-`--screening-threshold` as a `float` (default `50.0`, so fractional
-cutoffs are allowed), while stage 3 takes it as an `int` (default `50`).
+on real data. Stages 3, 5, and 7 all take `--screening-threshold` as a
+`float` (default `50.0`), so fractional cutoffs are allowed uniformly.
 
 ## Artifact map
 
@@ -88,7 +87,7 @@ file is never rewritten; downstream stages join the sidecar at read time. See
 | Path | Model | Description |
 |---|---|---|
 | `data/screening-abstracts/<run-id>/verdicts.jsonl` | [`ScreeningVerdict`](../src/laglitsynth/screening_abstracts/models.py) | Relevance score and reason for every work |
-| `data/screening-abstracts/<run-id>/screening-meta.json` | [`ScreeningMeta`](../src/laglitsynth/screening_abstracts/models.py) | Prompt, model, threshold, counts |
+| `data/screening-abstracts/<run-id>/screening-meta.json` | [`ScreeningMeta`](../src/laglitsynth/screening_abstracts/models.py) | Criterion (loaded `system_prompt`), model, threshold, counts |
 
 Verdicts cover all works in the deduplicated catalogue, not just accepted
 ones. The accept/reject decision is derived from the relevance score and
@@ -209,9 +208,10 @@ laglitsynth abstract-lookup \
     [--api-key KEY] [--skip-existing]
 
 # Stage 3 — screening-abstracts
-laglitsynth screening-abstracts INPUT PROMPT \
+laglitsynth screening-abstracts INPUT \
+    [--screening-criteria FILE] \
     [--data-dir DIR] [--run-id ID] [--config FILE] \
-    [--model MODEL] [--screening-threshold N] \
+    [--model MODEL] [--screening-threshold FLOAT] \
     [--base-url URL] [--max-records N] [--concurrency N] [--dry-run]
 
 # Stage 3 — screening-abstracts-export (human review, XLSX only)
@@ -362,10 +362,12 @@ laglitsynth catalogue-dedup \
 
 # 3. Screening abstracts (writes to data/screening-abstracts/<run-id>/)
 # Note the run-id printed at the end — you need it for stages 5, 7, 8.
+# The relevance criterion lives in the screening-criteria YAML's
+# system_prompt field (default: the Lagrangian-oceanography example).
 RUN_ID="$(laglitsynth generate-run-id)"
 laglitsynth screening-abstracts \
     data/catalogue-dedup/deduplicated.jsonl \
-    "Is this about computational Lagrangian methods in oceanography?" \
+    --screening-criteria examples/screening-criteria/lagrangian-oceanography.yaml \
     --run-id "$RUN_ID"
 
 # 5. Fulltext retrieval (inline-joins catalogue + stage 3 verdicts).
@@ -480,7 +482,7 @@ Per stage, the hash input is:
 
 | Stage | `prompt_sha256` covers |
 |---|---|
-| 3 — screening-abstracts | `SYSTEM_PROMPT + "\n" + user_prompt` (user prompt is a CLI arg) |
+| 3 — screening-abstracts | `system_prompt + "\n" + USER_TEMPLATE` (system_prompt loaded from the screening-criteria YAML) |
 | 7 — fulltext-eligibility | `SYSTEM_PROMPT + "\n" + USER_TEMPLATE + "\n" + num_ctx` |
 | 8 — extraction-codebook | `SYSTEM_PROMPT + "\n" + USER_TEMPLATE + "\n" + num_ctx + "\n" + CHAR_BUDGET` |
 

@@ -49,8 +49,9 @@ From [grobid-lessons.md](grobid-lessons.md):
 - Processing endpoint: `POST /api/processFulltextDocument` with the PDF as
   multipart form data.
 - Timeout: 120 seconds per paper.
-- `consolidateCitations=0` (default off). We already have references from
-  OpenAlex.
+- `consolidateCitations` defaults to `0` (off) and is settable via the
+  `--consolidate-citations {0,1}` flag. We already have references from
+  OpenAlex, so the default leaves them off.
 
 ### TEI XML as the canonical artefact
 
@@ -205,7 +206,8 @@ laglitsynth fulltext-extraction \
     --output-dir data/fulltext-extraction/ \
     [--grobid-url http://localhost:8070] \
     [--timeout 120] \
-    [--skip-existing]
+    [--skip-existing] \
+    [--consolidate-citations 0]
 ```
 
 ### Arguments
@@ -220,6 +222,11 @@ laglitsynth fulltext-extraction \
   `120.0`.
 - `--skip-existing`: do not re-extract PDFs that already have an
   `ExtractedDocument` record.
+- `--consolidate-citations`: GROBID's `consolidateCitations` form field,
+  one of `0` or `1`. Optional; defaults to `0` (off). `1` instructs GROBID
+  to enrich extracted references with DOIs via Crossref / Semantic Scholar
+  (needs internet during processing and is slower); since OpenAlex is the
+  metadata authority, `0` is recommended.
 
 ### Flow
 

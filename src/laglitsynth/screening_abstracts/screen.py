@@ -17,7 +17,7 @@ from openai import APIConnectionError, APITimeoutError, OpenAI
 
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.concurrency import map_concurrent
-from laglitsynth.config import register_config_arg, save_resolved_config
+from laglitsynth.config import register_config_arg, resolve_yaml_arg, save_resolved_config
 from laglitsynth.ids import generate_run_id
 from laglitsynth.io import (
     JsonlReadStats,
@@ -27,20 +27,20 @@ from laglitsynth.io import (
 )
 from laglitsynth.models import LlmMeta, RunMeta
 from laglitsynth.ollama import preflight
+from laglitsynth.prompts import load_system_prompt
 from laglitsynth.screening_abstracts.models import TOOL_NAME, ScreeningMeta, ScreeningVerdict
 
 STAGE_SUBDIR = "screening-abstracts"
+DEFAULT_SCREENING_CRITERIA = Path(
+    "examples/screening-criteria/lagrangian-oceanography.yaml"
+)
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """\
-You are a relevance classifier for academic paper abstracts.
-The user will provide an abstract and a relevance criterion.
-You must return a JSON object with exactly two fields:
-- "relevance_score": an integer from 0 to 100 indicating how relevant the abstract is to the criterion (0 = not relevant at all, 100 = perfectly relevant)
-- "reason": a short string (one sentence) explaining your score
-
-Return ONLY the JSON object, nothing else."""
+# Marker for the work-listing render fed as the user message. Folded into
+# prompt_sha256 (mirroring stage 7's USER_TEMPLATE) so the hash pins both
+# the loaded system prompt and the shape of the user render.
+USER_TEMPLATE = "title/authors/year/abstract"
 
 _TEMPERATURE = 0.8
 _LLM_TIMEOUT_SECONDS = 60
@@ -74,13 +74,17 @@ def format_screening_input(work: Work) -> str:
 def classify_abstract(
     work_id: str,
     formatted_input: str,
-    prompt: str,
+    system_prompt: str,
     *,
     model: str,
     base_url: str,
     client: OpenAI,
 ) -> ScreeningVerdict:
     """Call the LLM, validate the payload, compose the verdict.
+
+    ``system_prompt`` is the loaded screening-criteria prompt (contract +
+    relevance criterion) sent as the system message; ``formatted_input`` is
+    the work listing sent verbatim as the user message.
 
     On JSON parse error returns a ``reason="llm-parse-failure"``
     sentinel with ``seed=None`` and the raw response attached so an
@@ -94,11 +98,8 @@ def classify_abstract(
             model=model,
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": f"Criterion: {prompt}\n\n{formatted_input}",
-                },
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": formatted_input},
             ],
             temperature=_TEMPERATURE,
             seed=seed,
@@ -146,7 +147,7 @@ def _no_abstract_verdict(work_id: str) -> ScreeningVerdict:
 
 def screen_works(
     input_path: Path,
-    prompt: str,
+    system_prompt: str,
     *,
     model: str,
     base_url: str,
@@ -188,7 +189,7 @@ def screen_works(
         return classify_abstract(
             work.id,
             format_screening_input(work),
-            prompt,
+            system_prompt,
             model=model,
             base_url=base_url,
             client=client,
@@ -205,7 +206,17 @@ def build_subparser(
         help="Screen JSONL works by abstract relevance using a local LLM.",
     )
     parser.add_argument("input", type=Path, help="Input JSONL file path")
-    parser.add_argument("prompt", help="Relevance screening prompt string")
+    parser.add_argument(
+        "--screening-criteria",
+        type=Path,
+        default=DEFAULT_SCREENING_CRITERIA,
+        help=(
+            f"Screening-criteria YAML carrying a 'system_prompt' field (the "
+            f"classifier contract + relevance criterion). On reload from a "
+            f"saved snapshot, the inlined mapping is consumed directly "
+            f"(default: {DEFAULT_SCREENING_CRITERIA})."
+        ),
+    )
     parser.add_argument(
         "--data-dir",
         type=Path,
@@ -222,8 +233,8 @@ def build_subparser(
     )
     parser.add_argument(
         "--screening-threshold",
-        type=int,
-        default=50,
+        type=float,
+        default=50.0,
         help="Relevance score cutoff, 0-100 (default: 50)",
     )
     parser.add_argument(
@@ -265,19 +276,22 @@ def run(args: argparse.Namespace) -> None:
     output_dir: Path = Path(args.data_dir) / STAGE_SUBDIR / args.run_id
     verdicts_path = output_dir / "verdicts.jsonl"
     meta_path = output_dir / "screening-meta.json"
-    threshold: int = args.screening_threshold
+    threshold: float = args.screening_threshold
 
-    # Compute prompt digest once for the meta record.
-    user_prompt: str = args.prompt
+    criteria_spec = resolve_yaml_arg(args.screening_criteria)
+    system_prompt = load_system_prompt(criteria_spec)
+
+    # Hash the loaded system prompt + the user-render marker so the digest
+    # pins both the criterion and the shape of the user message.
     prompt_sha256 = hashlib.sha256(
-        (SYSTEM_PROMPT + "\n" + user_prompt).encode("utf-8")
+        (system_prompt + "\n" + USER_TEMPLATE).encode("utf-8")
     ).hexdigest()
 
     stats = JsonlReadStats()
     total = sum(1 for _ in read_jsonl(args.input, Work, stats))
 
     print(f"Screening {total} works with model {args.model}", file=sys.stderr)
-    print(f"Threshold: {threshold}, Prompt: {args.prompt!r}", file=sys.stderr)
+    print(f"Threshold: {threshold}", file=sys.stderr)
     if not args.dry_run:
         print(f"Output dir: {output_dir}", file=sys.stderr)
 
@@ -286,7 +300,7 @@ def run(args: argparse.Namespace) -> None:
     # docs/llm-concurrency.md.
     if not args.dry_run:
         output_dir.mkdir(parents=True, exist_ok=True)
-        save_resolved_config(args, output_dir)
+        save_resolved_config(args, output_dir, inlines=["screening_criteria"])
         verdicts_path.unlink(missing_ok=True)
 
     def _build_meta(
@@ -316,7 +330,7 @@ def run(args: argparse.Namespace) -> None:
             skipped_count=skipped,
             llm_parse_failure_count=parse_failures,
             llm_timeout_count=timeouts,
-            prompt=user_prompt,
+            criterion=system_prompt,
         )
 
     # Write meta upfront so a mid-run reviewer-export sees prompt + LLM
@@ -337,7 +351,7 @@ def run(args: argparse.Namespace) -> None:
 
     for verdict in screen_works(
         args.input,
-        args.prompt,
+        system_prompt,
         model=args.model,
         base_url=args.base_url,
         max_records=args.max_records,

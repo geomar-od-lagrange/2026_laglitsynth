@@ -173,15 +173,15 @@ makes the same HTTP call. If stage 6 fails with connection errors on
 macOS despite the container being alive, try this network-namespace
 approach. Full context in [grobid-lessons.md](grobid-lessons.md).
 
-### `consolidateCitations=0`
+### `consolidateCitations`
 
-Stage 6 sends `consolidateCitations=0` by default. Setting it to 1
-instructs GROBID to call Crossref and Semantic Scholar to enrich
-extracted references with DOIs. That lookup requires internet access
-during processing and noticeably slows extraction. The pipeline keeps
-OpenAlex as the authoritative metadata source, so citation enrichment
-adds no value. See [grobid-lessons.md](grobid-lessons.md) for the
-original rationale.
+Stage 6 sends `consolidateCitations=0` by default, exposed via the
+`--consolidate-citations {0,1}` flag. Setting it to `1` instructs GROBID
+to call Crossref and Semantic Scholar to enrich extracted references with
+DOIs. That lookup requires internet access during processing and noticeably
+slows extraction. The pipeline keeps OpenAlex as the authoritative metadata
+source, so citation enrichment adds no value at the default. See
+[grobid-lessons.md](grobid-lessons.md) for the original rationale.
 
 ### Mid-corpus crash recovery
 

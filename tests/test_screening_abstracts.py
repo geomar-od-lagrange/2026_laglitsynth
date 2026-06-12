@@ -14,7 +14,7 @@ import pytest
 from openai import APIConnectionError, APITimeoutError
 
 from laglitsynth.screening_abstracts.screen import (
-    SYSTEM_PROMPT,
+    USER_TEMPLATE,
     classify_abstract,
     format_screening_input,
     screen_works,
@@ -23,6 +23,13 @@ from laglitsynth.screening_abstracts.models import ScreeningMeta, ScreeningVerdi
 from laglitsynth.models import LlmMeta, RunMeta
 
 from conftest import _make_work, _mock_openai_response, _write_works_jsonl
+
+# An inlined screening-criteria spec (dict form, consumed directly by
+# resolve_yaml_arg) standing in for the on-disk YAML in run()-level tests.
+_TEST_CRITERIA_SPEC = {
+    "id": "test-criteria",
+    "system_prompt": "You are a test relevance classifier. Respond with JSON.",
+}
 
 
 # --- classify_abstract ---
@@ -39,6 +46,31 @@ def test_classify_abstract_valid_response() -> None:
     assert verdict.relevance_score == 85
     assert verdict.reason == "relevant"
     assert verdict.raw_response == '{"relevance_score": 85, "reason": "relevant"}'
+
+
+def test_classify_abstract_sends_system_prompt_and_bare_user_message() -> None:
+    """The loaded system_prompt is the system message; the formatted listing
+    is the user message verbatim — no ``Criterion:`` prefix."""
+    resp = _mock_openai_response('{"relevance_score": 70, "reason": "ok"}')
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = resp
+
+    system_prompt = "SYSTEM: score relevance and return JSON."
+    formatted_input = "Title: T\nAuthors: A\nYear: 2024\nAbstract: body"
+    classify_abstract(
+        "W1",
+        formatted_input,
+        system_prompt,
+        model="m",
+        base_url="http://x",
+        client=mock_client,
+    )
+
+    _, kwargs = mock_client.chat.completions.create.call_args
+    messages = kwargs["messages"]
+    assert messages[0] == {"role": "system", "content": system_prompt}
+    assert messages[1] == {"role": "user", "content": formatted_input}
+    assert "Criterion:" not in messages[1]["content"]
 
 
 def test_classify_abstract_malformed_json_returns_sentinel() -> None:
@@ -146,8 +178,8 @@ def _mock_classify(
 
     def side_effect(
         work_id: str,
-        abstract: str,
-        prompt: str,
+        formatted_input: str,
+        system_prompt: str,
         *,
         model: str,
         base_url: str,
@@ -407,12 +439,12 @@ def _run_args(tmp_path: Path, **overrides: Any) -> argparse.Namespace:
     """Build a Namespace mirroring screen.build_subparser defaults."""
     base: dict[str, Any] = {
         "input": tmp_path / "input.jsonl",
-        "prompt": "about oceans",
+        "screening_criteria": _TEST_CRITERIA_SPEC,
         "data_dir": tmp_path,
         "run_id": "test-run-id",
         "model": "m",
         "base_url": "http://x",
-        "screening_threshold": 50,
+        "screening_threshold": 50.0,
         "max_records": None,
         "dry_run": False,
         "concurrency": 1,
@@ -575,17 +607,17 @@ def test_seed_none_on_sentinel_reasons(tmp_path: Path) -> None:
 
 
 def test_prompt_sha256_matches(tmp_path: Path) -> None:
-    """meta.llm.prompt_sha256 must equal sha256(SYSTEM_PROMPT + '\\n' + prompt)."""
+    """meta.llm.prompt_sha256 must equal sha256(system_prompt + '\\n' + USER_TEMPLATE)."""
     works = [_make_work("W1", abstract="An abstract.")]
     _write_works_jsonl(tmp_path / "input.jsonl", works)
 
-    user_prompt = "about oceans"
+    system_prompt = _TEST_CRITERIA_SPEC["system_prompt"]
     expected_digest = hashlib.sha256(
-        (SYSTEM_PROMPT + "\n" + user_prompt).encode("utf-8")
+        (system_prompt + "\n" + USER_TEMPLATE).encode("utf-8")
     ).hexdigest()
 
     classify_results = {"W1": {"relevance_score": 80, "reason": "yes"}}
-    args = _run_args(tmp_path, prompt=user_prompt)
+    args = _run_args(tmp_path)
     out_dir = tmp_path / "screening-abstracts" / "test-run-id"
 
     with (
@@ -603,7 +635,7 @@ def test_prompt_sha256_matches(tmp_path: Path) -> None:
     meta = json.loads((out_dir / "screening-meta.json").read_text())
     assert meta["llm"]["prompt_sha256"] == expected_digest
     assert len(meta["llm"]["prompt_sha256"]) == 64  # full hex digest
-    assert meta["prompt"] == user_prompt
+    assert meta["criterion"] == system_prompt
 
 
 # --- Concurrent screening ---
@@ -675,7 +707,7 @@ def test_run_writes_meta_before_loop_starts(tmp_path: Path) -> None:
     def side_effect(
         work_id: str,
         formatted_input: str,
-        prompt: str,
+        system_prompt: str,
         *,
         model: str,
         base_url: str,
@@ -690,7 +722,7 @@ def test_run_writes_meta_before_loop_starts(tmp_path: Path) -> None:
             work_id=work_id, relevance_score=80, reason="ok", seed=1
         )
 
-    args = _run_args(tmp_path, prompt="the criterion")
+    args = _run_args(tmp_path)
 
     with (
         patch("laglitsynth.screening_abstracts.screen.preflight"),
@@ -706,7 +738,7 @@ def test_run_writes_meta_before_loop_starts(tmp_path: Path) -> None:
 
     assert captured["first_call_meta_present"] is True
     upfront = captured["first_call_meta"]
-    assert upfront["prompt"] == "the criterion"
+    assert upfront["criterion"] == _TEST_CRITERIA_SPEC["system_prompt"]
     assert upfront["above_threshold_count"] == 0
     assert upfront["below_threshold_count"] == 0
     assert upfront["llm"]["model"] == "m"
@@ -727,8 +759,8 @@ def test_run_streaming_append_partial_is_valid(tmp_path: Path) -> None:
 
     def side_effect(
         work_id: str,
-        abstract: str,
-        prompt: str,
+        formatted_input: str,
+        system_prompt: str,
         *,
         model: str,
         base_url: str,
@@ -742,7 +774,7 @@ def test_run_streaming_append_partial_is_valid(tmp_path: Path) -> None:
         )
 
     out_dir = tmp_path / "screening-abstracts" / "test-run-id"
-    args = _run_args(tmp_path, prompt="p")
+    args = _run_args(tmp_path)
 
     with (
         patch("laglitsynth.screening_abstracts.screen.preflight"),
@@ -798,7 +830,7 @@ def test_config_yaml_records_resolved_args(tmp_path: Path) -> None:
     works = [_make_work("W1", abstract="a")]
     _write_works_jsonl(tmp_path / "input.jsonl", works)
 
-    args = _run_args(tmp_path, prompt="about oceans", model="gemma3:4b")
+    args = _run_args(tmp_path, model="gemma3:4b")
 
     classify_results = {"W1": {"relevance_score": 80, "reason": "ok"}}
     with (
@@ -817,9 +849,12 @@ def test_config_yaml_records_resolved_args(tmp_path: Path) -> None:
 
     out_dir = tmp_path / "screening-abstracts" / "test-run-id"
     written = _yaml.safe_load((out_dir / "config.yaml").read_text())
-    assert written["prompt"] == "about oceans"
     assert written["model"] == "gemma3:4b"
-    assert written["screening_threshold"] == 50
+    assert written["screening_threshold"] == 50.0
+    # screening_criteria is inlined as a mapping (not a path string).
+    assert written["screening_criteria"]["system_prompt"] == (
+        _TEST_CRITERIA_SPEC["system_prompt"]
+    )
     # run_id excluded — replay must generate a fresh one.
     assert "run_id" not in written
     # config (the --config flag itself) excluded.
@@ -842,7 +877,6 @@ def test_config_seeds_defaults_explicit_cli_wins(tmp_path: Path) -> None:
     argv = [
         "screening-abstracts",
         str(tmp_path / "input.jsonl"),
-        "the-prompt",
         "--config",
         str(cfg),
         "--model",

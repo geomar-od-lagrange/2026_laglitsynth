@@ -9,29 +9,17 @@ body for the user message.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
-
-from laglitsynth.config import resolve_yaml_arg
 from laglitsynth.fulltext_extraction.tei import TeiDocument, flatten_sections
+from laglitsynth.prompts import load_system_prompt
+
+__all__ = [
+    "USER_TEMPLATE",
+    "build_user_message",
+    "load_system_prompt",
+    "render_fulltext",
+]
 
 USER_TEMPLATE = "full_text:\n{text}"
-
-
-def load_system_prompt(spec: str | Path | dict[str, Any]) -> str:
-    """Return the eligibility-criteria system prompt from a YAML spec.
-
-    ``spec`` may be a path to a YAML file or an already-loaded mapping
-    (the inlined-snapshot case). The mapping must carry a string-valued
-    ``system_prompt`` field.
-    """
-    loaded = resolve_yaml_arg(spec)
-    prompt = loaded.get("system_prompt")
-    if not isinstance(prompt, str):
-        raise ValueError(
-            "eligibility-criteria spec must include a string 'system_prompt' field"
-        )
-    return prompt
 
 
 def render_fulltext(tei: TeiDocument) -> str:

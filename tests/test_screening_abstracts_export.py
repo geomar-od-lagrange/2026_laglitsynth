@@ -293,7 +293,7 @@ def test_xlsx_work_sheet_layout(tmp_path: Path) -> None:
         ' "threshold": 50, "input_path": "x", "input_count": 1,'
         ' "above_threshold_count": 1, "below_threshold_count": 0, "skipped_count": 0,'
         ' "llm_parse_failure_count": 0, "llm_timeout_count": 0,'
-        ' "prompt": "On a scale from 0% to 100%, how relevant?"}'
+        ' "criterion": "On a scale from 0% to 100%, how relevant?"}'
     )
 
     export_review_xlsx(
