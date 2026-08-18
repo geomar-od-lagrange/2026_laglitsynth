@@ -10,7 +10,7 @@ twenty-five findings; this plan addresses every doc-only one. Code-side
 fixes (`--num-ctx`, `--concurrency` on stages 7/8, preflight error
 split, `.env` fallback, stage 8 default model, `bake-model`,
 `pipeline-up`) live in
-[`usability-cli.md`](usability-cli.md).
+[`usability-cli.md`](done/usability-cli.md).
 
 The centrepiece is one new file:
 [`docs/external-services.md`](../docs/external-services.md). It
@@ -23,13 +23,13 @@ section gains the missing install hints; investigative docs under
 ## Non-goals
 
 - Anything that changes a CLI flag or error message — code work, in
-  [`usability-cli.md`](usability-cli.md).
+  [`usability-cli.md`](done/usability-cli.md).
 - The architectural shifts from
   [`usability-review.md` section 4](../docs/explorations/usability-review.md)
   (pipeline-level config, run-id elevation, `pipeline-up` subcommand,
   `examples/` rename) — separate plans when each is decided.
 - Path-bug fixes in per-stage docs that
-  [`verdicts-only-cutover.md`](verdicts-only-cutover.md) already
+  [`verdicts-only-cutover.md`](done/verdicts-only-cutover.md) already
   rewrites in its step 6 doc sweep — overlap is intentional but not
   duplicated work.
 - README cleanup beyond the four hygiene items below
@@ -64,7 +64,7 @@ Single runbook a manual user reads before stages 3, 6, 7, 8. Sequence:
    L175–192 heredoc lifted into a doc-side recipe with `ollama create
    laglit-extract -f Modelfile`. Explain that the OpenAI `extra_body`
    `num_ctx` hint is not reliable; only the bake works. Cross-link to
-   [`usability-cli.md`](usability-cli.md) for the future
+   [`usability-cli.md`](done/usability-cli.md) for the future
    `bake-model` subcommand.
 5. **Remote Ollama via SSH tunnel** — concrete `ssh -L
    11434:localhost:11434 user@host`, plus the two-hop
@@ -85,7 +85,7 @@ Single runbook a manual user reads before stages 3, 6, 7, 8. Sequence:
    explaining the default-off and pointing at
    [`grobid-lessons.md`](../docs/grobid-lessons.md) for the cost
    reasoning. Don't expose the flag here; that's a CLI decision in
-   [`usability-cli.md`](usability-cli.md).
+   [`usability-cli.md`](done/usability-cli.md).
 10. **GROBID mid-corpus crash recovery** — name `--skip-existing` as
     the recovery path explicitly. "If GROBID crashed at PDF 47/200,
     re-run with `--skip-existing` after restarting the container."
@@ -173,7 +173,7 @@ extraction)`:
   - Change `ollama serve` to
     `OLLAMA_NUM_PARALLEL=2 ollama serve  # set before serve; export after start is silently ignored`
     with the explanation as a code-block comment. (O2)
-  - Append a "See [`external-services.md`](docs/external-services.md)
+  - Append a "See [`external-services.md`](../docs/external-services.md)
     for the full setup runbook" line at the end of the section.
 - **GROBID section: Apple Silicon caveat + link** — append a comment
   to the docker run line at L237: `# Apple Silicon: image is
@@ -213,7 +213,7 @@ One commit covering:
   between stages 8 and 9 in the end-to-end sequence.
 
 The
-[`verdicts-only-cutover.md`](verdicts-only-cutover.md) plan's step 6
+[`verdicts-only-cutover.md`](done/verdicts-only-cutover.md) plan's step 6
 doc sweep happens later. If that plan lands first, this commit
 rebases against the rewritten path examples; the prereq blocks and
 Reproducibility subsections are additive in either order.
@@ -259,7 +259,7 @@ directions. Future operational changes go to the canonical doc;
 exploration docs are append-only history.
 
 **Cutover-plan rebase.** If the
-[`verdicts-only-cutover.md`](verdicts-only-cutover.md) plan lands
+[`verdicts-only-cutover.md`](done/verdicts-only-cutover.md) plan lands
 between commit 1 and commit 2 here, the per-stage doc edits in step 2
 need to rebase against the rewritten CLI examples. Low cost —
 the prereq-block additions and Reproducibility subsections are

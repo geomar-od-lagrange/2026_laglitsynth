@@ -160,13 +160,12 @@ spot-check artifact written by `extraction-codebook-export`.
 
 ### Stage 9 — extraction-adjudication
 
-| Path | Model | Description |
-|---|---|---|
-| `data/extraction-adjudication/corrections.jsonl` | `ExtractionCorrection` (new) | Per-field corrections with original and corrected values |
-| `data/extraction-adjudication/adjudication-meta.json` | `ExtractionAdjudicationMeta` (new) | Mode, counts, agreement metrics |
-
-Corrections are stored alongside original extraction records, not as
-replacements. Downstream stages apply corrections at read time.
+Stage 9 has no output contract yet. Its input is the reviewer-filled
+`review.xlsx` from `extraction-codebook-export`, paired with stage 8's
+`records.jsonl`; the paths and models it writes are open questions listed in
+[adjudication-extraction.md](adjudication-extraction.md). Corrections will be
+stored alongside the original extraction records rather than replacing them,
+so downstream stages apply them at read time.
 
 ### Stage 10 — synthesis-quantitative
 
@@ -319,12 +318,11 @@ tool — this is still the recommended pattern for wrapper invocations.
 
 ### Planned subcommands
 
-```sh
-# Stage 9 — extraction-adjudication
-laglitsynth extraction-adjudication \
-    --data-dir data/ \
-    --output-dir data/extraction-adjudication/
+Stage 9 is omitted here: its inputs come from a reviewer-filled workbook, so
+its flags depend on contract questions that
+[adjudication-extraction.md](adjudication-extraction.md) leaves open.
 
+```sh
 # Stage 10 — synthesis-quantitative
 laglitsynth synthesis-quantitative \
     --data-dir data/ \
@@ -426,11 +424,6 @@ synthesis, narrative synthesis) are specified in
 end-to-end pipeline stop after stage 8.
 
 ```sh
-# 9. Extraction adjudication (pass-through in prototype)
-laglitsynth extraction-adjudication \
-    --data-dir data/ \
-    --output-dir data/extraction-adjudication/
-
 # 10. Synthesis: quantitative
 laglitsynth synthesis-quantitative \
     --data-dir data/ \
@@ -527,10 +520,11 @@ context-window change produces a different digest. Stage 8 also folds
 
 ### Models not yet defined
 
+Stage 9 defines no models here. Its correction record and meta shape are open
+questions in [adjudication-extraction.md](adjudication-extraction.md).
+
 | Model | Planned module | Stage |
 |---|---|---|
-| `ExtractionCorrection` | `laglitsynth.extraction_adjudication.models` | 9 |
-| `ExtractionAdjudicationMeta` | `laglitsynth.extraction_adjudication.models` | 9 |
 | `SynthesisStatistics` | `laglitsynth.synthesis_quantitative.models` | 10 |
 | `RationaleTaxonomy` | `laglitsynth.synthesis_thematic.models` | 11 |
 
@@ -546,7 +540,7 @@ context-window change produces a different digest. Stage 8 also folds
 | 6. fulltext-extraction | (PDFs) | ExtractedDocument, ExtractionMeta |
 | 7. fulltext-eligibility | Work + ScreeningVerdict (inline join), ExtractedDocument | EligibilityVerdict, EligibilityMeta |
 | 8. extraction-codebook | Work + EligibilityVerdict (inline join), ExtractedDocument | ExtractionRecord, ExtractionCodebookMeta |
-| 9. extraction-adjudication | ExtractionRecord (via resolve) | ExtractionCorrection, ExtractionAdjudicationMeta |
+| 9. extraction-adjudication | ExtractionRecord, reviewer-filled `review.xlsx` | (contract open) |
 | 10. synthesis-quantitative | ExtractionRecord (via resolve) | SynthesisStatistics |
 | 11. synthesis-thematic | ExtractionRecord (via resolve) | RationaleTaxonomy |
 | 12. synthesis-narrative | SynthesisStatistics, RationaleTaxonomy | (markdown) |
@@ -563,8 +557,6 @@ context-window change produces a different digest. Stage 8 also folds
 
 ### No model definition exists
 
-- `ExtractionCorrection` — per-field corrections with original and
-  corrected values.
 - `SynthesisStatistics` — depends on which breakdowns are needed (by
   sub-discipline, by year, by source basis).
 - `RationaleTaxonomy` — depends on how thematic clusters are represented

@@ -86,12 +86,12 @@ Update this file when a plan is written, implemented, or archived.
   criterion, percent-formatted score, reviewer placeholders, LLM
   verdict block collapsed by default.
 
-- [Verdicts-only cutover](verdicts-only-cutover.md) — stage 4
+- [Verdicts-only cutover](done/verdicts-only-cutover.md) — stage 4
   (`screening-adjudication`) deleted; stages 5, 7, 8 rewired to inline-join
   the deduplicated catalogue against upstream verdict sidecars; no more
   `included.jsonl` or `eligible.jsonl` convenience copies.
 
-- [DOI → abstract lookup](doi-abstract-lookup.md) — `abstract-lookup`
+- [DOI → abstract lookup](done/doi-abstract-lookup.md) — `abstract-lookup`
   stage backfills missing abstracts by DOI (Semantic Scholar → OpenAlex →
   Crossref, first non-empty wins) into an
   [`AbstractRecord`](../src/laglitsynth/abstract_lookup/models.py) sidecar keyed
@@ -176,13 +176,12 @@ Update this file when a plan is written, implemented, or archived.
   unified float handling. `--consolidate-citations` exposed on stage 6;
   `--from-year`/`--to-year` threaded into the runner; `.env.example`
   gains the two missing keys. Deferred: a sweep/matrix driver (investigation
-  direction 4) and abstract-lookup runner wiring (waits on the screening
-  `--abstracts` overlay, PR #19).
+  direction 4).
 
 ## In flight
 
 - [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate is now planned as the [run manifest](run-manifest.md).
-- [Cross-machine + storage convention](../docs/cross-machine.md) — the third follow-up candidate from [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) landed as an authoritative doc: project = working-directory boundary, run-from-root + fixed-`data/` path contract, per-machine `.env`, and the safe sync direction per `data/` subdir (bulk PDFs/TEI union, per-run-id gate outputs authoritative-side-wins, deduplicated spine rsynced once read-only). Companion probe [scripts/probe_zotero.py](../scripts/probe_zotero.py) + note [zotero-export-probe.md](../docs/explorations/zotero-export-probe.md) start on the Zotero-import open question in [fulltext-retrieval-diversified.md](done/fulltext-retrieval-diversified.md).
+- [Cross-machine + storage convention](../docs/cross-machine.md) — the third follow-up candidate from [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) landed as an authoritative doc: project = working-directory boundary, run-from-root + fixed-`data/` path contract, per-machine `.env`, and the safe sync direction per `data/` subdir (bulk PDFs/TEI union, per-run-id gate outputs authoritative-side-wins, deduplicated spine rsynced once read-only). The Zotero-import open question from [fulltext-retrieval-diversified.md](done/fulltext-retrieval-diversified.md) is withdrawn: import reads identifiers out of the PDF and matches them against `pdf-manifest.csv`, so Zotero's filename convention does not enter the design. The probe script and its note are removed; the reasoning is recorded in [contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md).
 
 ## Queued — ready to plan
 
@@ -223,6 +222,26 @@ Update this file when a plan is written, implemented, or archived.
   shows what it needs. Each stage emits JSONL today; the open question
   is whether stages 3, 4, and 9 should share scaffolding once stage 9's
   reviewer-column ingestion is designed.
+
+## Withdrawn
+
+Directions that were considered and dropped. Each entry says what was
+dropped and why, so the same idea is not re-proposed from the gap it leaves.
+
+- **Abstract sidecar into screening.** Stage 2b
+  [`abstract-lookup`](done/doi-abstract-lookup.md) writes an `AbstractRecord`
+  sidecar keyed by work id, and no stage reads it. The planned fix was an
+  `--abstracts` overlay on `screening-abstracts` that filled a null
+  `Work.abstract` from the sidecar at read time. Backfilled abstracts were
+  tested against screening and gave no additional benefit, so the overlay is
+  not built and the sidecar stays unconsumed. Whether to delete the stage
+  outright is open.
+- **Stage 9 as a pass-through.** The design that copied stage 8 records to a
+  `validated.jsonl` unchanged died with the stage 4 pass-through it was
+  modelled on. Reviewer corrections arrive through the stage 8 XLSX workbook
+  instead; see [adjudication-extraction.md](../docs/adjudication-extraction.md).
+- **Zotero export probe.** Withdrawn with the Zotero-import open question,
+  under [Cross-machine + storage convention](#in-flight) above.
 
 ## Latest review
 

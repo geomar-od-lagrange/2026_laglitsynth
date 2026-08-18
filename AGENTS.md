@@ -96,4 +96,4 @@ in [`pyproject.toml`](pyproject.toml).
   broke, preliminary timings. Not authoritative references — these
   capture spike results that may feed into future plans.
 - Source code in [`src/laglitsynth/`](src/laglitsynth/) (subpackages per
-  component, e.g. [`src/laglitsynth/openalex/`](src/laglitsynth/openalex/))
+  component, e.g. [`src/laglitsynth/catalogue_fetch/`](src/laglitsynth/catalogue_fetch/))

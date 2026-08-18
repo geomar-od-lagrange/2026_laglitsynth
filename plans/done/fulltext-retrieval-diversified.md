@@ -33,7 +33,7 @@ It does not store multiple PDF versions per work; one PDF per work, chosen
 below. It does not do text extraction — that is stage 6
 ([fulltext_extraction](../../src/laglitsynth/fulltext_extraction/)) — and it
 does not backfill abstracts, which is the separate
-[DOI → abstract lookup](../doi-abstract-lookup.md) plan.
+[DOI → abstract lookup](doi-abstract-lookup.md) plan.
 
 ## Collaboration model and build scope
 
@@ -321,7 +321,7 @@ PDF versions per work or fine-grained per-attempt provenance, and the
 one-PDF-per-work store above is the trigger-free baseline until then. A
 Semantic Scholar `openAccessPdf` source could slot in beside OA/Unpaywall
 as one more automatic `PdfSource`, but that overlaps the
-[DOI → abstract lookup](../doi-abstract-lookup.md) client and should land with
+[DOI → abstract lookup](doi-abstract-lookup.md) client and should land with
 it, not here. Stage 6 (extraction) gaining a manifest entry that reads
 `data/pdfs/` as its input is tracked in the
 [run-manifest](../run-manifest.md) follow-ups.
