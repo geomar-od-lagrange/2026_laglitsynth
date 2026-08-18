@@ -26,7 +26,7 @@ Three additions:
 - `pdf-manifest.csv` gains `title` and `year` columns, after `doi`. The
   export already has both values — it writes them into `missing.ris`. Import
   gains nothing from them yet; they are the precursor the
-  [contributor PDF matching note](../docs/explorations/contributor-pdf-matching.md)
+  [contributor PDF matching note](../../docs/explorations/contributor-pdf-matching.md)
   names for title matching, and they let a person read the manifest.
 - `no-doi.csv` lists the works that `dois.txt` cannot represent, with
   `work_id`, `stem`, `title`, `year`, and `expected_filename`. These are the
@@ -41,13 +41,13 @@ Three additions:
 
 ### Runner step
 
-[`scripts/run-pipeline.sh`](../scripts/run-pipeline.sh) gains an export step
+[`scripts/run-pipeline.sh`](../../scripts/run-pipeline.sh) gains an export step
 after stage 5, gated on `EXPORT_GAP` (default `0`). With `EXPORT_GAP=1` it
 runs `fulltext-retrieval-export --data-dir "$ROOT"` under the same
 `run_stage` gating as every other stage, so `STOP_AFTER_STAGE=5 EXPORT_GAP=1`
 is the whole "screen the corpus, then hand me the gap" run. The knob follows
 the established env > config > default precedence, with `export_gap` added to
-[`ReviewConfig`](../src/laglitsynth/review.py).
+[`ReviewConfig`](../../src/laglitsynth/review.py).
 
 Import stays a manual invocation. It takes a path to a folder a collaborator
 returned, which no config file can know in advance, and it is run once per
@@ -71,10 +71,10 @@ file fewer, but it asks the collaborator to do the filtering.
 Three commits. `pixi run typecheck` and `pixi run test` pass between each.
 
 1. `title` and `year` columns on `pdf-manifest.csv`, in
-   [export.py](../src/laglitsynth/fulltext_retrieval/export.py); `year` is
+   [export.py](../../src/laglitsynth/fulltext_retrieval/export.py); `year` is
    empty for a work with no `publication_year`. Update `read_manifest` and
    `ManifestEntry` in
-   [import_.py](../src/laglitsynth/fulltext_retrieval/import_.py) to accept
+   [import_.py](../../src/laglitsynth/fulltext_retrieval/import_.py) to accept
    the new columns without using them yet. Tests: the manifest round-trips
    through `read_manifest` with the new columns present; a work with a null
    title or year writes an empty cell rather than the string `None`.
@@ -84,23 +84,23 @@ Three commits. `pixi run typecheck` and `pixi run test` pass between each.
    work count the export reported.
 3. The `EXPORT_GAP` runner step and `export_gap` on `ReviewConfig`, plus the
    handoff section in
-   [fulltext-retrieval.md](../docs/fulltext-retrieval.md) and the knob in
-   [configs.md](../docs/configs.md). Test: `review-config` emits
+   [fulltext-retrieval.md](../../docs/fulltext-retrieval.md) and the knob in
+   [configs.md](../../docs/configs.md). Test: `review-config` emits
    `CFG_EXPORT_GAP` for a config that sets it.
 
 ## Follow-ups
 
 Import tiers — reading the DOI from XMP metadata and from title-page link
 annotations — wait on a real round-trip, per the
-[contributor PDF matching note](../docs/explorations/contributor-pdf-matching.md).
+[contributor PDF matching note](../../docs/explorations/contributor-pdf-matching.md).
 Title matching waits on the same evidence and on the columns commit 1 adds.
 
 ## Critical files
 
-- [src/laglitsynth/fulltext_retrieval/export.py](../src/laglitsynth/fulltext_retrieval/export.py)
-- [src/laglitsynth/fulltext_retrieval/import_.py](../src/laglitsynth/fulltext_retrieval/import_.py)
-- [src/laglitsynth/review.py](../src/laglitsynth/review.py)
-- [scripts/run-pipeline.sh](../scripts/run-pipeline.sh)
-- [docs/fulltext-retrieval.md](../docs/fulltext-retrieval.md)
-- [docs/configs.md](../docs/configs.md)
-- [docs/explorations/contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md)
+- [src/laglitsynth/fulltext_retrieval/export.py](../../src/laglitsynth/fulltext_retrieval/export.py)
+- [src/laglitsynth/fulltext_retrieval/import_.py](../../src/laglitsynth/fulltext_retrieval/import_.py)
+- [src/laglitsynth/review.py](../../src/laglitsynth/review.py)
+- [scripts/run-pipeline.sh](../../scripts/run-pipeline.sh)
+- [docs/fulltext-retrieval.md](../../docs/fulltext-retrieval.md)
+- [docs/configs.md](../../docs/configs.md)
+- [docs/explorations/contributor-pdf-matching.md](../../docs/explorations/contributor-pdf-matching.md)

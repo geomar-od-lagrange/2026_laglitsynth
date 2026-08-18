@@ -154,18 +154,37 @@ guard against exactly this — a single writer (A) means
 collaborators hand back folders of PDFs that A integrates serially, not a
 rewritten store.
 
-## Caveat: run-ids are coordinated by hand
+## The run-id travels in the manifest
 
-Stages 3, 7, and 8 write under a `<run-id>/` leaf, and a coherent run
-needs the **same** run-id across all three (and across machines: if NESH
-runs eligibility and the laptop later runs extraction, both pass the same
-`--run-id`). Today the only way to share that run-id is to type the same
-string on both machines — generate it once with `laglitsynth
-generate-run-id`, record it, and pass `--run-id "$RUN_ID"` everywhere, as
-the [end-to-end sequence](interfaces.md#end-to-end-sequence) shows. There
-is no manifest that carries the run-id with the data, so the run-id lives
-in operator memory and shell history rather than in `data/`. Until a run
-manifest lands (the top follow-up candidate in
-[running-the-pipeline.md](explorations/running-the-pipeline.md)),
-cross-machine run-id agreement is a manual discipline: write the run-id
-down alongside the project, not just in the shell that generated it.
+Stages 3, 7, and 8 write under a `<run-id>/` leaf, and a coherent run needs
+the same run-id across all three, including across machines: if NESH runs
+eligibility and the laptop later runs extraction, both must use the same one.
+`data/manifest.json` carries it. `laglitsynth manifest-init` mints the run-id
+once, and every run-id-aware stage adopts it when `--run-id` is omitted, so
+the string travels with `data/` under rsync instead of living in operator
+memory and shell history. An explicit `--run-id` still wins where a stage
+needs to target a different leaf. See [run-manifest.md](run-manifest.md).
+
+The manifest also records each stage's resolved inputs and output, so a
+machine that receives `data/` receives the lineage that produced it and can
+resolve its own inputs from it. Paths are stored relative to the project root
+where they sit under it, which is what lets a manifest move between checkouts
+at different absolute locations — one more reason to keep to the
+run-from-root contract above.
+
+## Syncing the manifest
+
+`data/manifest.json` is the one file under `data/` that is neither a bulk
+artifact nor per-run-id, and it is rewritten whole on every stage append. So
+it takes neither of the rules above: **never** sync it bidirectionally, and
+never union it. Treat it as authoritative-side-wins, the same as the
+per-run-id gate outputs, and copy it in one direction only.
+
+The consequence is worth stating plainly, because it is a real limitation. If
+NESH appends an eligibility entry while the laptop appends an extraction entry
+to the same review, whichever manifest is copied last replaces the other
+wholesale, and the entries recorded on the losing side are gone. The stages
+themselves are unaffected — their outputs are still on disk — but a stage that
+relied on resolving an omitted flag will then report a missing upstream entry,
+and the path has to be passed explicitly. Merging two machines' stage logs is
+the separate append-only-log problem, not something the manifest does today.

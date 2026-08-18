@@ -812,7 +812,7 @@ class TestManifestWiring:
         args.data_dir = data_dir
         args.email = "test@example.com"
         args.refetch = False
-        args.dry_run = True
+        args.dry_run = False
 
         with patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client"):
             run(args)
@@ -859,7 +859,7 @@ class TestManifestWiring:
         args.data_dir = data_dir
         args.email = "test@example.com"
         args.refetch = False
-        args.dry_run = True
+        args.dry_run = False
 
         with patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client"):
             run(args)
@@ -871,6 +871,41 @@ class TestManifestWiring:
             "catalogue": str(explicit_catalogue),
             "screening_verdicts": str(explicit_verdicts),
         }
+
+    def test_dry_run_does_not_record_a_stage_entry(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "data"
+        work = _make_work("https://openalex.org/W1", doi=None)
+        catalogue_path = data_dir / "catalogue-dedup" / "deduplicated.jsonl"
+        catalogue_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_works_jsonl(catalogue_path, [work])
+        verdicts_path = data_dir / "screening-abstracts" / "run1" / "verdicts.jsonl"
+        self._write_verdicts(verdicts_path, work.id, 80)
+        _seed_manifest(
+            data_dir,
+            [
+                _stage_entry("catalogue-dedup", str(catalogue_path)),
+                _stage_entry("screening-abstracts", str(verdicts_path)),
+            ],
+        )
+
+        args = MagicMock()
+        args.catalogue = None
+        args.screening_verdicts = None
+        args.screening_threshold = 50.0
+        args.data_dir = data_dir
+        args.email = "test@example.com"
+        args.refetch = False
+        args.dry_run = True
+
+        with patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client"):
+            run(args)
+
+        manifest = load_manifest(data_dir)
+        assert manifest is not None
+        assert [e.stage for e in manifest.stages] == [
+            "catalogue-dedup",
+            "screening-abstracts",
+        ]
 
     def test_no_manifest_and_omitted_catalogue_names_the_flag(
         self, tmp_path: Path

@@ -61,6 +61,19 @@ A stage records its own entry through `record_stage` when the run is finished.
 Where a review has no manifest, `record_stage` does nothing and no stage
 behaves differently — the manifest is additive.
 
+## How paths are stored
+
+A path under the working directory is stored relative to it, so a manifest
+written on a laptop resolves on NESH where the checkout sits at a different
+absolute location. This is why the project's run-from-root contract matters:
+run every stage from the project root, and `data/...` is what lands in the
+file.
+
+A path outside the working directory has no project-relative form and is
+stored as given. The folder a collaborator returned is the normal case, and
+it is recorded as an input to `fulltext-retrieval-import` for the record
+rather than for later resolution.
+
 ## Wired stages
 
 | Stage | Resolves | Records as `output` |

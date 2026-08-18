@@ -493,10 +493,13 @@ def run(args: argparse.Namespace) -> None:
         pct = 100.0 * count / total if total > 0 else 0.0
         print(f"  {label + ':':<26}{count:>4}  ({pct:.1f}%)", file=sys.stderr)
 
-    record_stage(
-        data_dir,
-        stage="fulltext-retrieval",
-        inputs={"catalogue": catalogue, "screening_verdicts": screening_verdicts},
-        output=pdfs_dir(data_dir),
-        meta_path=meta_path,
-    )
+    # A dry run fetched nothing, so it has no output to record. Screening,
+    # eligibility, and extraction take the same line.
+    if not args.dry_run:
+        record_stage(
+            data_dir,
+            stage="fulltext-retrieval",
+            inputs={"catalogue": catalogue, "screening_verdicts": screening_verdicts},
+            output=pdfs_dir(data_dir),
+            meta_path=meta_path,
+        )

@@ -6,6 +6,8 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from laglitsynth.ids import RUN_ID_RE
 from laglitsynth.io import write_meta
 from laglitsynth.manifest import (
@@ -338,3 +340,50 @@ class TestRecordStage:
         manifest = load_manifest(tmp_path)
         assert manifest is not None
         assert manifest.stages[0].meta_path is None
+
+
+class TestPortablePaths:
+    def test_a_path_under_the_working_directory_stores_relative(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        data = tmp_path / "data"
+        data.mkdir()
+        write_meta(data / "manifest.json", _make_manifest(stages=[]))
+
+        record_stage(
+            data,
+            stage="catalogue-dedup",
+            inputs={"catalogue": data / "catalogue-fetch" / "catalogue.jsonl"},
+            output=data / "catalogue-dedup" / "deduplicated.jsonl",
+            meta_path=data / "catalogue-dedup" / "dedup-meta.json",
+        )
+
+        manifest = load_manifest(data)
+        assert manifest is not None
+        entry = manifest.stages[0]
+        assert entry.output == "data/catalogue-dedup/deduplicated.jsonl"
+        assert entry.inputs == {"catalogue": "data/catalogue-fetch/catalogue.jsonl"}
+        assert entry.meta_path == "data/catalogue-dedup/dedup-meta.json"
+
+    def test_a_path_outside_the_working_directory_stores_as_given(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project = tmp_path / "project"
+        (project / "data").mkdir(parents=True)
+        outside = tmp_path / "from-collaborator"
+        outside.mkdir()
+        monkeypatch.chdir(project)
+        write_meta(project / "data" / "manifest.json", _make_manifest(stages=[]))
+
+        record_stage(
+            project / "data",
+            stage="fulltext-retrieval-import",
+            inputs={"import_dir": outside},
+            output=project / "data" / "pdfs",
+        )
+
+        manifest = load_manifest(project / "data")
+        assert manifest is not None
+        assert manifest.stages[0].inputs == {"import_dir": str(outside)}
+        assert manifest.stages[0].output == "data/pdfs"

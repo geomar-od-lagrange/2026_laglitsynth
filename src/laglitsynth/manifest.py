@@ -48,6 +48,22 @@ def _manifest_path(data_dir: Path) -> Path:
     return data_dir / MANIFEST_FILENAME
 
 
+def portable(path: Path) -> str:
+    """Return ``path`` relative to the working directory where it sits under it.
+
+    The project contract is run-from-root with a fixed ``data/`` path (see
+    [cross-machine.md](../../docs/cross-machine.md)), so a path inside the
+    project stores as ``data/...`` and survives the move to a checkout at a
+    different absolute location. A path outside the working directory -- a
+    collaborator's drop folder, say -- has no project-relative form and is
+    stored as given.
+    """
+    try:
+        return str(path.resolve().relative_to(Path.cwd().resolve()))
+    except ValueError:
+        return str(path)
+
+
 def load_manifest(data_dir: Path) -> RunManifest | None:
     """Return the manifest at ``data_dir/manifest.json``, or ``None`` if absent."""
     path = _manifest_path(data_dir)
@@ -162,9 +178,9 @@ def record_stage(
         StageEntry(
             stage=stage,
             run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
-            inputs={name: str(path) for name, path in inputs.items()},
-            output=str(output),
-            meta_path=str(meta_path) if meta_path is not None else None,
+            inputs={name: portable(path) for name, path in inputs.items()},
+            output=portable(output),
+            meta_path=portable(meta_path) if meta_path is not None else None,
         ),
     )
 
@@ -210,7 +226,7 @@ def run(args: argparse.Namespace) -> None:
         ),
         run_id=run_id,
         queries=list(args.queries),
-        data_dir=str(data_dir),
+        data_dir=portable(data_dir),
         stages=[],
     )
     write_meta(manifest_path, manifest)

@@ -578,7 +578,7 @@ def test_omitted_input_with_no_manifest_names_the_flag(tmp_path: Path) -> None:
     try:
         run(args)
     except SystemExit as exc:
-        assert "input" in str(exc)
+        assert "--input" in str(exc)
     else:
         raise AssertionError("expected SystemExit when --input and manifest are both absent")
 

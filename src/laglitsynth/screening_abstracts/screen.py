@@ -278,13 +278,13 @@ def build_subparser(
 
 
 def run(args: argparse.Namespace) -> None:
-    preflight(base_url=args.base_url, model=args.model)
-
     data_dir: Path = Path(args.data_dir)
     args.run_id = resolve_run_id(data_dir, args.run_id)
     args.input = resolve_input(
         data_dir, args.input, upstream_stage="catalogue-dedup", flag_name="input"
     )
+
+    preflight(base_url=args.base_url, model=args.model)
     output_dir: Path = data_dir / STAGE_SUBDIR / args.run_id
     verdicts_path = output_dir / "verdicts.jsonl"
     meta_path = output_dir / "screening-meta.json"

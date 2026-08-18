@@ -178,15 +178,44 @@ Update this file when a plan is written, implemented, or archived.
   gains the two missing keys. Deferred: a sweep/matrix driver (investigation
   direction 4).
 
+- [Run manifest](done/run-manifest.md) — one typed `RunManifest` at
+  `data/manifest.json` pinning the review's queries, the shared run-id, and an
+  append-only per-stage input→output log. `manifest-init` mints a review;
+  every wired stage resolves an omitted input flag and `--run-id` from the log
+  (flag wins, else the manifest, else the previous required-flag error) and
+  records its own entry. `catalogue-dedup`, `screening-abstracts`,
+  `fulltext-retrieval`, `fulltext-retrieval-export`, `fulltext-retrieval-import`,
+  `fulltext-eligibility`, and `extraction-codebook` are wired;
+  `catalogue-fetch` and `fulltext-extraction` are the remaining two. The
+  manifest is additive: a fully-flagged invocation is unchanged, and
+  `record_stage` is a no-op where a review has none. Paths store relative to
+  the project root when they sit under it, so a manifest resolves in a
+  checkout at a different absolute location. See
+  [run-manifest.md](../docs/run-manifest.md).
+
+- [Collaborator handoff loop](done/collaborator-handoff-loop.md) — the DOI
+  handoff is now two commands: `fulltext-retrieval-export --data-dir data`
+  writes the bundle, and `fulltext-retrieval-import --import-dir <folder>
+  --source manual --data-dir data` ingests what comes back, both resolving
+  their paths from the manifest. The bundle gained `title`/`year` columns on
+  `pdf-manifest.csv`, a `no-doi.csv` worklist for the works `dois.txt` cannot
+  represent, and a `README.md` that travels with it. `EXPORT_GAP=1` runs the
+  export from the runner, so `STOP_AFTER_STAGE=5 EXPORT_GAP=1` is the whole
+  handoff run. The `title`/`year` columns are the precursor for the
+  title-matching import tier in
+  [contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md).
+
 ## In flight
 
-- [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate is now planned as the [run manifest](run-manifest.md).
+- [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate is now planned as the [run manifest](done/run-manifest.md).
 - [Cross-machine + storage convention](../docs/cross-machine.md) — the third follow-up candidate from [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) landed as an authoritative doc: project = working-directory boundary, run-from-root + fixed-`data/` path contract, per-machine `.env`, and the safe sync direction per `data/` subdir (bulk PDFs/TEI union, per-run-id gate outputs authoritative-side-wins, deduplicated spine rsynced once read-only). The Zotero-import open question from [fulltext-retrieval-diversified.md](done/fulltext-retrieval-diversified.md) is withdrawn: import reads identifiers out of the PDF and matches them against `pdf-manifest.csv`, so Zotero's filename convention does not enter the design. The probe script and its note are removed; the reasoning is recorded in [contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md).
 
 ## Queued — ready to plan
 
-- [Run manifest](run-manifest.md) — one typed `RunManifest` file at `data/manifest.json`, written via `io.write_meta`, pinning the review's queries, the shared run-id, and an append-only per-stage input→output log. Each stage reads it to discover its upstream output and appends its own entry, dissolving the hand-carried path relay, the no-project-grouping gap, the "where was I" resume gap, and the cross-machine run-id-coordination gap from [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md). Settles the diversified-retrieval open question of where the persistent store lives relative to per-search runs. Scoped so the pre-retrieval chain (dedup → screening → retrieval → export) lands first; stages 7 and 8 follow in the same plan.
-- [Collaborator handoff loop](collaborator-handoff-loop.md) — makes the DOI handoff a runner step rather than a hand-assembled invocation, and gives the export bundle a `README.md`, a `no-doi.csv` worklist, and `title`/`year` columns on `pdf-manifest.csv`. Builds on the run manifest, which reduces the export to `--data-dir`. The `title`/`year` columns are also the precursor the [contributor PDF matching note](../docs/explorations/contributor-pdf-matching.md) names for title-based import matching.
+Nothing queued. The next candidates are the two unwired manifest stages
+(`catalogue-fetch`, `fulltext-extraction`) and the import matching tiers in
+[contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md),
+which wait on evidence from a real collaborator return.
 
 ## Deferred until pipeline is feature-complete
 

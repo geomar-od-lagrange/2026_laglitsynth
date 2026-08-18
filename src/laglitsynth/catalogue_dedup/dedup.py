@@ -246,7 +246,7 @@ def run(args: argparse.Namespace) -> None:
     input_patterns: list[str]
     if args.input is None:
         resolved = resolve_input(
-            data_dir, None, upstream_stage="catalogue-fetch", flag_name="input"
+            data_dir, None, upstream_stage="catalogue-fetch", flag_name="--input"
         )
         input_patterns = [str(resolved)]
     else:

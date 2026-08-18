@@ -147,7 +147,8 @@ run_stage 1 catalogue-fetch \
 run_stage 2 catalogue-dedup \
     laglitsynth catalogue-dedup \
         --input "$ROOT/catalogue-fetch/catalogue.jsonl" \
-        --output-dir "$ROOT/catalogue-dedup"
+        --output-dir "$ROOT/catalogue-dedup" \
+        --data-dir "$ROOT"
 
 run_stage 3 screening-abstracts \
     laglitsynth screening-abstracts \

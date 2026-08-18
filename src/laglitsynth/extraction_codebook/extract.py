@@ -396,8 +396,6 @@ def build_subparser(
 
 
 def run(args: argparse.Namespace) -> None:
-    preflight(base_url=args.base_url, model=args.model)
-
     data_dir: Path = Path(args.data_dir)
     args.run_id = resolve_run_id(data_dir, args.run_id)
     args.catalogue = resolve_input(
@@ -418,6 +416,8 @@ def run(args: argparse.Namespace) -> None:
         upstream_stage="fulltext-extraction",
         flag_name="--extractions",
     )
+
+    preflight(base_url=args.base_url, model=args.model)
     output_dir: Path = data_dir / STAGE_SUBDIR / args.run_id
     records_path = output_dir / "records.jsonl"
     meta_path = output_dir / "extraction-codebook-meta.json"

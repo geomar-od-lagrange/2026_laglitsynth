@@ -92,6 +92,12 @@ laglitsynth catalogue-dedup \
     --output-dir data/catalogue-dedup/
 ```
 
+`--data-dir` (default `data/`) names the review whose `manifest.json` the
+stage records its entry in. It is separate from `--output-dir`, so a run that
+writes outside the default layout must pass both, and they must name the same
+review — the runner passes `--data-dir "$ROOT"` alongside its `--output-dir`
+for exactly this reason. See [run-manifest.md](run-manifest.md).
+
 ## What is deferred
 
 - Fuzzy title matching (Levenshtein, n-gram similarity).

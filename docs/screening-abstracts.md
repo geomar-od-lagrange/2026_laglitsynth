@@ -47,10 +47,10 @@ laglitsynth screening-abstracts input.jsonl --dry-run --max-records 20
 
 | Argument | Description |
 |---|---|
-| `INPUT` (positional) | Input JSONL file path (required). |
+| `INPUT` (positional) | Input JSONL file path. Resolved from `data/manifest.json`'s `catalogue-dedup` entry when omitted; required when there is no manifest. See [run-manifest.md](run-manifest.md). |
 | `--screening-criteria` | Screening-criteria YAML carrying a `system_prompt` field (default: [`examples/screening-criteria/lagrangian-oceanography.yaml`](../examples/screening-criteria/lagrangian-oceanography.yaml)). |
 | `--data-dir` | Bucket root for stage outputs (default: `data/`). |
-| `--run-id` | Run identifier (default: generated `<iso>_<12hex>`). |
+| `--run-id` | Run identifier. The flag wins; otherwise the manifest's shared `run_id`; otherwise a generated `<iso>_<12hex>`. A review with a manifest therefore reuses one run directory across invocations, and a re-run rewrites that run's `verdicts.jsonl` — pass `--run-id` explicitly to keep an earlier run. |
 | `--config` | YAML config file whose values seed argparse defaults; explicit CLI flags override. |
 | `--model` | Ollama model name (default: `gemma3:4b`). |
 | `--screening-threshold` | Relevance score cutoff, 0--100 as a `float` (default: `50.0`). |
