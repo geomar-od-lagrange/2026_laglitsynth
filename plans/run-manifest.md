@@ -19,6 +19,16 @@ blocked on. It is the A1/A2 ideas from the
 [usability review](../docs/explorations/usability-review.md) fused and
 viewed as *state* rather than *flags*.
 
+## Scope of the first landing
+
+The chain from `catalogue-dedup` to `fulltext-retrieval-export` lands
+first, because that is the run of stages a review completes before any
+PDF exists. Screening outcomes have to survive on disk, and the export
+that hands DOIs to a collaborator has to find them without a run-id
+carried in someone's shell. Stages 7 and 8 gain the same wiring in a
+later commit of this plan; nothing about their design changes, and the
+helpers are written once for both.
+
 ## Non-goals
 
 This is not pipeline orchestration: the manifest records and resolves
@@ -150,6 +160,22 @@ reading `run_id` from the manifest that arrived with `data/`, the
 laptop later runs extraction reading the *same* `run_id` from the
 same file — they agree without anyone typing the string twice.
 
+### The handoff subcommands
+
+`fulltext-retrieval-export` and `fulltext-retrieval-import` postdate the
+first draft of this plan and resolve inputs the same way. Export takes
+`--catalogue`, `--screening-verdicts`, `--screening-threshold`, and
+`--data-dir` today, and the first two are exactly the paths the relay
+already resolves for `fulltext-retrieval`. With a manifest present,
+`fulltext-retrieval-export --data-dir data` is the whole invocation: the
+catalogue comes from `latest_output(manifest, "catalogue-dedup")` and the
+verdicts from `latest_output(manifest, "screening-abstracts")`.
+
+Both subcommands append a `StageEntry`. Export records the bundle
+directory as its `output`, and import records the PDF store. The
+collaborator round-trip then reads off the manifest: which selection was
+sent, when, and which import filled it.
+
 ## Design decisions
 
 The manifest is append-only and last-entry-wins rather than a
@@ -170,8 +196,9 @@ breaks if `data/manifest.json` is absent.
 
 ## Implementation sequence
 
-Four commits. `pixi run typecheck` and `pixi run test` pass between
-each.
+Five commits. `pixi run typecheck` and `pixi run test` pass between
+each. Commits 1 to 4 are the pre-retrieval chain; commit 5 extends the
+same wiring to the full-text stages.
 
 ### 1. Models and helpers
 
@@ -194,35 +221,47 @@ queries, a run-id matching `RUN_ID_RE`, and an empty `stages` list;
 re-running refuses to clobber an existing manifest (a review is
 initialised once).
 
-### 3. Wire the run-id-aware stages (3, 7, 8)
+### 3. Wire dedup and screening
 
-In [screen.py](../src/laglitsynth/screening_abstracts/screen.py),
-[eligibility.py](../src/laglitsynth/fulltext_eligibility/eligibility.py),
-and [extract.py](../src/laglitsynth/extraction_codebook/extract.py):
-resolve `--run-id` as flag-wins-else-`manifest.run_id`-else-`generate_run_id()`;
-resolve the omitted input flags via `latest_output`; call
-`append_stage` at the end with the stage's `inputs`, `output`, and
-`meta_path`. Tests per stage: explicit `--run-id` still wins over the
-manifest; omitted `--run-id` adopts the manifest's; omitted input
-adopts `latest_output`; a `StageEntry` is appended with the right
+Give [dedup.py](../src/laglitsynth/catalogue_dedup/dedup.py) the
+omitted-input resolution and the `append_stage` call. In
+[screen.py](../src/laglitsynth/screening_abstracts/screen.py), resolve
+`--run-id` as flag-wins-else-`manifest.run_id`-else-`generate_run_id()`,
+resolve the omitted catalogue via `latest_output`, and append the entry.
+Tests: explicit `--run-id` still wins over the manifest; an omitted
+`--run-id` adopts the manifest's; an omitted input adopts
+`latest_output`; each stage appends a `StageEntry` with the resolved
 paths; behaviour is unchanged when no manifest exists.
 
-### 4. Wire the non-run-id stages (dedup, retrieval) and docs
+### 4. Wire retrieval, export, and import
 
-Give [dedup.py](../src/laglitsynth/catalogue_dedup/dedup.py) and
-[retrieve.py](../src/laglitsynth/fulltext_retrieval/retrieve.py) the
-same omitted-input resolution and `append_stage` call, so the chain
-is complete from dedup through extraction. Tests: each appends its
-entry; each resolves its omitted upstream input via `latest_output`.
-Then write [docs/run-manifest.md](../docs/run-manifest.md) describing
-the file, the relay, and the cross-machine run-id story, and link it
-from [README.md](../README.md) and
-[interfaces.md](../docs/interfaces.md); move this plan to
-[plans/done/](done/) and update [roadmap.md](roadmap.md).
+Give [retrieve.py](../src/laglitsynth/fulltext_retrieval/retrieve.py),
+[export.py](../src/laglitsynth/fulltext_retrieval/export.py), and
+[import_.py](../src/laglitsynth/fulltext_retrieval/import_.py) the same
+resolution and `append_stage` call. `--catalogue` and
+`--screening-verdicts` stop being required on all three: they are
+resolved from the manifest when omitted, and the existing
+required-flag error remains for the no-manifest case. Tests:
+`fulltext-retrieval-export --data-dir` alone produces the same bundle as
+the fully-flagged invocation; each of the three appends its entry; a
+manifest naming a missing file raises the operator-visible error from
+the Risks section.
+
+### 5. Wire the full-text stages and write the docs
+
+Extend the same wiring to
+[eligibility.py](../src/laglitsynth/fulltext_eligibility/eligibility.py)
+and [extract.py](../src/laglitsynth/extraction_codebook/extract.py), with
+the per-stage tests from commit 3. Then write
+[docs/run-manifest.md](../docs/run-manifest.md) describing the file, the
+relay, and the cross-machine run-id story, and link it from
+[README.md](../README.md) and [interfaces.md](../docs/interfaces.md);
+move this plan to [plans/done/](done/) and update
+[roadmap.md](roadmap.md).
 
 ## Follow-ups
 
-Stages 1 (catalogue-fetch) and 5 (fulltext-extraction) get manifest
+Stages 1 (catalogue-fetch) and 6 (fulltext-extraction) get manifest
 entries when their place in the chain is settled — fetch is
 many-files-in so its `output` is a glob, extraction's input is the
 retrieval PDF store; both resolve cleanly but are lower-leverage than
@@ -256,5 +295,7 @@ visible, never silently skipped.
 - [src/laglitsynth/extraction_codebook/extract.py](../src/laglitsynth/extraction_codebook/extract.py)
 - [src/laglitsynth/catalogue_dedup/dedup.py](../src/laglitsynth/catalogue_dedup/dedup.py)
 - [src/laglitsynth/fulltext_retrieval/retrieve.py](../src/laglitsynth/fulltext_retrieval/retrieve.py)
+- [src/laglitsynth/fulltext_retrieval/export.py](../src/laglitsynth/fulltext_retrieval/export.py)
+- [src/laglitsynth/fulltext_retrieval/import_.py](../src/laglitsynth/fulltext_retrieval/import_.py)
 - [docs/explorations/running-the-pipeline.md](../docs/explorations/running-the-pipeline.md)
 - [plans/fulltext-retrieval-diversified.md](done/fulltext-retrieval-diversified.md)
