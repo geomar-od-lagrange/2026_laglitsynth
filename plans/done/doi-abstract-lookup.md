@@ -3,9 +3,9 @@
 ## Goal
 
 Backfill missing abstracts so [screening
-(stage 4)](../src/laglitsynth/screening_abstracts/) always has text to work
+(stage 4)](../../src/laglitsynth/screening_abstracts/) always has text to work
 on. Not every catalogue record carries an abstract: a WoS Starter record
-has none at all (see [wos-starter-api.md](../docs/explorations/wos-starter-api.md)),
+has none at all (see [wos-starter-api.md](../../docs/explorations/wos-starter-api.md)),
 and even in OpenAlex roughly half of one live sample lacked an
 `abstract_inverted_index`. A small enrichment step fills `Work.abstract`
 from the DOI wherever it is `None`.
@@ -13,13 +13,13 @@ from the DOI wherever it is `None`.
 ## Sources, tried in order
 
 Per the comparison in
-[zotero-retrieval.md](../docs/explorations/zotero-retrieval.md):
+[zotero-retrieval.md](../../docs/explorations/zotero-retrieval.md):
 
 1. **Semantic Scholar Graph** — `GET /graph/v1/paper/DOI:{doi}?fields=abstract`
    returns a plain-text abstract; the best single DOI→abstract source,
    public (a free key raises limits).
 2. **OpenAlex** — `abstract_inverted_index` reconstructed to text;
-   already fetched by [catalogue_fetch](../src/laglitsynth/catalogue_fetch/fetch.py),
+   already fetched by [catalogue_fetch](../../src/laglitsynth/catalogue_fetch/fetch.py),
    so for OpenAlex-sourced works it is usually already present.
 3. **Crossref** — `message.abstract` is JATS-XML, strip tags; partial
    coverage, last resort.
@@ -31,7 +31,7 @@ never `""`.
 ## Where it fits
 
 A standalone enrichment over the catalogue, after
-[dedup](../src/laglitsynth/catalogue_dedup/) and before screening. It reads
+[dedup](../../src/laglitsynth/catalogue_dedup/) and before screening. It reads
 works, and for each with `abstract is None` and a DOI, looks up and fills.
 Output is a sidecar keyed by work id (matching the verdicts-only sidecar
 pattern the pipeline already uses), so the catalogue file stays the
@@ -58,8 +58,8 @@ index, strip JATS). Typed throughout, mypy-strict.
    (work id, abstract, source) plus meta counters (filled / still-missing /
    no-doi). Test: end-to-end on a fixture catalogue; `--skip-existing`
    processes only the gaps; `None` preserved when no source has one.
-4. **Docs.** A short [docs/](../docs/) stage note and a row in
-   [docs/pipeline.md](../docs/pipeline.md) / [docs/interfaces.md](../docs/interfaces.md).
+4. **Docs.** A short [docs/](../../docs/) stage note and a row in
+   [docs/pipeline.md](../../docs/pipeline.md) / [docs/interfaces.md](../../docs/interfaces.md).
 
 ## Non-goals
 

@@ -4,12 +4,12 @@
 
 Close the code-side gaps a manual user hits running stages 3, 6, 7, 8
 without the wrappers. The
-[usability review](../docs/explorations/usability-review.md) found that
+[usability review](../../docs/explorations/usability-review.md) found that
 several knobs the wrapper threads silently are not reachable from the
 CLI at all (`--num-ctx`, `--concurrency` on stages 7/8), some defaults
 are documented as broken (stage 8's `--model gemma3:4b`), and the
 `.env` story leaves manual users guessing. Doc fixes for the same
-findings live in [`usability-docs.md`](usability-docs.md); this plan
+findings live in [`usability-docs.md`](../usability-docs.md); this plan
 covers code changes only.
 
 This plan has **open questions** that need answers before commits 4–7
@@ -19,14 +19,14 @@ on subcommand surface area.
 ## Non-goals
 
 - Documentation changes — covered by
-  [`usability-docs.md`](usability-docs.md). The CLI changes here
+  [`usability-docs.md`](../usability-docs.md). The CLI changes here
   invalidate some doc text; that doc lands its own re-edits.
 - Pipeline-level config file
-  ([A1](../docs/explorations/usability-review.md)). The threshold-on-
+  ([A1](../../docs/explorations/usability-review.md)). The threshold-on-
   three-stages problem persists after this plan; A1 is the structural
   fix and is its own plan.
 - The XLSX export
-  ([P3 in usability-review.md](../docs/explorations/usability-review.md))
+  ([P3 in usability-review.md](../../docs/explorations/usability-review.md))
   — kept as-is per the project owner's call.
 - Reviewer-export workflow rewire — out of scope.
 - Anything the [`verdicts-only-cutover.md`](verdicts-only-cutover.md)
@@ -43,10 +43,10 @@ Each numbered item below is one finding. Items 1–3 are unconditional;
 
 #### 1. `--num-ctx N` on stages 7 and 8
 
-[O3](../docs/explorations/usability-review.md). Both stages currently
+[O3](../../docs/explorations/usability-review.md). Both stages currently
 hardcode `_NUM_CTX = 32768` as a module constant
-([`fulltext_eligibility/eligibility.py:54`](../src/laglitsynth/fulltext_eligibility/eligibility.py),
-[`extraction_codebook/extract.py:61`](../src/laglitsynth/extraction_codebook/extract.py))
+([`fulltext_eligibility/eligibility.py:54`](../../src/laglitsynth/fulltext_eligibility/eligibility.py),
+[`extraction_codebook/extract.py:61`](../../src/laglitsynth/extraction_codebook/extract.py))
 and pass it via `extra_body={"options": {"num_ctx": N}}`. The
 wrapper's `ELIGIBILITY_NUM_CTX` / `EXTRACTION_NUM_CTX` env vars only
 work via the Modelfile bake on the NESH side; locally there's no
@@ -56,28 +56,28 @@ without a baked Modelfile, but exposing it gives local users on
 smaller GPUs a way to drop to 16k or 8k without editing source.
 
 The hash recipe at
-[`eligibility.py:320`](../src/laglitsynth/fulltext_eligibility/eligibility.py)
+[`eligibility.py:320`](../../src/laglitsynth/fulltext_eligibility/eligibility.py)
 and
-[`extract.py:354`](../src/laglitsynth/extraction_codebook/extract.py)
+[`extract.py:354`](../../src/laglitsynth/extraction_codebook/extract.py)
 already includes `_NUM_CTX` in `prompt_sha256`; the new flag's value
 goes in the same place so different `--num-ctx` values produce
 different hashes (so `--skip-existing` correctly rejects mixing).
 
 #### 2. Preflight error message split
 
-[O8](../docs/explorations/usability-review.md). The current
+[O8](../../docs/explorations/usability-review.md). The current
 preflight at
-[`screening_abstracts/screen.py:199`](../src/laglitsynth/screening_abstracts/screen.py),
-[`fulltext_eligibility/eligibility.py:212`](../src/laglitsynth/fulltext_eligibility/eligibility.py),
+[`screening_abstracts/screen.py:199`](../../src/laglitsynth/screening_abstracts/screen.py),
+[`fulltext_eligibility/eligibility.py:212`](../../src/laglitsynth/fulltext_eligibility/eligibility.py),
 and
-[`extraction_codebook/extract.py:248`](../src/laglitsynth/extraction_codebook/extract.py)
+[`extraction_codebook/extract.py:248`](../../src/laglitsynth/extraction_codebook/extract.py)
 collapses three failure modes into one error: "Cannot reach Ollama at
 {base_url}. Is `ollama serve` running?" The three failure modes are
 (a) Ollama unreachable, (b) Ollama up but model not pulled, (c) wrong
 `--base-url` (e.g. SSH tunnel port mismatch).
 
 Refactor the preflight to a shared helper in
-[`src/laglitsynth/`](../src/laglitsynth/) that splits the checks:
+[`src/laglitsynth/`](../../src/laglitsynth/) that splits the checks:
 
 ```
 def preflight(*, base_url: str, model: str) -> None:
@@ -103,14 +103,14 @@ def preflight(*, base_url: str, model: str) -> None:
 
 Stages 3, 7, 8 import `preflight()` from one place. Closes the
 finding in
-[2.5 of pass1](../docs/explorations/simplification-pass.md) (shared
+[2.5 of pass1](../../docs/explorations/simplification-pass.md) (shared
 `_preflight`) at the same time.
 
 #### 3. Stage 8 default model change
 
-[P2](../docs/explorations/usability-review.md). Stage 8's CLI default
-is `gemma3:4b` ([`extract.py:308`](../src/laglitsynth/extraction_codebook/extract.py)),
-which the same doc ([extraction-codebook.md L251–256](../docs/extraction-codebook.md))
+[P2](../../docs/explorations/usability-review.md). Stage 8's CLI default
+is `gemma3:4b` ([`extract.py:308`](../../src/laglitsynth/extraction_codebook/extract.py)),
+which the same doc ([extraction-codebook.md L251–256](../../docs/extraction-codebook.md))
 admits returns empty JSON on full-text inputs. The wrapper overrides
 to `llama3.1:8b`; manual users get the broken default.
 
@@ -120,15 +120,15 @@ and require `--model`."
 
 #### 4. `--concurrency N` on stages 7 and 8
 
-[O5](../docs/explorations/usability-review.md). Stage 3 has it
-([`screen.py:255`](../src/laglitsynth/screening_abstracts/screen.py));
+[O5](../../docs/explorations/usability-review.md). Stage 3 has it
+([`screen.py:255`](../../src/laglitsynth/screening_abstracts/screen.py));
 stages 7 and 8 do not. Adding the flag means lifting the
 `ThreadPoolExecutor` pattern from
-[`screen.py:177–196`](../src/laglitsynth/screening_abstracts/screen.py)
+[`screen.py:177–196`](../../src/laglitsynth/screening_abstracts/screen.py)
 into a shared helper.
 
 Note from
-[`docs/llm-concurrency.md`](../docs/llm-concurrency.md) L84–98: stage
+[`docs/llm-concurrency.md`](../../docs/llm-concurrency.md) L84–98: stage
 8 in particular is prefill-bound (~90% of wall time), and Ollama
 serialises prefill across requests. Real speedup needs vLLM or
 SGLang, not more client threads. Stage 7 is less prefill-heavy and
@@ -140,9 +140,9 @@ prefill-bound limitation.
 
 #### 5. `.env` fallback for `--api-key` and `--email`
 
-[P6 / A4](../docs/explorations/usability-review.md). The current
+[P6 / A4](../../docs/explorations/usability-review.md). The current
 design at
-[`docs/interfaces.md`](../docs/interfaces.md) L236–246 explicitly
+[`docs/interfaces.md`](../../docs/interfaces.md) L236–246 explicitly
 forbids env-var fallback to preserve "no silent override." But
 manual users who follow the README's "fill in `.env`" instruction
 get an `argparse: --api-key required` error.
@@ -153,15 +153,15 @@ Explicit flag still wins.
 
 See [Open questions Q3](#q3-env-fallback) for whether the compromise
 is acceptable or whether the doc fix in
-[`usability-docs.md`](usability-docs.md) (showing
+[`usability-docs.md`](../usability-docs.md) (showing
 `set -a; source .env; set +a`) is the right scope.
 
 #### 6. `bake-model` subcommand
 
-[A6](../docs/explorations/usability-review.md). The NESH wrapper
+[A6](../../docs/explorations/usability-review.md). The NESH wrapper
 synthesises `laglit-screen` / `laglit-eligibility` / `laglit-extract`
 tags with baked `num_ctx` via Modelfile heredocs
-([`scripts/nesh-pipeline.sbatch`](../scripts/nesh-pipeline.sbatch)
+([`scripts/nesh-pipeline.sbatch`](../../scripts/nesh-pipeline.sbatch)
 L175–192). A local manual user has no analog. Two shapes:
 
 - **As a CLI subcommand**: `laglitsynth bake-model --tag laglit-extract
@@ -174,7 +174,7 @@ See [Open questions Q4](#q4-bake-model-shape).
 
 #### 7. `pipeline-up` subcommand
 
-[A3](../docs/explorations/usability-review.md). Idea: `laglitsynth
+[A3](../../docs/explorations/usability-review.md). Idea: `laglitsynth
 pipeline-up [--screening-num-ctx N] [--extraction-model M]
 [--grobid-image IMG]` starts Ollama, bakes Modelfiles, starts GROBID,
 waits for both readiness, prints URLs. The local equivalent of the
@@ -188,7 +188,7 @@ See [Open questions Q5](#q5-pipeline-up).
 
 ### Run-id elevation
 
-[A2 / P1](../docs/explorations/usability-review.md). The
+[A2 / P1](../../docs/explorations/usability-review.md). The
 [`verdicts-only-cutover.md`](verdicts-only-cutover.md) plan adds a
 stderr `Run dir:` print as a tactical fix. The strategic options are:
 
@@ -218,7 +218,7 @@ module-level helper. Split the single error message into three
 specific ones (URL invalid / unreachable / model not pulled) per
 finding 2. Tests in `tests/test_preflight.py` (new) covering the
 three failure modes. Stages 3, 7, 8 import it. Closes
-[2.5 of pass1](../docs/explorations/simplification-pass.md) at the
+[2.5 of pass1](../../docs/explorations/simplification-pass.md) at the
 same time.
 
 #### 2. `--num-ctx N` on stages 7 and 8
@@ -226,9 +226,9 @@ same time.
 Add the flag with default `32768`; thread through to `extra_body`;
 fold into `prompt_sha256` so a `--skip-existing` rerun with a
 different `--num-ctx` correctly aborts.
-[`tests/test_fulltext_eligibility.py`](../tests/test_fulltext_eligibility.py)
+[`tests/test_fulltext_eligibility.py`](../../tests/test_fulltext_eligibility.py)
 and
-[`tests/test_extraction_codebook.py`](../tests/test_extraction_codebook.py)
+[`tests/test_extraction_codebook.py`](../../tests/test_extraction_codebook.py)
 gain `test_num_ctx_flag_threads_to_options` and
 `test_num_ctx_changes_prompt_hash`.
 
@@ -243,17 +243,17 @@ default change plus a test update.
 
 Conditional on Q2. If "yes": lift the `ThreadPoolExecutor` pattern
 from
-[`screen.py:177–196`](../src/laglitsynth/screening_abstracts/screen.py)
+[`screen.py:177–196`](../../src/laglitsynth/screening_abstracts/screen.py)
 into a shared helper module; stages 7 and 8 use it. Tests as for
 stage 3. If "no": the doc-only one-liner in
-[`usability-docs.md`](usability-docs.md) is the closing fix.
+[`usability-docs.md`](../usability-docs.md) is the closing fix.
 
 #### 5. `.env` fallback
 
 Conditional on Q3. If "yes": modify
-[`catalogue_fetch/fetch.py`](../src/laglitsynth/catalogue_fetch/fetch.py)
+[`catalogue_fetch/fetch.py`](../../src/laglitsynth/catalogue_fetch/fetch.py)
 and
-[`fulltext_retrieval/retrieve.py`](../src/laglitsynth/fulltext_retrieval/retrieve.py)
+[`fulltext_retrieval/retrieve.py`](../../src/laglitsynth/fulltext_retrieval/retrieve.py)
 to read `.env` when the flag isn't passed and emit a stderr load
 notice. Tests assert (a) explicit flag wins over `.env`,
 (b) missing flag + `.env` value loads with stderr notice,
@@ -265,7 +265,7 @@ Conditional on Q4. If subcommand: ~50 LOC of new code under
 `src/laglitsynth/bake_model/` (or as a top-level module); CLI
 registration; tests. If shell script: file under
 `scripts/bake-model.sh`; no Python changes; doc reference in
-[`external-services.md`](../docs/external-services.md). If neither:
+[`external-services.md`](../../docs/external-services.md). If neither:
 no-op.
 
 #### 7. `pipeline-up`
@@ -287,7 +287,7 @@ its own design doc.
 ### Q1: Stage 8 default model
 
 The CLI default at
-[`extract.py:308`](../src/laglitsynth/extraction_codebook/extract.py)
+[`extract.py:308`](../../src/laglitsynth/extraction_codebook/extract.py)
 is `gemma3:4b`, documented as broken on full-text inputs. Two shapes:
 
 - **(A) Change default to `llama3.1:8b`.** Manual users get a working
@@ -306,7 +306,7 @@ copy-paster. The download cost is paid once per user.
 
 ### Q2: Concurrency on stages 7 and 8
 
-Per [`docs/llm-concurrency.md`](../docs/llm-concurrency.md) L84–98,
+Per [`docs/llm-concurrency.md`](../../docs/llm-concurrency.md) L84–98,
 stage 8 is prefill-bound — client-side concurrency doesn't help much
 without a continuous-batching engine like vLLM. Stage 7 likely
 benefits more (shorter prompts).
@@ -327,7 +327,7 @@ the doc is enough caveat for a sophisticated user.
 ### Q3: `.env` fallback
 
 The
-[`docs/interfaces.md`](../docs/interfaces.md) L236–246 design rules
+[`docs/interfaces.md`](../../docs/interfaces.md) L236–246 design rules
 out env-var fallback explicitly. Three shapes:
 
 - **(A) Add fallback** — read `.env` when flag absent, emit stderr
@@ -339,7 +339,7 @@ out env-var fallback explicitly. Three shapes:
   loading. Compromise.
 
 Recommendation: (B). The
-[`usability-docs.md`](usability-docs.md) plan already adds the doc
+[`usability-docs.md`](../usability-docs.md) plan already adds the doc
 line; the design rule is there for a reason and the cost of "source
 your .env" is tiny. (C) feels over-designed for the problem.
 
@@ -350,7 +350,7 @@ your .env" is tiny. (C) feels over-designed for the problem.
 - **(B) Shell script** under `scripts/`. Smaller surface; reuses bash
   patterns the NESH wrapper already uses.
 - **(C) Neither.** Just document the recipe in
-  [`external-services.md`](../docs/external-services.md) and let the
+  [`external-services.md`](../../docs/external-services.md) and let the
   user write `ollama create` themselves.
 
 Recommendation: (B). The Modelfile bake is a one-line `ollama create`
@@ -370,7 +370,7 @@ matches what the NESH wrapper is already doing inline.
 Recommendation: (B). The savings are modest; the maintenance cost
 across local + cluster + variations is substantial. Document the
 two-command sequence in
-[`external-services.md`](../docs/external-services.md) and call it
+[`external-services.md`](../../docs/external-services.md) and call it
 done.
 
 ### Q6: Run-id elevation
@@ -395,9 +395,9 @@ when stages 9–12 land and the run-id story has more consumers.
   resolves to (B).
 - Per Q6: if (A) or (B) wins, write a separate
   `plans/run-id-elevation.md` with the migration shape.
-- The XLSX exporter ([`screening_abstracts/export.py`](../src/laglitsynth/screening_abstracts/export.py))
+- The XLSX exporter ([`screening_abstracts/export.py`](../../src/laglitsynth/screening_abstracts/export.py))
   data-driven `build_work_sheet` simplification from
-  [`simplification-pass.md`](../docs/explorations/simplification-pass.md)
+  [`simplification-pass.md`](../../docs/explorations/simplification-pass.md)
   3.5 — substantial enough to warrant its own commit; the project
   owner has called keeping the export, leaving simplification
   optional.
@@ -415,40 +415,40 @@ defer).
 **`prompt_sha256` recipe drift.** Adding `--num-ctx` to the hash
 covers manual users who'd otherwise mix verdicts across context
 windows. But the recipe at
-[`extract.py:354`](../src/laglitsynth/extraction_codebook/extract.py)
+[`extract.py:354`](../../src/laglitsynth/extraction_codebook/extract.py)
 already includes `_NUM_CTX`; the new flag's value just replaces the
 constant in the hash input. Confirm the test
 `test_num_ctx_changes_prompt_hash` actually exercises this.
 
 **Documentation feedback loop with
-[`usability-docs.md`](usability-docs.md).** The doc plan adds
+[`usability-docs.md`](../usability-docs.md).** The doc plan adds
 "`--concurrency` is absent on stages 7/8" notes. If Q2 lands as (A),
 those notes need to be removed in the same commit that adds the
 flag. Coordinate the two plans' commits in roadmap order.
 
 ## Critical files
 
-- [`src/laglitsynth/screening_abstracts/screen.py`](../src/laglitsynth/screening_abstracts/screen.py)
+- [`src/laglitsynth/screening_abstracts/screen.py`](../../src/laglitsynth/screening_abstracts/screen.py)
   — preflight lift; concurrency reference implementation.
-- [`src/laglitsynth/fulltext_eligibility/eligibility.py`](../src/laglitsynth/fulltext_eligibility/eligibility.py)
+- [`src/laglitsynth/fulltext_eligibility/eligibility.py`](../../src/laglitsynth/fulltext_eligibility/eligibility.py)
   — preflight, `--num-ctx`, `--concurrency` (if Q2 = A).
-- [`src/laglitsynth/extraction_codebook/extract.py`](../src/laglitsynth/extraction_codebook/extract.py)
+- [`src/laglitsynth/extraction_codebook/extract.py`](../../src/laglitsynth/extraction_codebook/extract.py)
   — preflight, `--num-ctx`, default model (Q1), `--concurrency` (if
   Q2 = A).
-- [`src/laglitsynth/catalogue_fetch/fetch.py`](../src/laglitsynth/catalogue_fetch/fetch.py),
-  [`src/laglitsynth/fulltext_retrieval/retrieve.py`](../src/laglitsynth/fulltext_retrieval/retrieve.py)
+- [`src/laglitsynth/catalogue_fetch/fetch.py`](../../src/laglitsynth/catalogue_fetch/fetch.py),
+  [`src/laglitsynth/fulltext_retrieval/retrieve.py`](../../src/laglitsynth/fulltext_retrieval/retrieve.py)
   — `.env` fallback (if Q3 = A).
 - New: shared preflight module under
-  [`src/laglitsynth/`](../src/laglitsynth/).
+  [`src/laglitsynth/`](../../src/laglitsynth/).
 - New: shared concurrency helper module (if Q2 = A).
-- New: [`scripts/bake-model.sh`](../scripts/) (if Q4 = B).
-- [`docs/llm-concurrency.md`](../docs/llm-concurrency.md) — update to
+- New: [`scripts/bake-model.sh`](../../scripts/) (if Q4 = B).
+- [`docs/llm-concurrency.md`](../../docs/llm-concurrency.md) — update to
   drop the "stages 7/8 do not yet honour `LLM_CONCURRENCY`" caveat
   if Q2 = A.
-- [`scripts/run-pipeline.sh`](../scripts/run-pipeline.sh),
-  [`scripts/nesh-pipeline.sbatch`](../scripts/nesh-pipeline.sbatch) —
+- [`scripts/run-pipeline.sh`](../../scripts/run-pipeline.sh),
+  [`scripts/nesh-pipeline.sbatch`](../../scripts/nesh-pipeline.sbatch) —
   thread the new flags if/when added.
-- [`plans/usability-docs.md`](usability-docs.md) — coordinate
+- [`plans/usability-docs.md`](../usability-docs.md) — coordinate
   doc-text changes with the CLI changes here (the
   "--concurrency absent" note in particular).
-- [`plans/roadmap.md`](roadmap.md) — index update.
+- [`plans/roadmap.md`](../roadmap.md) — index update.

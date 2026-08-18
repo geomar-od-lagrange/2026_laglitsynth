@@ -2,14 +2,14 @@
 
 ## Goal
 
-Finish the [flag-don't-filter cutover](done/flag-dont-filter-cutover.md)
+Finish the [flag-don't-filter cutover](flag-dont-filter-cutover.md)
 that landed half-way: today every gate stage still emits a derived
 `Work`-record copy alongside its verdict sidecar, and a pass-through
 stage 4 exists only to write one of them. This plan kills the derived
 files, deletes stage 4, and implements real dedup for stage 2 — which
 the doc already specifies but the code currently no-ops. After landing,
 the dedup catalogue at
-[`data/catalogue-dedup/deduplicated.jsonl`](../data/catalogue-dedup/deduplicated.jsonl)
+[`data/catalogue-dedup/deduplicated.jsonl`](../../data/catalogue-dedup/deduplicated.jsonl)
 is the single source of `Work` records pipeline-wide; every downstream
 stage joins inline against verdict sidecars at read time. Each consumer
 joins only against its immediately-upstream gate — earlier gates are
@@ -17,12 +17,12 @@ implicitly applied by the gate above.
 
 ## Non-goals
 
-- Building [`laglitsynth.resolve`](../src/laglitsynth/) as a shared
+- Building [`laglitsynth.resolve`](../../src/laglitsynth/) as a shared
   cross-stage helper. Three inline-join copies (stages 5, 7, 8) is
   below the abstraction threshold; defer until stage 9+ adds a fourth
   consumer.
 - Pipeline-level config file (`A1` from
-  [usability-review.md](../docs/explorations/usability-review.md));
+  [usability-review.md](../../docs/explorations/usability-review.md));
   individual `--screening-threshold` flags will appear on stages 5 and
   7, with the wrapper threading the same value. P8 is documented but
   not solved here.
@@ -52,12 +52,12 @@ Stage 4 (`screening-adjudication`) is deleted entirely.
 
 ### Files removed
 
-- [`src/laglitsynth/screening_adjudication/`](../src/laglitsynth/screening_adjudication/)
+- [`src/laglitsynth/screening_adjudication/`](../../src/laglitsynth/screening_adjudication/)
   — entire package.
-- [`tests/test_screening_adjudication.py`](../tests/test_screening_adjudication.py).
-- [`docs/screening-adjudication.md`](../docs/screening-adjudication.md).
+- [`tests/test_screening_adjudication.py`](../../tests/test_screening_adjudication.py).
+- [`docs/screening-adjudication.md`](../../docs/screening-adjudication.md).
 - The subparser registration in
-  [`src/laglitsynth/cli.py`](../src/laglitsynth/cli.py).
+  [`src/laglitsynth/cli.py`](../../src/laglitsynth/cli.py).
 
 ### Files no longer written
 
@@ -69,9 +69,9 @@ Stage 4 (`screening-adjudication`) is deleted entirely.
 
 ### Stage 2 — real dedup
 
-[`src/laglitsynth/catalogue_dedup/dedup.py`](../src/laglitsynth/catalogue_dedup/dedup.py)
+[`src/laglitsynth/catalogue_dedup/dedup.py`](../../src/laglitsynth/catalogue_dedup/dedup.py)
 is replaced. Spec from
-[`docs/catalogue-dedup.md`](../docs/catalogue-dedup.md):
+[`docs/catalogue-dedup.md`](../../docs/catalogue-dedup.md):
 
 - Rule 1: exact match on `Work.id`.
 - Rule 2: exact match on normalised DOI (lowercase, strip
@@ -91,7 +91,7 @@ that matched.
 Multi-source merge: stage 2 grows a `--input` glob/multi-flag so the
 user can `laglitsynth catalogue-dedup --input "data/catalogue-fetch/*.jsonl"
 --output-dir data/catalogue-dedup/` without a manual `cat`.
-[`docs/catalogue-dedup.md`](../docs/catalogue-dedup.md) L82–84
+[`docs/catalogue-dedup.md`](../../docs/catalogue-dedup.md) L82–84
 becomes "the stage handles multi-file input directly."
 
 ### Inline join shape (stages 5, 7, 8)
@@ -136,7 +136,7 @@ stage 7 only ran on above-threshold works to begin with.
 Stages 3 and 7 print `Run dir: <data-dir>/<stage-subdir>/<run-id>/` to
 stderr at the end of `run()`. Stage 8 already does this implicitly.
 Resolves the most painful manual-user surprise (P1 in
-[usability-review.md](../docs/explorations/usability-review.md)) at
+[usability-review.md](../../docs/explorations/usability-review.md)) at
 trivial cost.
 
 ## Design decisions
@@ -174,10 +174,10 @@ green.
 
 ### 1. Stage 2 real dedup
 
-Replace [`src/laglitsynth/catalogue_dedup/dedup.py`](../src/laglitsynth/catalogue_dedup/dedup.py)
+Replace [`src/laglitsynth/catalogue_dedup/dedup.py`](../../src/laglitsynth/catalogue_dedup/dedup.py)
 with the three-rule implementation from `docs/catalogue-dedup.md`.
 Grow `--input` to accept a glob or multiple paths.
-[`tests/test_catalogue_dedup.py`](../tests/test_catalogue_dedup.py)
+[`tests/test_catalogue_dedup.py`](../../tests/test_catalogue_dedup.py)
 gets full coverage:
 `test_dedup_by_openalex_id`, `test_dedup_by_doi_normalisation`,
 `test_dedup_by_title_author_year`, `test_dedup_keeps_most_complete`,
@@ -190,53 +190,53 @@ points at the same file.
 ### 2. Delete stage 4 + rewire stage 5 + wrapper update
 
 Atomic commit. Delete
-[`src/laglitsynth/screening_adjudication/`](../src/laglitsynth/screening_adjudication/),
+[`src/laglitsynth/screening_adjudication/`](../../src/laglitsynth/screening_adjudication/),
 the subparser entry in
-[`src/laglitsynth/cli.py`](../src/laglitsynth/cli.py),
-[`tests/test_screening_adjudication.py`](../tests/test_screening_adjudication.py),
-and [`docs/screening-adjudication.md`](../docs/screening-adjudication.md).
-Stage 5 ([`src/laglitsynth/fulltext_retrieval/retrieve.py`](../src/laglitsynth/fulltext_retrieval/retrieve.py))
+[`src/laglitsynth/cli.py`](../../src/laglitsynth/cli.py),
+[`tests/test_screening_adjudication.py`](../../tests/test_screening_adjudication.py),
+and [`docs/screening-adjudication.md`](../../docs/screening-adjudication.md).
+Stage 5 ([`src/laglitsynth/fulltext_retrieval/retrieve.py`](../../src/laglitsynth/fulltext_retrieval/retrieve.py))
 swaps `--input` for `--catalogue` + `--screening-verdicts` +
 `--screening-threshold`; the file-local `_active_works` helper
 materialises the inline join. Wrapper
-([`scripts/run-pipeline.sh`](../scripts/run-pipeline.sh) and
-[`scripts/nesh-pipeline.sbatch`](../scripts/nesh-pipeline.sbatch))
+([`scripts/run-pipeline.sh`](../../scripts/run-pipeline.sh) and
+[`scripts/nesh-pipeline.sbatch`](../../scripts/nesh-pipeline.sbatch))
 loses the stage 4 invocation and threads the new flags into stage 5.
-[`tests/test_fulltext_retrieval.py`](../tests/test_fulltext_retrieval.py)
+[`tests/test_fulltext_retrieval.py`](../../tests/test_fulltext_retrieval.py)
 gets a `test_active_works_threshold` and a
 `test_null_score_sentinels_ride_through`; the existing
 `--input`-based tests are rewritten.
 
 ### 3. Stage 7 rewire
 
-[`src/laglitsynth/fulltext_eligibility/eligibility.py`](../src/laglitsynth/fulltext_eligibility/eligibility.py)
+[`src/laglitsynth/fulltext_eligibility/eligibility.py`](../../src/laglitsynth/fulltext_eligibility/eligibility.py)
 swaps `--catalogue <included.jsonl>` for `--catalogue
 <deduplicated.jsonl>` + `--screening-verdicts` +
 `--screening-threshold`. Same `_active_works` helper as stage 5.
 Stage 7 still emits `eligible.jsonl` in this commit so stage 8
 keeps working; that file goes away in step 4. Wrapper updated for
 stage 7 invocation.
-[`tests/test_fulltext_eligibility.py`](../tests/test_fulltext_eligibility.py)
+[`tests/test_fulltext_eligibility.py`](../../tests/test_fulltext_eligibility.py)
 gets new tests for the threshold join and updates the `--catalogue`
 fixture from `included.jsonl` to `deduplicated.jsonl`.
 
 ### 4. Stage 8 rewire + stage 7 drops `eligible.jsonl`
 
 Atomic commit.
-[`src/laglitsynth/extraction_codebook/extract.py`](../src/laglitsynth/extraction_codebook/extract.py)
+[`src/laglitsynth/extraction_codebook/extract.py`](../../src/laglitsynth/extraction_codebook/extract.py)
 swaps `--eligible <eligible.jsonl>` for `--catalogue
 <deduplicated.jsonl>` + `--eligibility-verdicts`. Inline join filters
 verdicts to `eligible is True` and looks up the `Work` from the
 catalogue.
-[`src/laglitsynth/fulltext_eligibility/eligibility.py`](../src/laglitsynth/fulltext_eligibility/eligibility.py)
+[`src/laglitsynth/fulltext_eligibility/eligibility.py`](../../src/laglitsynth/fulltext_eligibility/eligibility.py)
 stops emitting `eligible.jsonl`; remove the catalogue-rebuild block at
-[`eligibility.py:455–460`](../src/laglitsynth/fulltext_eligibility/eligibility.py).
+[`eligibility.py:455–460`](../../src/laglitsynth/fulltext_eligibility/eligibility.py).
 Wrapper updated for stage 8.
-[`tests/test_extraction_codebook.py`](../tests/test_extraction_codebook.py)
+[`tests/test_extraction_codebook.py`](../../tests/test_extraction_codebook.py)
 gets a `test_eligibility_gate_filters_to_eligible_true` and
 `test_non_eligible_works_are_skipped`; the `--eligible` fixture path
 becomes `--eligibility-verdicts` + `--catalogue`.
-[`tests/test_fulltext_eligibility.py`](../tests/test_fulltext_eligibility.py)
+[`tests/test_fulltext_eligibility.py`](../../tests/test_fulltext_eligibility.py)
 loses every assertion about `eligible.jsonl`.
 
 ### 5. Run-id stderr print
@@ -250,32 +250,32 @@ Tests assert the line is on stderr.
 
 One commit covering every doc the cutover invalidates:
 
-- [`docs/pipeline.md`](../docs/pipeline.md) — drop stage 4 from the
+- [`docs/pipeline.md`](../../docs/pipeline.md) — drop stage 4 from the
   stage table and the mermaid flowchart; rewrite the stage 5 / 7 / 8
   artifact descriptions.
-- [`docs/interfaces.md`](../docs/interfaces.md) — rewrite the stage 4
+- [`docs/interfaces.md`](../../docs/interfaces.md) — rewrite the stage 4
   / 5 / 7 / 8 artifact tables, the CLI contract block, and the
   end-to-end sequence at L273–358.
-- [`docs/eligibility.md`](../docs/eligibility.md) — drop the
+- [`docs/eligibility.md`](../../docs/eligibility.md) — drop the
   `eligible.jsonl` storage-layout entry; update CLI examples.
-- [`docs/extraction-codebook.md`](../docs/extraction-codebook.md) —
+- [`docs/extraction-codebook.md`](../../docs/extraction-codebook.md) —
   swap `--eligible` examples for `--catalogue + --eligibility-verdicts`;
   fix the L196–206 path bug from the
-  [usability review](../docs/explorations/usability-review.md) P2.
-- [`docs/fulltext-retrieval.md`](../docs/fulltext-retrieval.md) —
+  [usability review](../../docs/explorations/usability-review.md) P2.
+- [`docs/fulltext-retrieval.md`](../../docs/fulltext-retrieval.md) —
   update CLI examples to the new flag set.
-- [`docs/data-model.md`](../docs/data-model.md) — drop
+- [`docs/data-model.md`](../../docs/data-model.md) — drop
   `AdjudicationVerdict`/`AdjudicationMeta` from the model dependency
   graph.
-- [`docs/catalogue-dedup.md`](../docs/catalogue-dedup.md) — describe
+- [`docs/catalogue-dedup.md`](../../docs/catalogue-dedup.md) — describe
   the now-real dedup behaviour as fact, not as planned scope; document
   the multi-input glob.
-- [`README.md`](../README.md) — drop stage 4 from `## Tools`; update
+- [`README.md`](../../README.md) — drop stage 4 from `## Tools`; update
   the manual `Locally` invocation; update the wrapper invocation to
   reflect the new flag set.
-- [`plans/roadmap.md`](roadmap.md) — move this plan from "in flight"
+- [`plans/roadmap.md`](../roadmap.md) — move this plan from "in flight"
   to "done" when it lands; archive
-  [`plans/done/flag-dont-filter-cutover.md`](done/flag-dont-filter-cutover.md)
+  [`plans/done/flag-dont-filter-cutover.md`](flag-dont-filter-cutover.md)
   remains a record of the half-cutover.
 
 ## Follow-ups
@@ -285,10 +285,10 @@ One commit covering every doc the cutover invalidates:
   appear.
 - Pipeline-level config file collapsing the three
   `--screening-threshold` flags into one (A1 in
-  [usability-review.md](../docs/explorations/usability-review.md)).
+  [usability-review.md](../../docs/explorations/usability-review.md)).
 - README hygiene + `external-services.md` (P10 + the Ollama/GROBID
   doc bucket from
-  [usability-review.md](../docs/explorations/usability-review.md)).
+  [usability-review.md](../../docs/explorations/usability-review.md)).
 - Run-id elevation to a pipeline-level concept (A2). The stderr print
   is the cheap interim fix; the long-term answer is one
   `pipeline-run-id` set once.
@@ -318,29 +318,29 @@ undocumented in `docs/` for now (separate doc commit).
 
 ## Critical files
 
-- [`src/laglitsynth/catalogue_dedup/dedup.py`](../src/laglitsynth/catalogue_dedup/dedup.py)
+- [`src/laglitsynth/catalogue_dedup/dedup.py`](../../src/laglitsynth/catalogue_dedup/dedup.py)
   — replaced wholesale.
-- [`src/laglitsynth/screening_adjudication/`](../src/laglitsynth/screening_adjudication/)
+- [`src/laglitsynth/screening_adjudication/`](../../src/laglitsynth/screening_adjudication/)
   — deleted.
-- [`src/laglitsynth/fulltext_retrieval/retrieve.py`](../src/laglitsynth/fulltext_retrieval/retrieve.py)
+- [`src/laglitsynth/fulltext_retrieval/retrieve.py`](../../src/laglitsynth/fulltext_retrieval/retrieve.py)
   — CLI rewire + inline join.
-- [`src/laglitsynth/fulltext_eligibility/eligibility.py`](../src/laglitsynth/fulltext_eligibility/eligibility.py)
+- [`src/laglitsynth/fulltext_eligibility/eligibility.py`](../../src/laglitsynth/fulltext_eligibility/eligibility.py)
   — CLI rewire + drop `eligible.jsonl` emission.
-- [`src/laglitsynth/extraction_codebook/extract.py`](../src/laglitsynth/extraction_codebook/extract.py)
+- [`src/laglitsynth/extraction_codebook/extract.py`](../../src/laglitsynth/extraction_codebook/extract.py)
   — CLI rewire + eligibility-verdicts inline join.
-- [`src/laglitsynth/cli.py`](../src/laglitsynth/cli.py) — drop stage 4
+- [`src/laglitsynth/cli.py`](../../src/laglitsynth/cli.py) — drop stage 4
   subparser registration.
-- [`src/laglitsynth/screening_abstracts/screen.py`](../src/laglitsynth/screening_abstracts/screen.py)
+- [`src/laglitsynth/screening_abstracts/screen.py`](../../src/laglitsynth/screening_abstracts/screen.py)
   — run-id stderr print only.
-- [`scripts/run-pipeline.sh`](../scripts/run-pipeline.sh) +
-  [`scripts/nesh-pipeline.sbatch`](../scripts/nesh-pipeline.sbatch) —
+- [`scripts/run-pipeline.sh`](../../scripts/run-pipeline.sh) +
+  [`scripts/nesh-pipeline.sbatch`](../../scripts/nesh-pipeline.sbatch) —
   drop stage 4, rewire stages 5/7/8 flags.
-- [`docs/pipeline.md`](../docs/pipeline.md),
-  [`docs/interfaces.md`](../docs/interfaces.md),
-  [`docs/eligibility.md`](../docs/eligibility.md),
-  [`docs/extraction-codebook.md`](../docs/extraction-codebook.md),
-  [`docs/fulltext-retrieval.md`](../docs/fulltext-retrieval.md),
-  [`docs/data-model.md`](../docs/data-model.md),
-  [`docs/catalogue-dedup.md`](../docs/catalogue-dedup.md),
-  [`README.md`](../README.md) — doc sweep in step 6.
-- [`plans/roadmap.md`](roadmap.md) — index update.
+- [`docs/pipeline.md`](../../docs/pipeline.md),
+  [`docs/interfaces.md`](../../docs/interfaces.md),
+  [`docs/eligibility.md`](../../docs/eligibility.md),
+  [`docs/extraction-codebook.md`](../../docs/extraction-codebook.md),
+  [`docs/fulltext-retrieval.md`](../../docs/fulltext-retrieval.md),
+  [`docs/data-model.md`](../../docs/data-model.md),
+  [`docs/catalogue-dedup.md`](../../docs/catalogue-dedup.md),
+  [`README.md`](../../README.md) — doc sweep in step 6.
+- [`plans/roadmap.md`](../roadmap.md) — index update.

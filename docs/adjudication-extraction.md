@@ -1,55 +1,48 @@
 # Adjudication — extraction
 
-Human review of LLM extraction records. A sample of records is
-spot-checked against source text, corrections are logged, and inter-rater
-agreement is measured.
+Stage 9 (`extraction-adjudication`) is not implemented and has no plan. This
+file records the input the stage will read and the contract questions still
+open. See [interfaces.md](interfaces.md) for the stage boundaries around it.
 
-## Prototype scope
+## Input the stage will read
 
-**Pass-through.** The prototype implementation copies the extraction
-records to validated extraction records unchanged. Same rationale as the
-screening adjudication pass-through (stage 4): wire the stage into the
-pipeline with correct contracts, replace with real review later.
+Stage 8 writes an XLSX review workbook on demand through
+[`extraction-codebook-export`](../src/laglitsynth/extraction_codebook/export.py).
+Its per-work tab lists every codebook field in three columns: `value`,
+`context`, and `reviewer_correction`. A reviewer reads the verbatim `context`
+the model cited for a field and writes a correction in the third column when
+the value does not match it. `--n-subset` and `--subset-seed` draw the
+reproducible sample of works to review.
+[`fulltext-eligibility-export`](../src/laglitsynth/fulltext_eligibility/export.py)
+writes the same shape of workbook for stage 7.
 
-## CLI interface
+Stage 9 reads the filled `reviewer_correction` columns back and pairs them
+with `records.jsonl` from stage 8. The workbook is therefore the human
+interface, and stage 9 is the ingestion side of it. See
+[extraction-codebook.md](extraction-codebook.md) for the workbook layout.
 
-```
-laglitsynth extraction-adjudication \
-    --input data/extraction-codebook/records.jsonl \
-    --output-dir data/extraction-adjudication/
-```
+## Withdrawn pass-through design
 
-The command copies the input to
-`data/extraction-adjudication/validated.jsonl` and writes an
-`ExtractionAdjudicationMeta` sidecar.
+An earlier version of this file specified stage 9 as a pass-through that
+copies stage 8 records to a `validated.jsonl` unchanged, on the same reasoning
+as the stage 4 pass-through. The
+[verdicts-only cutover](../plans/done/verdicts-only-cutover.md) deleted stage 4
+and every derived record copy it wrote. A gate stage now emits a sidecar
+covering every input record, and each downstream stage joins that sidecar
+against the deduplicated catalogue. Stage 9 follows the sidecar pattern. The
+`ExtractionAdjudicationMeta` shape and the `validated.jsonl` path that the
+withdrawn design named are not part of any current contract.
 
-### ExtractionAdjudicationMeta
+## Open contract questions
 
-The sidecar follows the shared `RunMeta`-based shape used by all pipeline
-stages (see [`docs/data-model.md`](data-model.md)):
-
-```python
-class ExtractionAdjudicationMeta(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    run: RunMeta   # tool, tool_version, run_at, validation_skipped
-    mode: str = "pass_through"
-    input_count: int
-    output_count: int
-    human_reviewed: int = 0
-```
-
-## What the real implementation will add
-
-When human QA begins:
-
-- Random sampling of extraction records for review.
-- A CLI or notebook that presents the extraction record alongside the
-  source text and the codebook, and lets the reviewer correct fields.
-- A corrections log (JSONL of field-level corrections with original and
-  corrected values).
-- Inter-rater agreement metrics (per field: exact match, Cohen's kappa
-  for categorical fields, or simple agreement percentage).
-- Feedback to the codebook if systematic extraction errors reveal schema
-  problems.
-
-None of this is needed for the prototype.
+- Whether one correction sidecar keyed by work id and field name is enough, or
+  whether a reviewer needs to record a verdict on the record as a whole.
+- Whether stage 9 reads the workbook directly, or whether the reviewer's
+  corrections are first converted to JSONL by a separate importer.
+- Which agreement measures the stage records per field, given that a
+  categorical field and a free-text field do not admit the same measure.
+- Whether stage 3, stage 7, and stage 9 share one reviewer-ingestion helper.
+  The three stages emit workbooks from three separate `export.py` modules
+  today, and the
+  [full-text-only plan](../plans/done/fulltext-stages-full-text-only-and-review.md)
+  declined to force a shared abstraction before stage 9 shows what it needs.

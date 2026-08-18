@@ -133,14 +133,18 @@ sentinel reasons, and [codebook.md](codebook.md) for the seed field list.
 
 ### 9. extraction-adjudication
 
-A human reviewer spot-checks a random sample of extraction records, verifying
-extracted facts match the source text. Corrections are written back.
-Inter-rater agreement metrics (human vs. LLM, not LLM vs. LLM) are
-recorded to support methodological transparency in the eventual publication.
+A human reviewer spot-checks a sample of extraction records, verifying that
+each extracted value matches the verbatim context the model cited for it. The
+reviewer works in the XLSX workbook that `extraction-codebook-export` writes,
+filling its `reviewer_correction` column. Stage 9 reads those corrections back
+and records agreement between human and model to support methodological
+transparency in the eventual publication. The stage is not implemented, and
+its output contract is open — see
+[adjudication-extraction.md](adjudication-extraction.md).
 
-- **Consumes:** extraction records, full texts
-- **Produces:** validated extraction records — corrected records plus a
-  validation log
+- **Consumes:** extraction records, reviewer-filled review workbook
+- **Produces:** corrections recorded alongside the extraction records, not a
+  corrected copy of them
 
 *Optional: findings may feed back to the codebook and trigger re-extraction.
 See [Optional extensions](#optional-extensions).*

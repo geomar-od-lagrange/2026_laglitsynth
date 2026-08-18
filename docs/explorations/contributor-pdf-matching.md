@@ -3,9 +3,7 @@
 Design note for a deferred enhancement to
 [fulltext-retrieval-import](../../src/laglitsynth/fulltext_retrieval/import_.py),
 following the collaboration model in
-[fulltext-retrieval-diversified.md](../../plans/done/fulltext-retrieval-diversified.md)
-and the round-trip probed in
-[zotero-export-probe.md](zotero-export-probe.md).
+[fulltext-retrieval-diversified.md](../../plans/done/fulltext-retrieval-diversified.md).
 
 The goal we want to reach: a contributor fetches PDFs through their own
 institutional access, dumps them in a folder named however is convenient
@@ -29,7 +27,22 @@ known works is this PDF, or none of them?"* That is far easier and fully
 local: no network, no model, microseconds-to-milliseconds per PDF. It scales
 to any contribution volume.
 
-## Signal trust order
+## Withdrawn Zotero export question
+
+The [diversified-retrieval plan](../../plans/done/fulltext-retrieval-diversified.md)
+left one question open: whether a PDF returned from Zotero carries its DOI in
+the export filename, or whether import has to round-trip a CSV mapping
+instead. A probe note and a `scripts/probe_zotero.py` helper existed to
+answer it against a live Zotero library, and neither was ever run. Both are
+removed as of this note.
+
+The closed-set reframe above answers the question without the probe. Import
+never trusts a filename to carry meaning: it reads identifiers out of the PDF
+itself and accepts a match only when the identifier lands in
+`pdf-manifest.csv`. Filename-stem and sidecar matching stay as last-resort
+tiers for any source, Zotero included, so what Zotero happens to name its
+attachments changes nothing about the design. A contributor may use Zotero,
+a browser, or a shared drive; the import path is the same.
 
 Resolve each returned PDF to a manifest stem by harvesting identifiers from
 the cleanest source first, accepting a match only when it lands in the

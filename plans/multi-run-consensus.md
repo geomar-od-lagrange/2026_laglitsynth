@@ -12,7 +12,7 @@ When picked back up: the plan below was written against pre-cutover
 names (`FilterVerdict`, `screen-abstracts`, `data-extraction`) and
 needs a freshening pass against the current two-component names and
 verdict-sidecar contract. The per-verdict `seed` field from the
-[reproducibility meta refactor](reproducibility-meta-refactor.md)
+[reproducibility meta refactor](done/reproducibility-meta-refactor.md)
 makes `run_id`-based deduplication cleaner (`(work_id, seed)` is
 already a unique key).
 
