@@ -92,6 +92,7 @@ def resolve_input(
     *,
     upstream_stage: str,
     flag_name: str,
+    subpath: str | None = None,
 ) -> Path:
     """Return the path for one input flag, falling back to the manifest.
 
@@ -102,6 +103,9 @@ def resolve_input(
     manifest names a path that is absent on this disk -- a manifest that
     crossed machines ahead of its data is an operator-visible error, never a
     silent skip.
+
+    ``subpath`` names a file inside the recorded output, for the stages whose
+    upstream records a directory while they consume one file from it.
     """
     if flag_value is not None:
         return flag_value
@@ -117,7 +121,7 @@ def resolve_input(
             f"{flag_name} is required: {_manifest_path(data_dir)} has no "
             f"{upstream_stage} entry to resolve it from"
         )
-    path = Path(recorded)
+    path = Path(recorded) if subpath is None else Path(recorded) / subpath
     if not path.exists():
         raise SystemExit(
             f"{flag_name} resolved to {path} from {_manifest_path(data_dir)}, "

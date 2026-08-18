@@ -15,7 +15,10 @@ bundle a collaborator can act on through their own institutional access:
 - ``README.md`` — what the bundle is, what each file is for, and what to
   send back, filled in from a template with the work count and export date.
 
-Inputs are explicit flags (manifest wiring deferred).
+``--catalogue`` and ``--screening-verdicts`` fall back to
+``data/manifest.json`` when omitted, resolving to the last
+``catalogue-dedup`` and ``screening-abstracts`` entries respectively — see
+``laglitsynth.manifest``.
 """
 
 from __future__ import annotations
@@ -32,8 +35,14 @@ from laglitsynth.fulltext_retrieval.models import PdfSource
 from laglitsynth.fulltext_retrieval.retrieve import _DOI_PREFIX_RE, _active_works
 from laglitsynth.fulltext_retrieval.store import load_provenance
 from laglitsynth.ids import work_id_to_filename
+from laglitsynth.manifest import record_stage, resolve_input
 
 DEFAULT_EXPORT_SUBDIR = "pdfs/export"
+
+# The round-trip key ``fulltext-retrieval-import`` reads back, appended to
+# the manifest's ``fulltext-retrieval-export`` output (the bundle directory)
+# when ``--manifest`` is omitted there.
+PDF_MANIFEST_FILENAME = "pdf-manifest.csv"
 
 
 def _doi_url(doi: str) -> str:
@@ -144,7 +153,7 @@ def write_export(
         for work in works:
             f.write(_ris_record(work) + "\n")
 
-    manifest_path = export_dir / "pdf-manifest.csv"
+    manifest_path = export_dir / PDF_MANIFEST_FILENAME
     with open(manifest_path, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(
@@ -192,14 +201,20 @@ def build_subparser(
     parser.add_argument(
         "--catalogue",
         type=Path,
-        required=True,
-        help="Deduplicated catalogue JSONL (data/catalogue-dedup/deduplicated.jsonl)",
+        default=None,
+        help=(
+            "Deduplicated catalogue JSONL (data/catalogue-dedup/deduplicated.jsonl). "
+            "Resolved from data/manifest.json's catalogue-dedup entry when omitted."
+        ),
     )
     parser.add_argument(
         "--screening-verdicts",
         type=Path,
-        required=True,
-        help="Stage 3 verdicts JSONL (data/screening-abstracts/<run-id>/verdicts.jsonl)",
+        default=None,
+        help=(
+            "Stage 3 verdicts JSONL (data/screening-abstracts/<run-id>/verdicts.jsonl). "
+            "Resolved from data/manifest.json's screening-abstracts entry when omitted."
+        ),
     )
     parser.add_argument(
         "--screening-threshold",
@@ -231,6 +246,19 @@ def run(args: argparse.Namespace) -> None:
         else data_dir / DEFAULT_EXPORT_SUBDIR
     )
 
+    catalogue = resolve_input(
+        data_dir,
+        args.catalogue,
+        upstream_stage="catalogue-dedup",
+        flag_name="--catalogue",
+    )
+    screening_verdicts = resolve_input(
+        data_dir,
+        args.screening_verdicts,
+        upstream_stage="screening-abstracts",
+        flag_name="--screening-verdicts",
+    )
+
     provenance = load_provenance(data_dir)
     have_pdf = {
         wid
@@ -241,7 +269,7 @@ def run(args: argparse.Namespace) -> None:
     selection = [
         w
         for w in _active_works(
-            args.catalogue, args.screening_verdicts, args.screening_threshold
+            catalogue, screening_verdicts, args.screening_threshold
         )
         if w.id not in have_pdf
     ]
@@ -252,4 +280,12 @@ def run(args: argparse.Namespace) -> None:
         f"Exported {count} missing works to {export_dir} "
         f"({with_doi} with a DOI in dois.txt).",
         file=sys.stderr,
+    )
+
+    record_stage(
+        data_dir,
+        stage="fulltext-retrieval-export",
+        inputs={"catalogue": catalogue, "screening_verdicts": screening_verdicts},
+        output=export_dir,
+        meta_path=None,
     )

@@ -33,14 +33,17 @@ from pathlib import Path
 from pypdf import PdfReader
 from pypdf.errors import PyPdfError
 
+from laglitsynth.fulltext_retrieval.export import PDF_MANIFEST_FILENAME
 from laglitsynth.fulltext_retrieval.models import PdfProvenanceRecord, PdfSource
 from laglitsynth.fulltext_retrieval.retrieve import _DOI_PREFIX_RE, _validate_pdf
 from laglitsynth.fulltext_retrieval.store import (
     load_provenance,
+    pdfs_dir,
     sha256_of,
     store_pdf_path,
     upsert_provenance,
 )
+from laglitsynth.manifest import record_stage, resolve_input
 
 # DOI syntax per Crossref's recommended regex (case-insensitive).
 _DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:a-z0-9]+", re.IGNORECASE)
@@ -288,8 +291,11 @@ def build_subparser(
     parser.add_argument(
         "--manifest",
         type=Path,
-        required=True,
-        help="pdf-manifest.csv from the matching export.",
+        default=None,
+        help=(
+            "pdf-manifest.csv from the matching export. Resolved from "
+            "data/manifest.json's fulltext-retrieval-export entry when omitted."
+        ),
     )
     parser.add_argument(
         "--data-dir",
@@ -313,11 +319,19 @@ def build_subparser(
 
 
 def run(args: argparse.Namespace) -> None:
+    data_dir: Path = args.data_dir
     source = _IMPORT_SOURCES[args.source]
+    manifest_path = resolve_input(
+        data_dir,
+        args.manifest,
+        upstream_stage="fulltext-retrieval-export",
+        flag_name="--manifest",
+        subpath=PDF_MANIFEST_FILENAME,
+    )
     summary, still_missing = import_pdfs(
         args.import_dir,
-        args.manifest,
-        args.data_dir,
+        manifest_path,
+        data_dir,
         source,
         overwrite=args.overwrite,
     )
@@ -348,3 +362,11 @@ def run(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
     print(f"  Manifest works still missing: {still_missing}", file=sys.stderr)
+
+    record_stage(
+        data_dir,
+        stage="fulltext-retrieval-import",
+        inputs={"import_dir": args.import_dir, "manifest": manifest_path},
+        output=pdfs_dir(data_dir),
+        meta_path=None,
+    )

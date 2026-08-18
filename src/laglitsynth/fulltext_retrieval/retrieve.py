@@ -33,12 +33,14 @@ from laglitsynth.fulltext_retrieval.models import (
 )
 from laglitsynth.fulltext_retrieval.store import (
     load_provenance,
+    pdfs_dir,
     sha256_of,
     store_pdf_path,
     upsert_provenance,
 )
 from laglitsynth.ids import work_id_to_filename
 from laglitsynth.io import JsonlReadStats, read_jsonl, write_meta
+from laglitsynth.manifest import record_stage, resolve_input
 from laglitsynth.models import RunMeta
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
@@ -280,14 +282,20 @@ def build_subparser(
     parser.add_argument(
         "--catalogue",
         type=Path,
-        required=True,
-        help="Deduplicated catalogue JSONL (data/catalogue-dedup/deduplicated.jsonl)",
+        default=None,
+        help=(
+            "Deduplicated catalogue JSONL (data/catalogue-dedup/deduplicated.jsonl). "
+            "Resolved from data/manifest.json's catalogue-dedup entry when omitted."
+        ),
     )
     parser.add_argument(
         "--screening-verdicts",
         type=Path,
-        required=True,
-        help="Stage 3 verdicts JSONL (data/screening-abstracts/<run-id>/verdicts.jsonl)",
+        default=None,
+        help=(
+            "Stage 3 verdicts JSONL (data/screening-abstracts/<run-id>/verdicts.jsonl). "
+            "Resolved from data/manifest.json's screening-abstracts entry when omitted."
+        ),
     )
     parser.add_argument(
         "--screening-threshold",
@@ -344,6 +352,19 @@ def run(args: argparse.Namespace) -> None:
     data_dir: Path = args.data_dir
     data_dir.mkdir(parents=True, exist_ok=True)
 
+    catalogue = resolve_input(
+        data_dir,
+        args.catalogue,
+        upstream_stage="catalogue-dedup",
+        flag_name="--catalogue",
+    )
+    screening_verdicts = resolve_input(
+        data_dir,
+        args.screening_verdicts,
+        upstream_stage="screening-abstracts",
+        flag_name="--screening-verdicts",
+    )
+
     stats = JsonlReadStats()
 
     # Load the whole provenance store keyed by work_id (single-writer,
@@ -369,8 +390,8 @@ def run(args: argparse.Namespace) -> None:
 
     works = list(
         _active_works(
-            args.catalogue,
-            args.screening_verdicts,
+            catalogue,
+            screening_verdicts,
             args.screening_threshold,
             stats,
         )
@@ -449,8 +470,9 @@ def run(args: argparse.Namespace) -> None:
         run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
         validation_skipped=stats.skipped,
     )
+    meta_path = data_dir / "fulltext-retrieval" / "retrieval-meta.json"
     write_meta(
-        data_dir / "fulltext-retrieval" / "retrieval-meta.json",
+        meta_path,
         RetrievalMeta(
             run=run_meta,
             total_works=total,
@@ -470,3 +492,11 @@ def run(args: argparse.Namespace) -> None:
         label = _SOURCE_LABELS.get(source, source.value)
         pct = 100.0 * count / total if total > 0 else 0.0
         print(f"  {label + ':':<26}{count:>4}  ({pct:.1f}%)", file=sys.stderr)
+
+    record_stage(
+        data_dir,
+        stage="fulltext-retrieval",
+        inputs={"catalogue": catalogue, "screening_verdicts": screening_verdicts},
+        output=pdfs_dir(data_dir),
+        meta_path=meta_path,
+    )
