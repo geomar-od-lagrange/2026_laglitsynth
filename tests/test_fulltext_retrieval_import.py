@@ -154,8 +154,10 @@ class TestImportByDoi:
         fake_page.extract_text.return_value = (
             "Cite as: doi 10.1234/abc. Published 2024."
         )
+        fake_page.get.return_value = None  # no link annotations
         fake_reader = MagicMock()
         fake_reader.metadata = None
+        fake_reader.xmp_metadata = None
         fake_reader.pages = [fake_page]
 
         with patch(
@@ -430,3 +432,105 @@ class TestManifestWiring:
             assert "does not exist here" in str(exc)
         else:
             raise AssertionError("expected SystemExit for a path absent on this disk")
+
+
+class TestDoiCandidateSet:
+    """Membership in the manifest decides which extracted DOI wins, not order."""
+
+    def test_journal_doi_in_metadata_does_not_beat_the_article_doi_in_text(
+        self, tmp_path: Path
+    ) -> None:
+        # The AGU/Wiley shape measured against real PDFs: the Info dictionary
+        # carries the journal's ISSN-DOI, which is not in the manifest, while
+        # the article's own DOI is printed on page 1.
+        import_dir = tmp_path / "incoming"
+        data_dir = tmp_path / "data"
+        manifest = tmp_path / "pdf-manifest.csv"
+        _write_manifest(manifest, [("https://openalex.org/W1", "W1", "10.1029/2024MS004848")])
+        _make_pdf(import_dir / "download (3).pdf", doi_in_metadata="10.1002/(ISSN)1942-2466")
+
+        fake_page = MagicMock()
+        fake_page.extract_text.return_value = "Journal of Advances\n10.1029/2024MS004848\n"
+        fake_page.get.return_value = None
+        fake_reader = MagicMock()
+        fake_reader.metadata = {"/Subject": "doi:10.1002/(ISSN)1942-2466"}
+        fake_reader.xmp_metadata = None
+        fake_reader.pages = [fake_page]
+
+        with patch(
+            "laglitsynth.fulltext_retrieval.import_.PdfReader", return_value=fake_reader
+        ):
+            summary, still_missing = import_pdfs(
+                import_dir, manifest, data_dir, PdfSource.manual, overwrite=False
+            )
+
+        assert summary.copied == 1
+        assert still_missing == 0
+        assert load_provenance(data_dir)["https://openalex.org/W1"].stem == "W1"
+
+    def test_a_metadata_doi_wins_when_both_candidates_are_in_the_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        import_dir = tmp_path / "incoming"
+        data_dir = tmp_path / "data"
+        manifest = tmp_path / "pdf-manifest.csv"
+        _write_manifest(
+            manifest,
+            [
+                ("https://openalex.org/W1", "W1", "10.1234/from-metadata"),
+                ("https://openalex.org/W2", "W2", "10.1234/from-text"),
+            ],
+        )
+        _make_pdf(import_dir / "anything.pdf")
+
+        fake_page = MagicMock()
+        fake_page.extract_text.return_value = "see also 10.1234/from-text"
+        fake_page.get.return_value = None
+        fake_reader = MagicMock()
+        fake_reader.metadata = {"/Subject": "doi:10.1234/from-metadata"}
+        fake_reader.xmp_metadata = None
+        fake_reader.pages = [fake_page]
+
+        with patch(
+            "laglitsynth.fulltext_retrieval.import_.PdfReader", return_value=fake_reader
+        ):
+            import_pdfs(import_dir, manifest, data_dir, PdfSource.manual, overwrite=False)
+
+        assert load_provenance(data_dir)["https://openalex.org/W1"].stem == "W1"
+
+    def test_no_candidate_in_the_manifest_is_still_skipped_not_guessed(
+        self, tmp_path: Path
+    ) -> None:
+        import_dir = tmp_path / "incoming"
+        data_dir = tmp_path / "data"
+        manifest = tmp_path / "pdf-manifest.csv"
+        _write_manifest(manifest, [("https://openalex.org/W1", "W1", "10.1234/wanted")])
+        _make_pdf(import_dir / "unrelated.pdf", doi_in_metadata="10.9999/something-else")
+
+        summary, still_missing = import_pdfs(
+            import_dir, manifest, data_dir, PdfSource.manual, overwrite=False
+        )
+
+        assert summary.copied == 0
+        assert summary.skipped_unmatched == ["unrelated.pdf"]
+        assert still_missing == 1
+
+
+class TestAmsStyleDois:
+    def test_a_doi_with_angle_brackets_matches_the_manifest(self, tmp_path: Path) -> None:
+        # 10.1175/1520-0485(1997)027<1038:KOTPEU>2.0.CO;2 -- the Crossref class
+        # excludes angle brackets, which truncated the DOI before it could match.
+        ams_doi = "10.1175/1520-0485(1997)027<1038:KOTPEU>2.0.CO;2"
+        import_dir = tmp_path / "incoming"
+        data_dir = tmp_path / "data"
+        manifest = tmp_path / "pdf-manifest.csv"
+        _write_manifest(manifest, [("https://openalex.org/W1", "W1", ams_doi)])
+        _make_pdf(import_dir / "scan.pdf", doi_in_metadata=ams_doi)
+
+        summary, still_missing = import_pdfs(
+            import_dir, manifest, data_dir, PdfSource.manual, overwrite=False
+        )
+
+        assert summary.copied == 1
+        assert still_missing == 0
+        assert load_provenance(data_dir)["https://openalex.org/W1"].stem == "W1"
