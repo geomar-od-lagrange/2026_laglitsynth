@@ -17,7 +17,7 @@ the contracts in [interfaces.md](../interfaces.md), the dispatcher in
 [extract.py](../../src/laglitsynth/extraction_codebook/extract.py)), the
 shared [io.py](../../src/laglitsynth/io.py) / [ids.py](../../src/laglitsynth/ids.py)
 / [dotenv.py](../../src/laglitsynth/dotenv.py), and the distributable-retrieval
-design in [fulltext-retrieval-diversified.md](../../plans/fulltext-retrieval-diversified.md).
+design in [fulltext-retrieval-diversified.md](../../plans/done/fulltext-retrieval-diversified.md).
 
 ## 1. Running all stages: the handoff is hand-carried
 
@@ -204,7 +204,7 @@ The natural division of labour falls out of the stage graph:
   centralised, because access is per-person.
 
 The retrieval plan
-([fulltext-retrieval-diversified.md](../../plans/fulltext-retrieval-diversified.md))
+([fulltext-retrieval-diversified.md](../../plans/done/fulltext-retrieval-diversified.md))
 is the first place the codebase treats multi-machine as a first-class
 concern rather than an rsync afterthought. Its model is the right shape for
 *all* the gate stages, not just retrieval: an append-only `attempts.jsonl`

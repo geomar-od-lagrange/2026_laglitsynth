@@ -1,4 +1,4 @@
-"""Tests for the fulltext retrieval submodule."""
+"""Tests for the fulltext retrieval submodule (shared store)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from laglitsynth.catalogue_fetch.models import Work
-from laglitsynth.fulltext_retrieval.models import RetrievalRecord, RetrievalStatus
+from laglitsynth.fulltext_retrieval.models import PdfSource
 from laglitsynth.fulltext_retrieval.retrieve import (
     _DOI_PREFIX_RE,
     _RateLimiter,
@@ -19,6 +19,7 @@ from laglitsynth.fulltext_retrieval.retrieve import (
     _validate_pdf,
     run,
 )
+from laglitsynth.fulltext_retrieval.store import load_provenance, store_pdf_path
 from laglitsynth.ids import work_id_to_filename
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
@@ -37,7 +38,7 @@ def _make_passthrough_args(
     *,
     threshold: float = 50.0,
     score: int = 80,
-    output_subdir: str = "out",
+    data_subdir: str = "data",
     email: str = "test@example.com",
 ) -> MagicMock:
     """Build a MagicMock args suitable for calling ``run()``.
@@ -60,21 +61,15 @@ def _make_passthrough_args(
     args.catalogue = catalogue_path
     args.screening_verdicts = verdicts_path
     args.screening_threshold = threshold
-    args.output_dir = tmp_path / output_subdir
+    args.data_dir = tmp_path / data_subdir
     args.email = email
-    args.manual_dir = None
-    args.skip_existing = False
+    args.refetch = False
     args.dry_run = False
     return args
 
 
 def _pdf_content() -> bytes:
     return b"%PDF-1.4 fake pdf content"
-
-
-def _make_rate_limiter() -> _RateLimiter:
-    rl = _RateLimiter()
-    return rl
 
 
 class TestWorkIdToFilename:
@@ -120,15 +115,15 @@ class TestOaRetrieval:
                 tmp_path,
                 client=client,
                 email="test@example.com",
-                manual_dir=None,
                 dry_run=False,
                 rate_limiter=rate_limiter,
             )
 
-        assert record.retrieval_status == RetrievalStatus.retrieved_oa
+        assert record.source == PdfSource.oa
         assert record.source_url == "https://example.com/paper.pdf"
-        assert record.pdf_path is not None
-        assert (tmp_path / record.pdf_path).exists()
+        assert record.pdf_path == "pdfs/W1.pdf"
+        assert record.content_sha256 is not None
+        assert store_pdf_path(tmp_path, record.stem).exists()
 
 
 class TestUnpaywallFallback:
@@ -163,42 +158,15 @@ class TestUnpaywallFallback:
                 tmp_path,
                 client=client,
                 email="test@example.com",
-                manual_dir=None,
                 dry_run=False,
                 rate_limiter=rate_limiter,
             )
 
-        assert record.retrieval_status == RetrievalStatus.retrieved_unpaywall
+        assert record.source == PdfSource.unpaywall
         assert record.source_url == "https://unpaywall.example.com/paper.pdf"
 
 
-class TestManualPickup:
-    def test_manual_pickup(self, tmp_path: Path) -> None:
-        work = _make_work()
-        manual_dir = tmp_path / "manual"
-        manual_dir.mkdir()
-        fname = work_id_to_filename(work.id)
-        (manual_dir / f"{fname}.pdf").write_bytes(_pdf_content())
-
-        client = MagicMock(spec=httpx.Client)
-        rate_limiter = _RateLimiter()
-
-        record = _retrieve_one(
-            work,
-            tmp_path,
-            client=client,
-            email="test@example.com",
-            manual_dir=manual_dir,
-            dry_run=False,
-            rate_limiter=rate_limiter,
-        )
-
-        assert record.retrieval_status == RetrievalStatus.retrieved_manual
-        assert record.pdf_path is not None
-        assert (tmp_path / record.pdf_path).exists()
-
-
-class TestAbstractOnly:
+class TestMissing:
     def test_no_sources(self, tmp_path: Path) -> None:
         work = _make_work(doi=None)
         client = MagicMock(spec=httpx.Client)
@@ -209,32 +177,30 @@ class TestAbstractOnly:
             tmp_path,
             client=client,
             email="test@example.com",
-            manual_dir=None,
             dry_run=False,
             rate_limiter=rate_limiter,
         )
 
-        assert record.retrieval_status == RetrievalStatus.abstract_only
+        assert record.source == PdfSource.missing
         assert record.pdf_path is None
+        assert record.content_sha256 is None
+        assert not store_pdf_path(tmp_path, record.stem).exists()
 
-
-class TestFailedOnHttpError:
-    def test_http_403(self, tmp_path: Path) -> None:
-        # OA URL attempted and received a 403 — must yield failed, not abstract_only.
+    def test_http_403_is_missing(self, tmp_path: Path) -> None:
+        # OA URL attempted and received a 403 — for the store, the only fact
+        # that matters is that no PDF exists: record `missing`.
         work = _make_work(doi=None, pdf_url="https://example.com/paper.pdf")
 
         response = httpx.Response(
             403,
             request=httpx.Request("GET", "https://example.com/paper.pdf"),
         )
-        client = MagicMock(spec=httpx.Client)
-        client.get.return_value = response
-        # Make raise_for_status actually raise
         response.raise_for_status = MagicMock(  # type: ignore[method-assign]
             side_effect=httpx.HTTPStatusError(
                 "403 Forbidden", request=response.request, response=response
             )
         )
+        client = MagicMock(spec=httpx.Client)
         client.get.return_value = response
         rate_limiter = _RateLimiter()
 
@@ -244,232 +210,58 @@ class TestFailedOnHttpError:
                 tmp_path,
                 client=client,
                 email="test@example.com",
-                manual_dir=None,
                 dry_run=False,
                 rate_limiter=rate_limiter,
             )
 
-        # OA URL was attempted and failed — should be failed, not abstract_only.
-        assert record.retrieval_status == RetrievalStatus.failed
-        assert record.error is not None
-        assert "403" in record.error
-
-    def test_unpaywall_download_fails_marks_failed(self, tmp_path: Path) -> None:
-        # Unpaywall API succeeds but the PDF download fails — must yield failed.
-        work = _make_work(doi="https://doi.org/10.1234/test")
-
-        unpaywall_response = httpx.Response(
-            200,
-            json={
-                "best_oa_location": {
-                    "url_for_pdf": "https://unpaywall.example.com/paper.pdf"
-                }
-            },
-            request=httpx.Request(
-                "GET", "https://api.unpaywall.org/v2/10.1234%2Ftest?email=test@example.com"
-            ),
-        )
-        failed_pdf_response = httpx.Response(
-            503,
-            request=httpx.Request("GET", "https://unpaywall.example.com/paper.pdf"),
-        )
-        failed_pdf_response.raise_for_status = MagicMock(  # type: ignore[method-assign]
-            side_effect=httpx.HTTPStatusError(
-                "503 Service Unavailable",
-                request=failed_pdf_response.request,
-                response=failed_pdf_response,
-            )
-        )
-
-        client = MagicMock(spec=httpx.Client)
-        client.get.side_effect = [unpaywall_response, failed_pdf_response]
-        rate_limiter = _RateLimiter()
-
-        with patch.object(rate_limiter, "wait"):
-            record = _retrieve_one(
-                work,
-                tmp_path,
-                client=client,
-                email="test@example.com",
-                manual_dir=None,
-                dry_run=False,
-                rate_limiter=rate_limiter,
-            )
-
-        assert record.retrieval_status == RetrievalStatus.failed
-        assert record.error is not None
+        assert record.source == PdfSource.missing
+        assert record.pdf_path is None
 
 
-class TestSkipExisting:
-    def test_skip_retrieved_retry_failed(self, tmp_path: Path) -> None:
-        # Verify skip-existing logic: retrieved_oa is preserved without network
-        # calls; failed and abstract_only are retried.
-        output_dir = tmp_path / "out"
-        output_dir.mkdir()
-        retrieval_path = output_dir / "retrieval.jsonl"
-
-        seeded = [
-            RetrievalRecord(
-                work_id="https://openalex.org/W1",
-                retrieval_status=RetrievalStatus.retrieved_oa,
-                retrieved_at="2026-01-01T00:00:00",
-            ),
-            RetrievalRecord(
-                work_id="https://openalex.org/W2",
-                retrieval_status=RetrievalStatus.failed,
-                error="timeout",
-                retrieved_at="2026-01-01T00:00:00",
-            ),
-            RetrievalRecord(
-                work_id="https://openalex.org/W3",
-                retrieval_status=RetrievalStatus.abstract_only,
-                retrieved_at="2026-01-01T00:00:00",
-            ),
-        ]
-        with open(retrieval_path, "w") as f:
-            for r in seeded:
-                f.write(r.model_dump_json() + "\n")
-
+class TestStickyByDefault:
+    def test_plain_run_skips_held_attempts_missing(self, tmp_path: Path) -> None:
+        # Sticky default: a work with a non-missing record is skipped entirely
+        # (no download attempted, PDF untouched); a `missing` record is retried.
+        data_dir = tmp_path / "data"
         works = [
             _make_work("https://openalex.org/W1", doi=None),
             _make_work("https://openalex.org/W2", doi=None),
-            _make_work("https://openalex.org/W3", doi=None),
-        ]
-        catalogue_path = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        _write_works_jsonl(catalogue_path, works)
-        _write_verdicts_jsonl(
-            verdicts_path,
-            [ScreeningVerdict(work_id=w.id, relevance_score=80) for w in works],
-        )
-
-        args = MagicMock()
-        args.catalogue = catalogue_path
-        args.screening_verdicts = verdicts_path
-        args.screening_threshold = 50.0
-        args.output_dir = output_dir
-        args.email = "test@example.com"
-        args.manual_dir = None
-        args.skip_existing = True
-        args.dry_run = False
-
-        client_mock = MagicMock(spec=httpx.Client)
-        client_mock.get.side_effect = httpx.ConnectError("connection refused")
-
-        rl = _RateLimiter()
-        with (
-            patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client", return_value=client_mock),
-            patch("laglitsynth.fulltext_retrieval.retrieve._RateLimiter", return_value=rl),
-        ):
-            run(args)
-
-        # W1 (retrieved_oa) must be preserved; no network call attempted for it.
-        # W2 (failed) and W3 (abstract_only) must be re-processed — both will
-        # again be abstract_only (no OA URLs, no DOI, no manual).
-        lines = [l for l in retrieval_path.read_text().splitlines() if l.strip()]
-        final = {json.loads(l)["work_id"]: json.loads(l)["retrieval_status"] for l in lines}
-        assert final["https://openalex.org/W1"] == "retrieved_oa"
-        assert final["https://openalex.org/W2"] == "abstract_only"
-        assert final["https://openalex.org/W3"] == "abstract_only"
-
-
-class TestUnretrievedTxt:
-    def test_unretrieved_output(self, tmp_path: Path) -> None:
-        works = [
-            _make_work("https://openalex.org/W1", doi="https://doi.org/10.1/a"),
-            _make_work("https://openalex.org/W2", doi=None),
         ]
         args = _make_passthrough_args(tmp_path, works)
+        args.data_dir = data_dir
+        args.refetch = False
 
-        client_mock = MagicMock(spec=httpx.Client)
-        # All downloads fail
-        client_mock.get.side_effect = httpx.ConnectError("connection refused")
+        # Seed W1 as already retrieved (oa) and W2 as missing.
+        from laglitsynth.fulltext_retrieval.models import PdfProvenanceRecord
+        from laglitsynth.fulltext_retrieval.store import write_provenance
 
-        rl = _RateLimiter()
-        with (
-            patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client", return_value=client_mock),
-            patch("laglitsynth.fulltext_retrieval.retrieve._RateLimiter", return_value=rl),
-            patch.object(rl, "wait"),
-        ):
-            run(args)
-
-        unretrieved = (tmp_path / "out" / "unretrieved.txt").read_text().strip().splitlines()
-        assert len(unretrieved) == 2
-        assert "10.1/a" in unretrieved[0]
-        assert "W1.pdf" in unretrieved[0]
-        assert "no-doi" in unretrieved[1]
-        assert "W2.pdf" in unretrieved[1]
-
-    def test_unretrieved_output_dry_run(self, tmp_path: Path) -> None:
-        works = [
-            _make_work("https://openalex.org/W1", doi="https://doi.org/10.1/a"),
-            _make_work("https://openalex.org/W2", doi=None),
-        ]
-        args = _make_passthrough_args(tmp_path, works)
-        args.dry_run = True
-
-        # No network calls expected under dry_run.
-        client_mock = MagicMock(spec=httpx.Client)
-
-        rl = _RateLimiter()
-        with (
-            patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client", return_value=client_mock),
-            patch("laglitsynth.fulltext_retrieval.retrieve._RateLimiter", return_value=rl),
-        ):
-            run(args)
-
-        unretrieved_path = tmp_path / "out" / "unretrieved.txt"
-        assert unretrieved_path.exists()
-        lines = unretrieved_path.read_text().strip().splitlines()
-        # Both W1 and W2 have no OA URLs and no manual files → abstract_only
-        assert len(lines) == 2
-
-    def test_unretrieved_output_skip_existing(self, tmp_path: Path) -> None:
-        # Pre-seed retrieval.jsonl with a failed record for W1 and retrieved_oa for W2.
-        output_dir = tmp_path / "out"
-        output_dir.mkdir()
-        retrieval_path = output_dir / "retrieval.jsonl"
-
-        seeded = [
-            RetrievalRecord(
+        pdf_path = store_pdf_path(data_dir, "W1")
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(_pdf_content())
+        seeded = {
+            "https://openalex.org/W1": PdfProvenanceRecord(
                 work_id="https://openalex.org/W1",
-                retrieval_status=RetrievalStatus.failed,
-                error="timeout",
-                retrieved_at="2026-01-01T00:00:00",
+                stem="W1",
+                doi=None,
+                source=PdfSource.oa,
+                source_url="https://example.com/p.pdf",
+                pdf_path="pdfs/W1.pdf",
+                content_sha256="seedsha",
+                obtained_at="2026-01-01T00:00:00+00:00",
             ),
-            RetrievalRecord(
+            "https://openalex.org/W2": PdfProvenanceRecord(
                 work_id="https://openalex.org/W2",
-                retrieval_status=RetrievalStatus.retrieved_oa,
-                retrieved_at="2026-01-01T00:00:00",
+                stem="W2",
+                doi=None,
+                source=PdfSource.missing,
+                source_url=None,
+                pdf_path=None,
+                content_sha256=None,
+                obtained_at="2026-01-01T00:00:00+00:00",
             ),
-        ]
-        with open(retrieval_path, "w") as f:
-            for r in seeded:
-                f.write(r.model_dump_json() + "\n")
+        }
+        write_provenance(data_dir, seeded)
 
-        works = [
-            _make_work("https://openalex.org/W1", doi="https://doi.org/10.1/a"),
-            _make_work("https://openalex.org/W2", doi=None),
-        ]
-        catalogue_path = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        _write_works_jsonl(catalogue_path, works)
-        _write_verdicts_jsonl(
-            verdicts_path,
-            [ScreeningVerdict(work_id=w.id, relevance_score=80) for w in works],
-        )
-
-        args = MagicMock()
-        args.catalogue = catalogue_path
-        args.screening_verdicts = verdicts_path
-        args.screening_threshold = 50.0
-        args.output_dir = output_dir
-        args.email = "test@example.com"
-        args.manual_dir = None
-        args.skip_existing = True
-        args.dry_run = False
-
-        # W1 will be retried; all downloads fail.
         client_mock = MagicMock(spec=httpx.Client)
         client_mock.get.side_effect = httpx.ConnectError("connection refused")
 
@@ -477,18 +269,80 @@ class TestUnretrievedTxt:
         with (
             patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client", return_value=client_mock),
             patch("laglitsynth.fulltext_retrieval.retrieve._RateLimiter", return_value=rl),
-            patch.object(rl, "wait"),
         ):
             run(args)
 
-        unretrieved_path = output_dir / "unretrieved.txt"
-        lines = unretrieved_path.read_text().strip().splitlines()
-        # W1 still failed → in unretrieved; W2 is retrieved_oa → not in unretrieved
-        assert any("W1.pdf" in line for line in lines)
-        assert not any("W2.pdf" in line for line in lines)
+        final = load_provenance(data_dir)
+        # (a) W1 untouched (still oa, original sha preserved, PDF still on disk).
+        assert final["https://openalex.org/W1"].source == PdfSource.oa
+        assert final["https://openalex.org/W1"].content_sha256 == "seedsha"
+        assert pdf_path.read_bytes() == _pdf_content()
+        # No download was attempted for W1 — the only network calls are for the
+        # retried `missing` work W2 (a no-DOI work has no OA URL, so even W2
+        # makes no call here; the held work is skipped before any attempt).
+        assert client_mock.get.call_count == 0
+        # (b) W2 retried, still no sources → missing.
+        assert final["https://openalex.org/W2"].source == PdfSource.missing
+
+    def test_refetch_failure_keeps_prior_record(self, tmp_path: Path) -> None:
+        # (c) --refetch re-attempts a held work; when every download fails the
+        # no-downgrade guard keeps the prior `oa` record with its PDF present
+        # rather than clobbering provenance to `missing`.
+        data_dir = tmp_path / "data"
+        works = [
+            _make_work(
+                "https://openalex.org/W1",
+                doi=None,
+                pdf_url="https://example.com/p.pdf",
+            ),
+        ]
+        args = _make_passthrough_args(tmp_path, works)
+        args.data_dir = data_dir
+        args.refetch = True
+
+        from laglitsynth.fulltext_retrieval.models import PdfProvenanceRecord
+        from laglitsynth.fulltext_retrieval.store import write_provenance
+
+        pdf_path = store_pdf_path(data_dir, "W1")
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(_pdf_content())
+        write_provenance(
+            data_dir,
+            {
+                "https://openalex.org/W1": PdfProvenanceRecord(
+                    work_id="https://openalex.org/W1",
+                    stem="W1",
+                    doi=None,
+                    source=PdfSource.oa,
+                    source_url="https://example.com/p.pdf",
+                    pdf_path="pdfs/W1.pdf",
+                    content_sha256="seedsha",
+                    obtained_at="2026-01-01T00:00:00+00:00",
+                ),
+            },
+        )
+
+        # Every download attempt fails.
+        client_mock = MagicMock(spec=httpx.Client)
+        client_mock.get.side_effect = httpx.ConnectError("connection refused")
+
+        rl = _RateLimiter()
+        with (
+            patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client", return_value=client_mock),
+            patch("laglitsynth.fulltext_retrieval.retrieve._RateLimiter", return_value=rl),
+        ):
+            run(args)
+
+        # The held work was re-attempted (a download call was made)...
+        assert client_mock.get.call_count >= 1
+        # ...but the prior good record is preserved and the PDF is untouched.
+        final = load_provenance(data_dir)
+        assert final["https://openalex.org/W1"].source == PdfSource.oa
+        assert final["https://openalex.org/W1"].content_sha256 == "seedsha"
+        assert pdf_path.read_bytes() == _pdf_content()
 
 
-class TestRetrievalJsonl:
+class TestProvenanceJsonl:
     def test_no_duplicates_on_rerun(self, tmp_path: Path) -> None:
         works = [
             _make_work("https://openalex.org/W1", doi=None),
@@ -507,47 +361,37 @@ class TestRetrievalJsonl:
             run(args)
             run(args)
 
-        retrieval_path = tmp_path / "out" / "retrieval.jsonl"
-        lines = [l for l in retrieval_path.read_text().splitlines() if l.strip()]
+        prov_path = args.data_dir / "pdfs" / "provenance.jsonl"
+        lines = [l for l in prov_path.read_text().splitlines() if l.strip()]
         assert len(lines) == 2
         work_ids = [json.loads(l)["work_id"] for l in lines]
         assert len(set(work_ids)) == 2
 
-    def test_preserves_existing_rows_under_skip_existing(self, tmp_path: Path) -> None:
-        output_dir = tmp_path / "out"
-        output_dir.mkdir()
-        retrieval_path = output_dir / "retrieval.jsonl"
+    def test_preserves_other_works_rows(self, tmp_path: Path) -> None:
+        # A work outside this run's input set keeps its record.
+        from laglitsynth.fulltext_retrieval.models import PdfProvenanceRecord
+        from laglitsynth.fulltext_retrieval.store import write_provenance
 
-        existing_rec = RetrievalRecord(
-            work_id="https://openalex.org/W1",
-            retrieval_status=RetrievalStatus.retrieved_oa,
-            retrieved_at="2026-01-01T00:00:00",
-        )
-        with open(retrieval_path, "w") as f:
-            f.write(existing_rec.model_dump_json() + "\n")
-
-        # Input has the pre-seeded work plus a new work.
-        works = [
-            _make_work("https://openalex.org/W1", doi=None),
-            _make_work("https://openalex.org/W2", doi=None),
-        ]
-        catalogue_path = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        _write_works_jsonl(catalogue_path, works)
-        _write_verdicts_jsonl(
-            verdicts_path,
-            [ScreeningVerdict(work_id=w.id, relevance_score=80) for w in works],
+        data_dir = tmp_path / "data"
+        write_provenance(
+            data_dir,
+            {
+                "https://openalex.org/W9": PdfProvenanceRecord(
+                    work_id="https://openalex.org/W9",
+                    stem="W9",
+                    doi=None,
+                    source=PdfSource.manual,
+                    source_url=None,
+                    pdf_path="pdfs/W9.pdf",
+                    content_sha256="x",
+                    obtained_at="2026-01-01T00:00:00+00:00",
+                )
+            },
         )
 
-        args = MagicMock()
-        args.catalogue = catalogue_path
-        args.screening_verdicts = verdicts_path
-        args.screening_threshold = 50.0
-        args.output_dir = output_dir
-        args.email = "test@example.com"
-        args.manual_dir = None
-        args.skip_existing = True
-        args.dry_run = False
+        works = [_make_work("https://openalex.org/W1", doi=None)]
+        args = _make_passthrough_args(tmp_path, works)
+        args.data_dir = data_dir
 
         client_mock = MagicMock(spec=httpx.Client)
         client_mock.get.side_effect = httpx.ConnectError("connection refused")
@@ -559,11 +403,9 @@ class TestRetrievalJsonl:
         ):
             run(args)
 
-        lines = [l for l in retrieval_path.read_text().splitlines() if l.strip()]
-        assert len(lines) == 2
-        work_ids = [json.loads(l)["work_id"] for l in lines]
-        assert "https://openalex.org/W1" in work_ids
-        assert "https://openalex.org/W2" in work_ids
+        final = load_provenance(data_dir)
+        assert final["https://openalex.org/W9"].source == PdfSource.manual
+        assert final["https://openalex.org/W1"].source == PdfSource.missing
 
 
 class TestRateLimiting:
@@ -611,9 +453,9 @@ class TestDoiNormalisation:
 
 
 class TestDryRunStatusHonesty:
-    def test_doi_only_work_yields_abstract_only(self, tmp_path: Path) -> None:
-        # A work with only a DOI (no OA URLs, no manual file) under --dry-run
-        # must produce abstract_only, not retrieved_unpaywall.
+    def test_doi_only_work_yields_missing(self, tmp_path: Path) -> None:
+        # A work with only a DOI (no OA URLs) under --dry-run must produce
+        # `missing`, not unpaywall.
         work = _make_work(doi="https://doi.org/10.1234/test")
         client = MagicMock(spec=httpx.Client)
         rate_limiter = _RateLimiter()
@@ -623,12 +465,11 @@ class TestDryRunStatusHonesty:
             tmp_path,
             client=client,
             email="test@example.com",
-            manual_dir=None,
             dry_run=True,
             rate_limiter=rate_limiter,
         )
 
-        assert record.retrieval_status == RetrievalStatus.abstract_only
+        assert record.source == PdfSource.missing
 
 
 class TestUnpaywallEmail:
@@ -680,18 +521,14 @@ class TestValidationSkipped:
         self, tmp_path: Path
     ) -> None:
         """meta.run.validation_skipped reflects malformed lines in catalogue and verdicts."""
-        # One valid work with a matching valid verdict, plus one malformed
-        # line in each of catalogue and verdicts.  Two skipped total.
         work = _make_work("https://openalex.org/W1", doi=None)
         catalogue_path = tmp_path / "catalogue.jsonl"
         verdicts_path = tmp_path / "verdicts.jsonl"
 
-        # Write catalogue: one valid Work + one malformed line (wrong field names).
         with open(catalogue_path, "w") as f:
             f.write(work.model_dump_json() + "\n")
             f.write('{"not_a_real_field": "x"}\n')
 
-        # Write verdicts: one valid ScreeningVerdict + one malformed line.
         verdict = ScreeningVerdict(work_id="https://openalex.org/W1", relevance_score=80)
         with open(verdicts_path, "w") as f:
             f.write(verdict.model_dump_json() + "\n")
@@ -701,10 +538,9 @@ class TestValidationSkipped:
         args.catalogue = catalogue_path
         args.screening_verdicts = verdicts_path
         args.screening_threshold = 50.0
-        args.output_dir = tmp_path / "out"
+        args.data_dir = tmp_path / "data"
         args.email = "test@example.com"
-        args.manual_dir = None
-        args.skip_existing = False
+        args.refetch = False
         args.dry_run = False
 
         client_mock = MagicMock(spec=httpx.Client)
@@ -717,11 +553,38 @@ class TestValidationSkipped:
         ):
             run(args)
 
-        import json as _json
-
-        meta_path = tmp_path / "out" / "retrieval-meta.json"
-        meta = _json.loads(meta_path.read_text())
+        meta_path = tmp_path / "data" / "fulltext-retrieval" / "retrieval-meta.json"
+        meta = json.loads(meta_path.read_text())
         assert meta["run"]["validation_skipped"] == 2
+
+
+class TestRetrievalMeta:
+    def test_missing_count_reflects_unretrieved_tally(self, tmp_path: Path) -> None:
+        # Two no-DOI works with no OA URLs both fall through to `missing`, so
+        # the meta's missing_count is 2 and retrieved_count is 0.
+        works = [
+            _make_work("https://openalex.org/W1", doi=None),
+            _make_work("https://openalex.org/W2", doi=None),
+        ]
+        args = _make_passthrough_args(tmp_path, works)
+
+        client_mock = MagicMock(spec=httpx.Client)
+        client_mock.get.side_effect = httpx.ConnectError("connection refused")
+
+        rl = _RateLimiter()
+        with (
+            patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client", return_value=client_mock),
+            patch("laglitsynth.fulltext_retrieval.retrieve._RateLimiter", return_value=rl),
+        ):
+            run(args)
+
+        meta_path = args.data_dir / "fulltext-retrieval" / "retrieval-meta.json"
+        meta = json.loads(meta_path.read_text())
+        assert meta["total_works"] == 2
+        assert meta["missing_count"] == 2
+        assert meta["retrieved_count"] == 0
+        assert "abstract_only_count" not in meta
+        assert "failed_count" not in meta
 
 
 class TestActiveWorksJoin:
@@ -793,9 +656,6 @@ class TestActiveWorksJoin:
 
         result = list(_active_works(catalogue_path, verdicts_path, screening_threshold=50.0))
         ids = {w.id for w in result}
-        # W1, W2, W3 have None score → always pass through.
-        # W4 has score 80 ≥ 50 → passes.
-        # W5 has score 10 < 50 → filtered out.
         assert ids == {
             "https://openalex.org/W1",
             "https://openalex.org/W2",
@@ -828,7 +688,6 @@ class TestEmailDotenvFallback:
 
     def _make_args(self, tmp_path: Path, email: str | None) -> MagicMock:
         args = _make_passthrough_args(tmp_path, [], email="placeholder@example.com")
-        # Override email after construction; _make_passthrough_args always sets it.
         args.email = email
         args.dry_run = True
         return args
@@ -875,7 +734,6 @@ class TestEmailDotenvFallback:
     ) -> None:
         """No flag and no .env: SystemExit with a clear message."""
         monkeypatch.chdir(tmp_path)
-        # No .env file at all.
         args = self._make_args(tmp_path, email=None)
 
         with pytest.raises(SystemExit) as exc_info:

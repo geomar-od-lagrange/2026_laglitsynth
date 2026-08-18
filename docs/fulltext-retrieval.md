@@ -1,251 +1,196 @@
 # Full-text retrieval
 
-Retrieve PDFs for works that pass the screening threshold. This is where the
-catalogue becomes a corpus. The output is PDFs on disk and a retrieval
-status record per work — nothing more. Text extraction (parsing PDFs into
+Stage 5 turns the screened catalogue into a corpus of PDFs. It maintains a
+persistent, work-keyed PDF store under `data/pdfs/` and three subcommands
+that fill it: automatic retrieval from open-access sources, and an
+export/import loop that lets collaborators contribute PDFs they can reach
+through their own institutional access. Text extraction (parsing PDFs into
 structured sections) is a separate concern handled by
 [fulltext-extraction.md](fulltext-extraction.md).
 
-The stage joins the deduplicated catalogue against the stage 3 screening
-verdict sidecar at a caller-supplied `--screening-threshold` to determine
-the active work set.
+The active work set is the screening-gated selection: the deduplicated
+catalogue joined against stage 3's verdict sidecar at a caller-supplied
+`--screening-threshold`. Works at or above the threshold (and works whose
+score is `None`, the sentinel reasons) are in scope.
 
-## Source cascade
+The join walks the catalogue and **silently drops** any work absent from
+the screening verdicts file: the `_active_works` helper does
+`if sv is None: continue`, so a work with no screening verdict produces no
+retrieval attempt and no record, without warning. Running against a partial
+or stale verdicts file therefore retrieves fewer works than the catalogue
+holds — confirm the verdicts file covers the catalogue before a run.
 
-Try sources in this order for each work. Stop at the first success.
+## The persistent PDF store
 
-### 1. Manual batch
+The store is one directory, `data/pdfs/`, holding `data/pdfs/<stem>.pdf` for
+every work whose PDF has been obtained by any means. The stem is the
+OpenAlex work-id leaf from
+[work_id_to_filename](../src/laglitsynth/ids.py). The store is the union
+over every search a review runs, deduplicated by work: a PDF is fetched once
+per work and reused by every search that includes it, so a new search mostly
+reuses PDFs already on disk and only fills the margin. This is the storage
+analogue of what [catalogue-dedup](../src/laglitsynth/catalogue_dedup/) does
+for catalogues.
 
-Manual files live on local disk and are deliberately placed by a human;
-checking them first means re-runs pick them up cheaply and manual placement
-always wins. Export a list of unretrieved DOIs and filenames. The human
-downloads PDFs through institutional access (library proxy, interlibrary
-loan, Zotero, whatever works) and drops them into a designated directory.
-The pipeline picks them up on the next run, matched by filename
-(`W<OpenAlex-ID>.pdf`).
+There is exactly one PDF per work — no preprint-versus-published split.
+Downstream extraction reads one full text per work and does not branch on
+version, so a single slot per work keeps provenance to a single record
+rather than a log of competing attempts.
 
-This is deliberately not automated. Shibboleth/SAML is institutionally
-specific and fragile. A list of DOIs and an afternoon at the library is the
-pragmatic choice for a corpus of a few hundred papers.
+The store is keyed on the work stem, not the DOI. Roughly 10–15% of
+WoS-only records carry no DOI, and a DOI-keyed store would have no slot for
+them; every work has an OpenAlex id and therefore a stem, so stem-keying
+gives every work a slot uniformly. DOI is recorded as provenance and used as
+a match hint at import, never as the filesystem name.
 
-### 2. OpenAlex open-access URLs
+PDFs are not committed to git; add `data/pdfs/` to `.gitignore`.
 
-The `Work` model already carries `open_access.oa_url` and
-`primary_location.pdf_url`. These come from Unpaywall data aggregated by
-OpenAlex. OA coverage for oceanography is unknown and should be measured
-on a sample before committing to a retrieval strategy. This is the
-cheapest source: no additional API calls, URLs already in the data.
+## Provenance sidecar
 
-### 3. Unpaywall API
-
-For works with a DOI but no usable OpenAlex OA link, query the Unpaywall
-API (`api.unpaywall.org/v2/{doi}?email=...`). Unpaywall sometimes has
-locations that OpenAlex has not yet indexed. Free, requires only an email
-address, rate limit 100k requests/day.
-
-### 4. Preprint servers
-
-Check for arXiv or ESSOAr versions via DOI resolution or OpenAlex's
-`locations` list. For arXiv, construct the PDF URL directly from the arXiv
-ID. Preprints may differ from the published version but for our purposes
-(extracting numerical methods) the differences are rarely material.
-
-Preprints are retained for prototyping and vocabulary discovery. For
-quantitative RQ analyses, preprints must be excludable — the data model
-carries peer-review status so that downstream stages can filter by
-publication type. Preprint retrieval does not imply preprint inclusion in
-quantitative results.
-
-### What we skip
-
-- **Sci-Hub and shadow libraries.** Legal risk, not appropriate for a formal
-  systematic review.
-- **Publisher APIs.** Each has its own authentication and terms. Not worth
-  the integration cost for a one-off review.
-- **Google Scholar scraping.** Fragile, against ToS.
-
-### Future sources
-
-The PDF-on-disk artifact is just files in a directory. Adding new retrieval
-sources (Zotero translators, Semantic Scholar, institutional bulk exports)
-later means writing a new downloader and merging PDFs into the same
-directory. No special design is needed to support this — it falls out of
-the decoupled retrieval/extraction split.
-
-## Data model
-
-New models in [`src/laglitsynth/fulltext_retrieval/models.py`](../src/laglitsynth/fulltext_retrieval/models.py).
-
-### RetrievalStatus (enum)
+Alongside the PDFs, `data/pdfs/provenance.jsonl` records, per work, where its
+one PDF came from or that it is still missing. Each line is a
+[`PdfProvenanceRecord`](../src/laglitsynth/fulltext_retrieval/models.py):
 
 ```python
-class RetrievalStatus(str, Enum):
-    retrieved_oa = "retrieved_oa"
-    retrieved_unpaywall = "retrieved_unpaywall"
-    retrieved_manual = "retrieved_manual"
-    abstract_only = "abstract_only"
-    failed = "failed"
-```
+class PdfSource(str, Enum):
+    oa = "oa"                        # OA URL on the Work record
+    unpaywall = "unpaywall"          # Unpaywall best_oa_location
+    zotero_import = "zotero-import"  # ingested from a Zotero-exported folder
+    manual = "manual"                # ingested from a plain folder drop
+    missing = "missing"              # no PDF yet; recorded so gaps are addressable
 
-The `retrieved_*` variants record which source succeeded. Useful for PRISMA
-flow reporting and for understanding corpus coverage. `abstract_only` means
-no source had a PDF. `failed` means a source was found but download failed
-(network error, 403, corrupt file).
 
-### RetrievalRecord
-
-One per work in the active (above-threshold) work set, regardless of outcome.
-
-```python
-class RetrievalRecord(BaseModel):
+class PdfProvenanceRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    work_id: str                          # OpenAlex ID
-    retrieval_status: RetrievalStatus
-    source_url: str | None = None         # URL the PDF was fetched from
-    pdf_path: str | None = None           # relative path to stored PDF
-    error: str | None = None              # error message if failed
-    retrieved_at: str                     # per-record wall-clock timestamp
+    work_id: str
+    stem: str                # data/pdfs/<stem>.pdf
+    doi: str | None          # None for DOI-less works
+    source: PdfSource
+    source_url: str | None   # the URL a PDF was fetched from, when applicable
+    pdf_path: str | None     # "pdfs/<stem>.pdf" when source != missing, else None
+    content_sha256: str | None  # of the PDF bytes; None when missing
+    obtained_at: str         # ISO-8601 UTC of the record
 ```
 
-### RetrievalMeta
+The store only cares whether a PDF exists, so `missing` collapses both "no
+source was ever found" and "a download failed." Provenance is work-keyed and
+last-write-wins per work: re-running OA retrieval and then importing a Zotero
+PDF for the same work leaves one record with `source = zotero-import`.
 
-Run-level metadata.
+The store is single-writer by design. One operator drives the pipeline and
+is the only process that writes `data/pdfs/`, so `provenance.jsonl` is a
+plain whole-file record: it is read into a `dict[str, PdfProvenanceRecord]`
+keyed by `work_id` on startup and rewritten atomically. There is no
+concurrent writer to race, hence no append-only journal or locking. Helpers
+live in [store.py](../src/laglitsynth/fulltext_retrieval/store.py).
 
-```python
-class RetrievalMeta(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    run: RunMeta      # tool, tool_version, run_at, validation_skipped
-    total_works: int
-    retrieved_count: int
-    abstract_only_count: int
-    failed_count: int
-    by_source: dict[str, int]
-```
+The per-invocation meta sidecar
+[`RetrievalMeta`](../src/laglitsynth/fulltext_retrieval/models.py) is written
+to `data/fulltext-retrieval/retrieval-meta.json` with counters recomputed
+over `PdfSource`.
 
-## Storage layout
+## Automatic retrieval: `fulltext-retrieval`
 
-```
-data/fulltext-retrieval/
-  retrieval.jsonl       # one RetrievalRecord per work
-  retrieval-meta.json   # RetrievalMeta
-  pdfs/                 # raw PDFs, named by OpenAlex work ID
-    W1234567890.pdf
-  manual/               # drop zone for manually downloaded PDFs
-```
+For each active work, retrieval tries OA sources and stops at the first
+success:
 
-PDFs are named by OpenAlex ID (the `W...` suffix). The manual directory
-uses the same naming convention — the CLI prints expected filenames when
-reporting unretrieved works.
+1. OpenAlex open-access URLs — `primary_location.pdf_url` and
+   `open_access.oa_url`, already in the `Work` record. Cheapest source: no
+   extra API call.
+2. Unpaywall — for works with a DOI but no usable OpenAlex OA link, query
+   `api.unpaywall.org/v2/{doi}?email=...` and download its
+   `best_oa_location`. Free, requires only an email (read from `--email` or
+   `UNPAYWALL_EMAIL` in `.env`).
 
-PDFs are not committed to git. Add `data/fulltext-retrieval/pdfs/` to `.gitignore`.
+Every downloaded response is validated by magic bytes (`%PDF`) before it is
+stored, so an HTML error page served with a PDF content-type is rejected.
+Downloads are rate-limited to one request per second per domain. The HTTP
+client carries a per-request `timeout=30.0` seconds (distinct from the
+per-domain rate limit — a slow server aborts at 30s rather than stalling the
+run) and sets a `User-Agent: laglitsynth/0.1 (mailto:{email})` header on
+every request. A work with
+no source, or whose every download failed, gets a `missing` record and no
+PDF. Retrieval is sticky by default: a work that already has a non-`missing`
+provenance record is skipped, so a plain run attempts only `missing` and
+never-seen works and never re-downloads or overwrites a PDF already held —
+obtaining PDFs is the scarce resource (rate limits, captchas even for paid
+access), and a "successful" re-fetch could replace a good full text with a
+paywalled stub. `--refetch` opts back into re-downloading held works for the
+rare case where a stored PDF is known bad; a failed re-fetch never downgrades
+the prior record to `missing` or deletes the held PDF. `--dry-run` reports
+what would be retrieved without downloading.
 
-## CLI interface
+Sci-Hub and shadow libraries, publisher APIs, and Google Scholar scraping
+are all out of scope — legal risk or integration cost not appropriate for a
+systematic review. Paywalled PDFs come in through the import loop below,
+where a human exercises institutional access normally.
 
-```
-laglitsynth fulltext-retrieval \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    --screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
-    --screening-threshold 50 \
-    --output-dir data/fulltext-retrieval/ \
-    --email $UNPAYWALL_EMAIL \
-    [--manual-dir data/fulltext-retrieval/manual/] \
-    [--skip-existing] \
-    [--dry-run]
-```
+## Export → collaborator → import
 
-### Arguments
+PDF coverage from OA alone is patchy and a single IP gets throttled. The
+people who can legitimately reach paywalled PDFs are several collaborators
+with different institutional access — not one machine. The export/import loop
+diversifies retrieval without any scraping.
 
-- `--catalogue`: path to the deduplicated catalogue JSONL (`Work` records
-  from stage 2).
-- `--screening-verdicts`: path to the stage 3 verdict sidecar
-  (`ScreeningVerdict` records).
-- `--screening-threshold`: relevance score cutoff 0–100 (default: 50).
-  Works at or above the threshold are retrieved.
-- `--output-dir`: where to write retrieval records, metadata, and PDFs.
-- `--email`: contact email for Unpaywall API requests. When omitted the tool
-  reads `UNPAYWALL_EMAIL` from `.env` in the working directory and emits
-  `Loaded UNPAYWALL_EMAIL from .env` to stderr. The explicit flag takes
-  precedence when both are present.
-- `--manual-dir`: directory to scan for manually placed PDFs. Defaults to
-  `<output-dir>/manual/`.
-- `--skip-existing`: do not re-retrieve works that already have a
-  `retrieved_*` status. Enables resumability.
-- `--dry-run`: report what would be retrieved without downloading.
+### `fulltext-retrieval-export`
 
-### Resumability
+Resolves the active selection, subtracts works that already have a
+non-`missing` provenance record, and writes a handoff bundle into
+`--export-dir` (default `data/pdfs/export/`):
 
-The command writes one JSONL line per work as it processes. Re-running with
-`--skip-existing` picks up where it left off. Works with `failed` status
-are retried (the failure may have been transient). Works with
-`abstract_only` status are retried too (a manual PDF may have appeared).
+- `dois.txt` — one `https://doi.org/<doi>` per line, for works that have a
+  DOI. This is what a collaborator pastes into Zotero's "Add Item by
+  Identifier" or a browser.
+- `missing.ris` — one RIS record per missing work (title, authors, year,
+  journal, DOI), for import into any reference manager.
+- `pdf-manifest.csv` — the round-trip key, columns `work_id`, `stem`, `doi`,
+  `expected_filename` (`<stem>.pdf`). Import reads this to match returned
+  PDFs back to works; it is written by us, so matching never depends on what
+  a collaborator's tool names a file.
 
-### Rate limiting
+Works without a DOI appear in `pdf-manifest.csv` and `missing.ris` (DOI
+empty) but not in `dois.txt` — there is no link to resolve.
 
-- Unpaywall: 1 request/second.
-- PDF downloads: 1 request/second per domain. Avoids hammering a single
-  publisher CDN.
-- On HTTP 429 or 403: log, mark as `failed`, include the DOI in the
-  unretrieved list. Do not retry immediately.
+### `fulltext-retrieval-import`
 
-### Reporting
+Ingests a returned folder of PDFs into `data/pdfs/`. Takes `--import-dir`
+(the folder a collaborator shipped back), `--manifest` (the
+`pdf-manifest.csv` from the matching export), and `--source`
+(`zotero-import` | `manual`). For each PDF it resolves a target stem, never
+guessed, in this order:
 
-Print a summary to stderr after the run (example format, numbers are
-placeholders):
+1. an embedded DOI in the PDF metadata or first-page text that appears in the
+   manifest's DOI map (Zotero's "Export Files" names attachments by item
+   title, so filenames cannot be assumed to carry the DOI);
+2. a filename whose stem matches the manifest directly (the plain-folder-drop
+   case, where the collaborator was asked to name files `<stem>.pdf`);
+3. a sidecar `*.csv`/`*.json` the collaborator returned that maps their
+   filenames to DOIs.
 
-```
-Retrieval summary:
-  Total works:            NNN
-  Retrieved (OA):         NNN  (NN.N%)
-  Retrieved (Unpaywall):  NNN  (NN.N%)
-  Retrieved (manual):     NNN  (NN.N%)
-  Abstract-only:          NNN  (NN.N%)
-  Failed:                 NNN  (NN.N%)
-```
+Each candidate is validated by magic bytes, then deduplicated by
+`content_sha256`: a byte-identical re-import is a no-op, and a PDF that
+differs from one already stored for that work is skipped (the existing PDF
+wins) unless `--overwrite` is passed. Matched, new PDFs are copied in and
+their provenance is upserted with the given `--source`. A PDF that resolves
+to no manifest stem, or is not a real PDF, is reported and skipped. Import
+prints a summary — matched and copied, skipped, and how many manifest works
+are still missing after this import.
 
-Also write the list of unretrieved DOIs (abstract-only + failed) to
-`<output-dir>/unretrieved.txt` for the manual-batch workflow.
+A deferred enhancement would let contributors ignore filenames and sidecars
+entirely, matching returned PDFs against the closed manifest by broadened
+DOI extraction (XMP, link annotations) and a title fallback —
+[contributor-pdf-matching.md](explorations/contributor-pdf-matching.md)
+captures the design and why its data-dependent half waits for real returns.
 
-## What to build first
+## Collaboration model
 
-### Build now
-
-- PDF download from OpenAlex OA URLs.
-- Unpaywall API client.
-- Manual PDF directory scanner.
-- `RetrievalRecord` / `RetrievalMeta` models and JSONL output.
-- The `fulltext-retrieval` CLI subcommand with `--skip-existing`.
-- Summary report and unretrieved DOI list.
-
-### Defer
-
-- Preprint-server detection (arXiv PDF URL construction, ESSOAr). Add when
-  we see how much coverage OA + Unpaywall + manual provides.
-- Parallel downloads. Sequential with resume is sufficient for hundreds of
-  papers.
-- Any form of automated institutional access.
-
-## Risks and mitigations
-
-### OA coverage lower than expected
-
-If OA coverage is low, the manual burden grows. Mitigation: run retrieval
-early on a 50-work sample to measure actual coverage before committing.
-If coverage is poor, prioritise the manual path and consider adding
-Semantic Scholar as a source.
-
-### Publisher rate-limiting or blocking
-
-Some CDNs block programmatic downloads even for OA content. Mitigation:
-per-domain throttling, polite `User-Agent` header, and the manual fallback.
-Blocked papers go to the unretrieved list — not worth fighting.
-
-### Legal concerns
-
-Downloading OA PDFs for text mining is legal in most jurisdictions (EU TDM
-exception, US fair use for research). Paywalled content goes through the
-manual path where the human exercises institutional access normally.
-
-### PDF storage size
-
-A few hundred PDFs at 1–5 MB each: 0.5–1.5 GB. Manageable but must stay
-out of git.
+The store is single-writer. One person — call them A — drives the pipeline
+and is the only process that writes `data/pdfs/`, `provenance.jsonl`, and the
+meta. Collaborators B–D do not run retrieval against A's tree; they receive
+an export bundle, fetch PDFs through their own access, and hand back a folder
+of PDFs, which A ingests with `fulltext-retrieval-import`. Because import
+dedups by content hash and one-PDF-per-work, two collaborators returning the
+same PDF is harmless, so partitioning the missing list across B–D is an
+efficiency nicety, not a correctness requirement. See
+[cross-machine.md](cross-machine.md) for the drop-zone rule that keeps the
+whole-file provenance from ever racing.

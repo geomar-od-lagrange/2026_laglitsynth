@@ -67,20 +67,44 @@ def _call_extract(
     ctx: CodebookContext,
     *,
     work_id: str = "W1",
-    source_basis: str = "full_text",
     user_text: str = "body",
     client: Any,
     truncated: bool = False,
 ) -> BaseModel:
     return extract_codebook(  # type: ignore[return-value]
         work_id,
-        source_basis,  # type: ignore[arg-type]
         user_text,
         client=client,
         model="m",
         truncated=truncated,
         ctx=ctx,
     )
+
+
+def _write_full_text_for(
+    extractions_path: Path, output_dir: Path, work_ids: list[str]
+) -> None:
+    """Write a renderable TEI + extraction record for each work id.
+
+    Stage 8 is full-text-only, so run()-level tests need each work that
+    should be extracted to carry an extraction with non-empty TEI.
+    """
+    records: list[ExtractedDocument] = []
+    for wid in work_ids:
+        tei_path = f"tei/{wid.rsplit('/', 1)[-1]}.tei.xml"
+        _write_tei(
+            output_dir / tei_path,
+            f'<div xmlns="{TEI_NS}"><head>Methods</head><p>Body text.</p></div>',
+        )
+        records.append(
+            ExtractedDocument(
+                work_id=wid,
+                tei_path=tei_path,
+                content_sha256="0" * 64,
+                extracted_at="2026-04-17T00:00:00.000000+00:00",
+            )
+        )
+    _write_extractions_jsonl(extractions_path, records)
 
 
 def _call_extract_works(
@@ -117,7 +141,6 @@ class TestExtractCodebook:
         client.chat.completions.create.return_value = resp
         record = _call_extract(ctx, client=client)
         assert record.work_id == "W1"  # type: ignore[attr-defined]
-        assert record.source_basis == "full_text"  # type: ignore[attr-defined]
         assert record.reason is None  # type: ignore[attr-defined]
         assert isinstance(record.seed, int)  # type: ignore[attr-defined]
         assert record.truncated is False  # type: ignore[attr-defined]
@@ -151,7 +174,6 @@ class TestExtractCodebook:
         client.chat.completions.create.side_effect = APITimeoutError(request=MagicMock())
         record = _call_extract(ctx, client=client)
         assert record.reason == "llm-timeout"  # type: ignore[attr-defined]
-        assert record.source_basis == "full_text"  # type: ignore[attr-defined]
         assert record.seed is None  # type: ignore[attr-defined]
         assert record.truncated is False  # type: ignore[attr-defined]
         assert record.raw_response is None  # type: ignore[attr-defined]
@@ -163,9 +185,8 @@ class TestExtractCodebook:
     ) -> None:
         client = MagicMock()
         client.chat.completions.create.side_effect = APIConnectionError(request=MagicMock())
-        record = _call_extract(ctx, client=client, source_basis="abstract_only")
+        record = _call_extract(ctx, client=client)
         assert record.reason == "llm-timeout"  # type: ignore[attr-defined]
-        assert record.source_basis == "abstract_only"  # type: ignore[attr-defined]
 
     def test_bad_json_yields_llm_parse_failure(
         self, ctx: CodebookContext
@@ -173,9 +194,8 @@ class TestExtractCodebook:
         resp = _mock_openai_response("not json at all")
         client = MagicMock()
         client.chat.completions.create.return_value = resp
-        record = _call_extract(ctx, client=client, source_basis="abstract_only")
+        record = _call_extract(ctx, client=client)
         assert record.reason == "llm-parse-failure"  # type: ignore[attr-defined]
-        assert record.source_basis == "abstract_only"  # type: ignore[attr-defined]
         assert record.seed is None  # type: ignore[attr-defined]
         for name in ctx.payload_field_names:
             assert getattr(record, name) is None
@@ -224,7 +244,6 @@ def test_num_ctx_flag_threads_to_options(ctx: CodebookContext) -> None:
     client.chat.completions.create.return_value = resp
     extract_codebook(
         "W1",
-        "full_text",
         "body text",
         client=client,
         model="m",
@@ -303,7 +322,6 @@ class TestExtractWorksCascade:
         )
 
         assert len(records) == 1
-        assert records[0].source_basis == "full_text"  # type: ignore[attr-defined]
         assert records[0].reason is None  # type: ignore[attr-defined]
         # The user message should contain the full-text section, not the abstract.
         user_msg = client.chat.completions.create.call_args[1]["messages"][1]["content"]
@@ -312,41 +330,21 @@ class TestExtractWorksCascade:
         assert "full_text:" in user_msg
         assert "The abstract." not in user_msg
 
-    def test_abstract_only_branch_when_extraction_missing(
+    def test_no_extraction_is_not_extracted(
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
+        """An eligible work without an extraction gets no row and no LLM call."""
         ext_out = tmp_path / "ext_out"
         work = _make_work("W1", abstract="Paper abstract text.")
 
-        resp = _mock_openai_response(
-            _valid_payload_json(ctx.payload_field_names)
-        )
-        client = MagicMock()
-        client.chat.completions.create.return_value = resp
-
-        records = _call_extract_works(
-            ctx, [work], {}, ext_out, client=client
-        )
-        assert len(records) == 1
-        assert records[0].source_basis == "abstract_only"  # type: ignore[attr-defined]
-        assert records[0].reason is None  # type: ignore[attr-defined]
-
-    def test_no_source_sentinel_no_llm_call(
-        self, tmp_path: Path, ctx: CodebookContext
-    ) -> None:
-        ext_out = tmp_path / "ext_out"
-        work = _make_work("W1", abstract=None)
-
         client = MagicMock()
         records = _call_extract_works(
             ctx, [work], {}, ext_out, client=client
         )
-        assert len(records) == 1
-        assert records[0].source_basis == "none"  # type: ignore[attr-defined]
-        assert records[0].reason == "no-source"  # type: ignore[attr-defined]
+        assert records == []
         client.chat.completions.create.assert_not_called()
 
-    def test_malformed_tei_no_abstract_fallback(
+    def test_malformed_tei_records_sentinel(
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
         ext_out = tmp_path / "ext_out"
@@ -370,7 +368,6 @@ class TestExtractWorksCascade:
         )
         assert len(records) == 1
         assert records[0].reason == "tei-parse-failure"  # type: ignore[attr-defined]
-        assert records[0].source_basis == "full_text"  # type: ignore[attr-defined]
         client.chat.completions.create.assert_not_called()
 
     def test_truncation_flag_on_over_budget_body(
@@ -471,9 +468,9 @@ class TestRun:
         _write_works_jsonl(catalogue, [_make_work("W1", abstract="abs")])
         _write_eligibility_verdicts_jsonl(
             verdicts_path,
-            [EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only")],
+            [EligibilityVerdict(work_id="W1", eligible=True)],
         )
-        extractions_path.write_text("")
+        _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
 
         args = _make_run_args(
             tmp_path,
@@ -516,12 +513,13 @@ class TestRun:
         _write_eligibility_verdicts_jsonl(
             verdicts_path,
             [
-                EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only"),
-                EligibilityVerdict(work_id="W2", eligible=True, source_basis="abstract_only"),
-                EligibilityVerdict(work_id="W3", eligible=True, source_basis="none"),
+                EligibilityVerdict(work_id="W1", eligible=True),
+                EligibilityVerdict(work_id="W2", eligible=True),
+                EligibilityVerdict(work_id="W3", eligible=True),
             ],
         )
-        extractions_path.write_text("")
+        # W1, W2 have full text; W3 has no extraction → not extracted, not counted.
+        _write_full_text_for(extractions_path, extractions_path.parent, ["W1", "W2"])
 
         args = _make_run_args(
             tmp_path,
@@ -554,17 +552,17 @@ class TestRun:
             for line in (out_dir / "records.jsonl").read_text().splitlines()
             if line.strip()
         ]
-        assert len(record_lines) == 3
+        # W3 has no extraction: full-text-only means it is not extracted.
+        assert len(record_lines) == 2
 
         meta = json.loads((out_dir / "extraction-codebook-meta.json").read_text())
-        assert meta["input_count"] == 3
-        # Two successful abstract_only (W1, W2) plus one no-source (W3).
-        assert meta["abstract_only_count"] == 2
-        assert meta["full_text_count"] == 0
-        assert meta["skipped_count"] == 1
+        assert meta["input_count"] == 2
+        assert meta["full_text_count"] == 2
+        assert meta["skipped_count"] == 0
         assert meta["llm_parse_failure_count"] == 0
         assert meta["truncated_count"] == 0
-        assert meta["by_source_basis"] == {"abstract_only": 2, "none": 1}
+        assert "abstract_only_count" not in meta
+        assert "by_source_basis" not in meta
         assert meta["run"]["tool"] == "laglitsynth.extraction_codebook.extract"
         assert meta["llm"]["temperature"] == 0.8
         assert len(meta["llm"]["prompt_sha256"]) == 64
@@ -578,9 +576,9 @@ class TestRun:
         _write_works_jsonl(catalogue, [_make_work("W1", abstract="abs")])
         _write_eligibility_verdicts_jsonl(
             verdicts_path,
-            [EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only")],
+            [EligibilityVerdict(work_id="W1", eligible=True)],
         )
-        extractions_path.write_text("")
+        _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
 
         args = _make_run_args(
             tmp_path,
@@ -626,9 +624,9 @@ class TestRun:
         _write_works_jsonl(catalogue, [_make_work("W1", abstract="first abstract")])
         _write_eligibility_verdicts_jsonl(
             verdicts_path,
-            [EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only")],
+            [EligibilityVerdict(work_id="W1", eligible=True)],
         )
-        extractions_path.write_text("")
+        _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
 
         run_id = "stale-run"
         out_dir = tmp_path / "extraction-codebook" / run_id
@@ -650,13 +648,11 @@ class TestRun:
             "input_eligibility_verdicts": str(verdicts_path),
             "input_extractions": str(extractions_path),
             "input_count": 1,
-            "full_text_count": 0,
-            "abstract_only_count": 1,
+            "full_text_count": 1,
             "skipped_count": 0,
             "llm_parse_failure_count": 0,
             "llm_timeout_count": 0,
             "truncated_count": 0,
-            "by_source_basis": {"abstract_only": 1},
         }
         # Validate the dict is a real valid ExtractionCodebookMeta shape; if the
         # model changes, this assertion fails loudly instead of silently.
@@ -700,13 +696,13 @@ class TestRun:
             f.write('{"not_a_real_field": "x"}\n')
 
         valid_verdict = EligibilityVerdict(
-            work_id="W1", eligible=True, source_basis="abstract_only"
+            work_id="W1", eligible=True
         )
         with open(verdicts_path, "w") as f:
             f.write(valid_verdict.model_dump_json() + "\n")
             f.write('{"not_a_real_field": "y"}\n')
 
-        extractions_path.write_text("")
+        _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
 
         args = _make_run_args(
             tmp_path,
@@ -746,11 +742,11 @@ class TestRun:
         _write_eligibility_verdicts_jsonl(
             verdicts_path,
             [
-                EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only"),
-                EligibilityVerdict(work_id="W2", eligible=True, source_basis="abstract_only"),
+                EligibilityVerdict(work_id="W1", eligible=True),
+                EligibilityVerdict(work_id="W2", eligible=True),
             ],
         )
-        extractions_path.write_text("")
+        _write_full_text_for(extractions_path, extractions_path.parent, ["W1", "W2"])
 
         run_id = "resume-run"
         out_dir = tmp_path / "extraction-codebook" / run_id
@@ -761,7 +757,6 @@ class TestRun:
         payload_fields = {name: None for name in ctx.payload_field_names}
         prior = record_model(
             work_id="W1",
-            source_basis="abstract_only",
             reason=None,
             seed=1,
             truncated=False,
@@ -792,12 +787,12 @@ class TestRun:
 
             run(args)
 
-        # Only W2 was classified (W1 was skipped).
+        # Only W2 was extracted (W1 was skipped).
         assert mock_client.chat.completions.create.call_count == 1
         user_msg = mock_client.chat.completions.create.call_args[1]["messages"][1][
             "content"
         ]
-        assert "second abstract" in user_msg
+        assert "full_text:" in user_msg
 
         record_lines = [
             line
@@ -807,7 +802,7 @@ class TestRun:
         assert len(record_lines) == 2
 
         meta = json.loads((out_dir / "extraction-codebook-meta.json").read_text())
-        assert meta["abstract_only_count"] == 2
+        assert meta["full_text_count"] == 2
         assert meta["skipped_count"] == 0
 
 
@@ -890,9 +885,9 @@ class TestActiveEligibleWorks:
             _make_work("W3", abstract="Third"),
         ]
         verdicts = [
-            EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only"),
-            EligibilityVerdict(work_id="W2", eligible=False, source_basis="abstract_only"),
-            EligibilityVerdict(work_id="W3", eligible=None, source_basis="none", reason="no-source"),
+            EligibilityVerdict(work_id="W1", eligible=True),
+            EligibilityVerdict(work_id="W2", eligible=False),
+            EligibilityVerdict(work_id="W3", eligible=None, reason="no-source"),
         ]
         catalogue_path = tmp_path / "catalogue.jsonl"
         verdicts_path = tmp_path / "verdicts.jsonl"
@@ -910,8 +905,8 @@ class TestActiveEligibleWorks:
             _make_work("W2", abstract="Second"),
         ]
         verdicts = [
-            EligibilityVerdict(work_id="W1", eligible=False, source_basis="abstract_only"),
-            EligibilityVerdict(work_id="W2", eligible=False, source_basis="abstract_only"),
+            EligibilityVerdict(work_id="W1", eligible=False),
+            EligibilityVerdict(work_id="W2", eligible=False),
         ]
         catalogue_path = tmp_path / "catalogue.jsonl"
         verdicts_path = tmp_path / "verdicts.jsonl"
@@ -925,9 +920,9 @@ class TestActiveEligibleWorks:
         """A verdict for a work_id absent from the catalogue raises KeyError."""
         works = [_make_work("W1", abstract="First")]
         verdicts = [
-            EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only"),
+            EligibilityVerdict(work_id="W1", eligible=True),
             # W2 is eligible but not in the catalogue — data inconsistency.
-            EligibilityVerdict(work_id="W2", eligible=True, source_basis="abstract_only"),
+            EligibilityVerdict(work_id="W2", eligible=True),
         ]
         catalogue_path = tmp_path / "catalogue.jsonl"
         verdicts_path = tmp_path / "verdicts.jsonl"
@@ -951,9 +946,9 @@ def test_run_dir_printed_to_stderr_at_end(
     _write_works_jsonl(catalogue, [_make_work("W1", abstract="abs")])
     _write_eligibility_verdicts_jsonl(
         verdicts_path,
-        [EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only")],
+        [EligibilityVerdict(work_id="W1", eligible=True)],
     )
-    extractions_path.write_text("")
+    _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
 
     args = _make_run_args(
         tmp_path,
@@ -1016,9 +1011,9 @@ def test_concurrency_flag_threaded_to_extract_works(
     _write_works_jsonl(catalogue, [_make_work("W1", abstract="abs")])
     _write_eligibility_verdicts_jsonl(
         verdicts_path,
-        [EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only")],
+        [EligibilityVerdict(work_id="W1", eligible=True)],
     )
-    extractions_path.write_text("")
+    _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
 
     args = _make_run_args(
         tmp_path,
@@ -1068,9 +1063,9 @@ def test_concurrency_one_uses_sequential_path(
     _write_works_jsonl(catalogue, [_make_work("W1", abstract="abs")])
     _write_eligibility_verdicts_jsonl(
         verdicts_path,
-        [EligibilityVerdict(work_id="W1", eligible=True, source_basis="abstract_only")],
+        [EligibilityVerdict(work_id="W1", eligible=True)],
     )
-    extractions_path.write_text("")
+    _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
 
     args = _make_run_args(
         tmp_path,

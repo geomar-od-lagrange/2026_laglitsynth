@@ -40,8 +40,11 @@ implemented stage has its own doc under [`docs/`](docs/).
   relevance with a local Ollama-hosted LLM, emitting a `ScreeningVerdict`
   sidecar. See [`docs/screening-abstracts.md`](docs/screening-abstracts.md).
 - Stage 5 — `laglitsynth fulltext-retrieval` — join the deduplicated
-  catalogue against the screening verdicts at a threshold, then fetch PDFs
-  via manual pickup, OA URLs, and Unpaywall. See
+  catalogue against the screening verdicts at a threshold, then fill a
+  persistent, work-keyed PDF store under `data/pdfs/` from OA URLs and
+  Unpaywall, with `fulltext-retrieval-export` /
+  `fulltext-retrieval-import` to diversify the still-missing margin through
+  collaborators' institutional access. See
   [`docs/fulltext-retrieval.md`](docs/fulltext-retrieval.md).
 - Stage 6 — `laglitsynth fulltext-extraction` — parse retrieved PDFs into
   structured section text via GROBID. See
@@ -61,17 +64,31 @@ implemented stage has its own doc under [`docs/`](docs/).
 
 ## Running the pipeline
 
-[`scripts/run-pipeline.sh`](scripts/run-pipeline.sh) runs stages 1..8
-end-to-end, writing outputs under `data/run/`. The runner sources
-`.env` and passes `--api-key` / `--email` as flags to the tools — no
-env-var leakage into the Python side.
+[`scripts/run-pipeline.sh [config.yaml]`](scripts/run-pipeline.sh) runs
+stages 1..8 end-to-end, writing outputs under `data/run/`. The runner
+sources `.env` and passes `--api-key` / `--email` as flags to the tools
+— no env-var leakage into the Python side.
+
+The optional positional is a **per-review config** — one YAML that pins
+the query, year window, record cap, criteria/codebook paths, and the
+per-stage models/thresholds/context/concurrency. The runner validates it
+via `laglitsynth review-config` and applies **env > config > default**
+precedence to every knob. With no argument it uses the committed default
+[`examples/reviews/lagrangian-oceanography.yaml`](examples/reviews/lagrangian-oceanography.yaml),
+which reproduces the historical smoke run, so the no-arg invocation
+behaves exactly as before. The historical `QUERY` and `N` env overrides
+still work and still win over the config. See
+[`docs/configs.md`](docs/configs.md#per-review-config-the-runners-config)
+for the config shape and the full `CFG_*` knob list.
 
 Defaults that apply to both local and NESH runs:
 
-- `N=5` (local) or `N=10` (NESH) — max records pulled from OpenAlex
-  and propagated as `--max-records` to each downstream stage. Override
-  as the runner's second positional arg (locally) or via `N=...` in
-  `sbatch --export=` (NESH).
+- `N=5` (local) or `N=10` (NESH) — max records pulled from OpenAlex.
+  The runner passes `--max-records "$N"` to stage 1 (catalogue-fetch)
+  only; downstream stages consume the already-capped catalogue, so the
+  cap propagates through the data rather than as a re-passed flag.
+  Override via `N=...` (env, or `sbatch --export=` on NESH), or pin it
+  as `max_records` in a review config.
 - `STOP_AFTER_STAGE=8` — full pipeline. Set to a smaller integer to
   cut runs short while iterating on upstream stages.
 - Models: `gemma3:4b` for stages 3 and 7, `llama3.1:8b` for stage 8.
@@ -87,8 +104,9 @@ runner:
 ollama serve                                                # stages 3, 7, 8
 docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0         # stage 6
 
-scripts/run-pipeline.sh                                     # defaults, N=5
-scripts/run-pipeline.sh "particle dispersion" 200           # custom query, N=200
+scripts/run-pipeline.sh                                     # default review config, N=5
+scripts/run-pipeline.sh examples/reviews/my-review.yaml     # a pinned review config
+QUERY="particle dispersion" N=200 scripts/run-pipeline.sh   # env overrides win over the config
 STOP_AFTER_STAGE=3 scripts/run-pipeline.sh                  # stages 1..3 only
 ```
 
@@ -157,8 +175,11 @@ sbatch \
 Notes:
 
 - Stage 8 (extraction-codebook) is the throughput floor; budget
-  `--time` against it. Stages 7 and 8 do not yet honour
-  `LLM_CONCURRENCY` — they call Ollama sequentially.
+  `--time` against it. Stages 7 and 8 both honour `--concurrency`
+  (dispatching through `laglitsynth.concurrency.map_concurrent`); the
+  runner forwards `LLM_CONCURRENCY` as that flag. Stage 8 defaults to
+  `--concurrency 1` because its TEI prompt is prefill-bound and Ollama
+  serialises prefill across requests.
 - Each stage's output is truncated at run start, so a wall-clock kill
   mid-stage means re-running that stage from scratch on the next
   submission. If you expect a tight budget, prefer running with
@@ -169,29 +190,39 @@ Notes:
 ### Reviewer exports
 
 The pipeline writes JSONL only — no human-readable spreadsheets are
-produced automatically. To spot-check stage 3's verdicts, run
-`screening-abstracts-export` after the pipeline lands its output:
+produced automatically. To spot-check the LLM stages, run the matching
+`*-export` subcommand after the pipeline lands its output. The exports
+are XLSX-only: an Index sheet for navigation plus one tab per work as
+the working surface, with `--n-subset` / `--subset-seed` for a
+reproducible random sample.
 
 ```bash
-# Flat CSV — one row per work, opens in Excel / Numbers / LibreOffice
-laglitsynth screening-abstracts-export --format csv \
+# Stage 3 — abstract screening verdicts
+laglitsynth screening-abstracts-export \
     --verdicts data/run/screening-abstracts/<run-id>/verdicts.jsonl \
     --catalogue data/run/catalogue-dedup/deduplicated.jsonl
 
-# XLSX — one tab per work plus an index sheet (better for deep review)
-laglitsynth screening-abstracts-export --format xlsx \
-    --verdicts data/run/screening-abstracts/<run-id>/verdicts.jsonl \
+# Stage 7 — full-text eligibility verdicts
+laglitsynth fulltext-eligibility-export \
+    --verdicts data/run/fulltext-eligibility/<run-id>/verdicts.jsonl \
     --catalogue data/run/catalogue-dedup/deduplicated.jsonl
 
-# Reproducible random subset of 30 works (xlsx only)
-laglitsynth screening-abstracts-export --format xlsx \
+# Stage 8 — codebook extraction records (needs the run's --codebook)
+laglitsynth extraction-codebook-export \
+    --records data/run/extraction-codebook/<run-id>/records.jsonl \
+    --catalogue data/run/catalogue-dedup/deduplicated.jsonl
+
+# Reproducible random subset of 30 works (any of the above)
+laglitsynth screening-abstracts-export \
     --verdicts data/run/screening-abstracts/<run-id>/verdicts.jsonl \
     --catalogue data/run/catalogue-dedup/deduplicated.jsonl \
     --n-subset 30 --subset-seed 1
 ```
 
-See [docs/screening-abstracts.md](docs/screening-abstracts.md) for the
-full export schema. There is no equivalent export for stages 7 or 8 yet.
+See [docs/screening-abstracts.md](docs/screening-abstracts.md),
+[docs/eligibility.md](docs/eligibility.md), and
+[docs/extraction-codebook.md](docs/extraction-codebook.md) for the full
+export schemas.
 
 ## OpenAlex API key
 

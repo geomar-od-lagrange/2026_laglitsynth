@@ -2,8 +2,7 @@
 
 The system prompt and field list are now codebook-driven and live in
 [codebook.py](codebook.py); this module only handles the per-work
-user-message body (TEI flattening + char-budget truncation) and the
-``source_basis`` framing tag.
+user-message body (TEI flattening + char-budget truncation).
 
 Stage 7 has its own ``render_fulltext`` without truncation. The budget
 behaviour is stage-8-specific; per the plan this duplicates the stage 7
@@ -12,7 +11,6 @@ helper with light factoring rather than introducing a shared module.
 
 from __future__ import annotations
 
-from laglitsynth.extraction_codebook.models import SourceBasis
 from laglitsynth.fulltext_extraction.tei import TeiDocument, flatten_sections
 
 # Sized to fit the run-time num_ctx (default EXTRACTION_NUM_CTX=32768
@@ -25,7 +23,7 @@ from laglitsynth.fulltext_extraction.tei import TeiDocument, flatten_sections
 # retrieval (docs/two-pass-extraction.md), not a still-larger number.
 CHAR_BUDGET = 100_000
 
-USER_TEMPLATE = "{source_basis}:\n{text}"
+USER_TEMPLATE = "full_text:\n{text}"
 
 
 def _truncate_blocks(blocks: list[str], char_budget: int) -> tuple[list[str], bool]:
@@ -67,6 +65,6 @@ def render_fulltext(tei: TeiDocument, *, char_budget: int) -> tuple[str, bool]:
     return "\n\n".join(kept), truncated
 
 
-def build_user_message(source_basis: SourceBasis, text: str) -> str:
-    """Wrap rendered body text with the ``source_basis`` tag."""
-    return USER_TEMPLATE.format(source_basis=source_basis, text=text)
+def build_user_message(text: str) -> str:
+    """Wrap rendered full-text body for the user message."""
+    return USER_TEMPLATE.format(text=text)

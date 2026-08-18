@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from laglitsynth.models import LlmMeta, RunMeta
 
 TOOL_NAME = "laglitsynth.fulltext_eligibility.assess"
-
-
-SourceBasis = Literal["full_text", "abstract_only", "none"]
 
 
 class _EligibilityPayload(BaseModel):
@@ -57,7 +54,6 @@ class EligibilityVerdict(BaseModel):
     model_config = ConfigDict(extra="forbid")
     work_id: str
     eligible: bool | None = None  # None for sentinel-reason skips
-    source_basis: SourceBasis
     reason: str | None = None  # LLM free-text or sentinel
     seed: int | None = None  # Ollama seed used for this call; None for sentinel reasons
     raw_response: str | None = None  # LLM's raw message content; None when no call was made
@@ -73,8 +69,7 @@ class EligibilityMeta(BaseModel):
     input_count: int
     eligible_count: int
     excluded_count: int
-    no_source_count: int
     tei_parse_failure_count: int
     llm_parse_failure_count: int
     llm_timeout_count: int = 0
-    by_source_basis: dict[str, int]
+    criterion: str = ""  # the eligibility-criteria system prompt, verbatim for reviewer export

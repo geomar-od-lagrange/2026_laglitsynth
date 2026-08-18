@@ -97,7 +97,6 @@ not state the information, both the value and context are `None`.
 | Field | Type | Notes |
 |---|---|---|
 | work_id | str | OpenAlex ID |
-| source_basis | enum | `full_text`, `abstract_only` |
 | sub_discipline | free text | e.g. "water parcels", "tracers", "objects", "passive debris tracking" — whatever terms best fit the paper. The proposal's three categories are illustrative, not exhaustive. Consolidation happens in a later stage. |
 | sub_discipline_context | str or None | Verbatim excerpt supporting the sub-discipline tag. |
 

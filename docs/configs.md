@@ -60,6 +60,72 @@ directory, not the invocation's CWD. This lets a config sit alongside
 the YAMLs it references — `sweeps/run-A.yaml` referencing
 `codebook: ../codebooks/my.yaml` works from any CWD.
 
+## Per-review config (the runner's config)
+
+The two roles above are *per-stage* configs — they describe one
+invocation of one LLM stage. A **per-review config** is a third,
+distinct shape: one handwritten YAML that captures the review-defining
+knobs the end-to-end runner ([scripts/run-pipeline.sh](../scripts/run-pipeline.sh))
+needs, across all stages. It does **not** replace the per-stage
+`config.yaml` run-snapshots — those are still written automatically into
+each LLM stage's run directory. The per-review config sits one level up:
+it drives the runner, which in turn invokes the stages (each of which
+writes its own snapshot).
+
+A per-review config is validated against the typed `ReviewConfig`
+(Pydantic, `extra="forbid"`) in
+[src/laglitsynth/review.py](../src/laglitsynth/review.py). Its fields are
+the query, the year window (`from_year` / `to_year`) and record cap
+(`max_records`), the three criteria/codebook paths (`screening_criteria`,
+`eligibility_criteria`, `codebook`), and nested per-stage groups for
+`thresholds.{retrieval,eligibility}`, `models.{screening,eligibility,extraction}`,
+`num_ctx.{eligibility,extraction}`, and `concurrency.{llm,extraction}`.
+Only `query` is required; every other field is optional. An absent
+optional field means "fall back to the runner's built-in default" — it
+is not invented at validation time (None means None). The committed
+default is [examples/reviews/lagrangian-oceanography.yaml](../examples/reviews/lagrangian-oceanography.yaml),
+which reproduces the runner's historical smoke-run behaviour.
+
+### The `review-config` subcommand
+
+`laglitsynth review-config <path>` loads a review YAML, validates it, and
+prints one `CFG_<NAME>=<value>` line per knob to stdout — shell-quoted
+(via `shlex.quote`) so a query with spaces or quotes survives `eval`. An
+absent optional knob emits an empty value (`''`) for the runner to fill.
+The stable, documented name set is:
+
+| CFG name | Source field |
+|---|---|
+| `CFG_QUERY` | `query` |
+| `CFG_FROM_YEAR` / `CFG_TO_YEAR` | `from_year` / `to_year` |
+| `CFG_MAX_RECORDS` | `max_records` |
+| `CFG_SCREENING_CRITERIA` | `screening_criteria` |
+| `CFG_ELIGIBILITY_CRITERIA` | `eligibility_criteria` |
+| `CFG_CODEBOOK` | `codebook` |
+| `CFG_RETRIEVAL_THRESHOLD` / `CFG_ELIGIBILITY_THRESHOLD` | `thresholds.{retrieval,eligibility}` |
+| `CFG_SCREENING_MODEL` / `CFG_ELIGIBILITY_MODEL` / `CFG_EXTRACTION_MODEL` | `models.{screening,eligibility,extraction}` |
+| `CFG_ELIGIBILITY_NUM_CTX` / `CFG_EXTRACTION_NUM_CTX` | `num_ctx.{eligibility,extraction}` |
+| `CFG_LLM_CONCURRENCY` / `CFG_EXTRACTION_CONCURRENCY` | `concurrency.{llm,extraction}` |
+
+The three criteria/codebook paths are resolved against the config file's
+own directory before emission (mirroring the
+[path-resolution rule](#path-resolution-inside-input-configs) for
+per-stage input configs), so a review config can sit alongside the YAMLs
+it references regardless of the invocation CWD.
+
+### Runner precedence: env > config > default
+
+The runner `eval`s the emitted block, then resolves every knob as
+`VAR="${VAR:-${CFG_VAR:-default}}"`. So an environment variable (or a
+`sbatch --export=`) wins over the config file, which wins over the
+runner's built-in default; an absent config field falls through to that
+default. The historical `QUERY` and `N` env overrides keep working
+through this same mechanism (`N` maps to `CFG_MAX_RECORDS`). The two
+corpus thresholds (`RETRIEVAL_THRESHOLD`, `ELIGIBILITY_THRESHOLD`) stay
+independently settable but share a common fallback `SCREENING_THRESHOLD`
+when neither the specific env var nor the config pins them. See
+[README.md](../README.md#running-the-pipeline) for the invocation.
+
 ## Quick recipes
 
 ```bash

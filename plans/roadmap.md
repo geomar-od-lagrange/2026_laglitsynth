@@ -91,23 +91,102 @@ Update this file when a plan is written, implemented, or archived.
   the deduplicated catalogue against upstream verdict sidecars; no more
   `included.jsonl` or `eligible.jsonl` convenience copies.
 
+- [DOI → abstract lookup](doi-abstract-lookup.md) — `abstract-lookup`
+  stage backfills missing abstracts by DOI (Semantic Scholar → OpenAlex →
+  Crossref, first non-empty wins) into an
+  [`AbstractRecord`](../src/laglitsynth/abstract_lookup/models.py) sidecar keyed
+  by work id; the deduplicated catalogue is never rewritten in place. Runs
+  between `catalogue-dedup` and `screening-abstracts`. Source clients take an
+  injected `httpx.Client` (tested via `httpx.MockTransport`, no network);
+  `--email`/`--api-key` with `.env` fallback, `Retry-After` honoured with a
+  bounded backoff, `--skip-existing` re-processes only gaps. See
+  [abstract-lookup.md](../docs/abstract-lookup.md).
+
+- [Diversifying full-text retrieval](done/fulltext-retrieval-diversified.md) —
+  stage 5 now maintains a persistent, work-keyed PDF store at
+  `data/pdfs/<stem>.pdf` with a `provenance.jsonl` sidecar
+  ([`PdfProvenanceRecord`](../src/laglitsynth/fulltext_retrieval/models.py)),
+  replacing the per-run `retrieval.jsonl` / `RetrievalRecord`.
+  `fulltext-retrieval` is rewired onto the store (`--data-dir`,
+  sticky-by-default retrieval, `--manual-dir` / `unretrieved.txt`
+  removed); `fulltext-retrieval-export` emits the DOI/RIS/round-trip-CSV gap
+  bundle and `fulltext-retrieval-import` ingests a collaborator's returned
+  folder (match by embedded-DOI / stem / sidecar, magic-byte validate,
+  sha256 dedup). Single-writer, A-driven drop-zone collaboration model
+  ([cross-machine.md](../docs/cross-machine.md)); manifest wiring deferred.
+  See [fulltext-retrieval.md](../docs/fulltext-retrieval.md).
+
+- [Stages 7–8 full-text-only + review exports](done/fulltext-stages-full-text-only-and-review.md)
+  — `fulltext-eligibility` and `extraction-codebook` no longer fall back to
+  the abstract: a work without a full-text extraction is skipped (no verdict/
+  record row, no count), and the `SourceBasis` field, `no-source` sentinel,
+  `abstract_only` / `by_source_basis` counters, and stage 10's abstract-only
+  uncertainty note are all gone. Empty and malformed TEI both record
+  `tei-parse-failure`. New XLSX-only `fulltext-eligibility-export` /
+  `extraction-codebook-export` subcommands write a sampled review workbook
+  (Index + per-work tabs; stage 8's tab lists each codebook field as
+  `value` / `context` / `reviewer_correction`, driven off the codebook) for
+  spot-checking the LLM stages and tuning prompts. CSV is retired throughout,
+  including stage 3's now-purposeless `--format csv`. See
+  [eligibility.md](../docs/eligibility.md) and
+  [extraction-codebook.md](../docs/extraction-codebook.md).
+
+- [PR #20 review fixes](done/pr20-review-fixes.md) — closes the
+  [PR #20 review](https://github.com/geomar-od-lagrange/2026_laglitsynth/pull/20).
+  Full-text retrieval is now sticky by default: a normal run skips every
+  work that already holds a non-`missing` PDF and attempts only
+  `missing`/unseen ones, never overwriting an on-disk PDF (`--skip-existing`
+  removed; `--refetch` opts back into deliberate re-download). A
+  no-downgrade guard at the single `upsert_provenance` write point keeps a
+  failed `--refetch` from clobbering a held PDF with `missing`.
+  `RetrievalMeta.abstract_only_count` → `missing_count` (`failed_count`
+  dropped); `_try_oa_urls` returns `tuple[PdfSource, str] | None` (the
+  `_AllAttemptsFailedError` ceremony deleted); embedded-DOI matching in
+  `fulltext-retrieval-import` strips trailing `.,;:)`; the three export
+  modules' `_load_meta` now returns a typed `LlmMeta | None` instead of
+  falling back to an untyped dict.
+
+- [Doc/code consistency fixes](done/doc-code-consistency-fixes.md) —
+  closes a three-agent documentation audit (440 doc facts extracted,
+  checked against code, gaps found; spot-check validated). Fixes one real
+  regression — `scripts/run-pipeline.sh` (and NESH via the sbatch) passed
+  the removed `--output-dir`/`--skip-existing` to `fulltext-retrieval`, so
+  it could not reach stages 5–8; now `--data-dir "$ROOT"` with sticky
+  default and stage-6 `--pdf-dir "$ROOT/pdfs"`. Plus ~16 docs corrected to
+  match code: `--grobid-url` optional (+ `--timeout`), the dead
+  extraction-quality-gate claim removed, `read_works_jsonl` →
+  `read_jsonl`, stage-3 output is the verdict sidecar only, `DroppedRecord`
+  field names, no `source_basis` field, stages 7/8 honour `--concurrency`,
+  and newly-documented behaviours (silent-drop of works absent from the
+  verdicts file, download timeout, retry constants, Ollama model-pulled
+  preflight, XLSX review-export layouts).
+
+- [Per-review config, externalized screening prompt, knob cleanups](done/runner-review-config-and-screening-criteria.md)
+  — acts on the UI-knobs investigation. The runner is now driven by one
+  per-review YAML: `scripts/run-pipeline.sh [config.yaml]` reads a typed
+  [`ReviewConfig`](../src/laglitsynth/review.py) via a `review-config`
+  emitter subcommand and applies env > config > default precedence,
+  replacing scattered positionals and the two hardcoded threshold
+  literals. Stage 3's screening prompt is externalized to a
+  `--screening-criteria` YAML (a shared
+  [`load_system_prompt`](../src/laglitsynth/prompts.py)), mirroring
+  stages 7/8 — the last un-externalized LLM system prompt. The two corpus
+  thresholds stay independently settable (`RETRIEVAL_THRESHOLD` /
+  `ELIGIBILITY_THRESHOLD`, shared `SCREENING_THRESHOLD` default) with
+  unified float handling. `--consolidate-citations` exposed on stage 6;
+  `--from-year`/`--to-year` threaded into the runner; `.env.example`
+  gains the two missing keys. Deferred: a sweep/matrix driver (investigation
+  direction 4) and abstract-lookup runner wiring (waits on the screening
+  `--abstracts` overlay, PR #19).
+
 ## In flight
 
-- [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate (a run manifest / project-grouping notion) is not yet planned.
+- [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate is now planned as the [run manifest](run-manifest.md).
+- [Cross-machine + storage convention](../docs/cross-machine.md) — the third follow-up candidate from [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) landed as an authoritative doc: project = working-directory boundary, run-from-root + fixed-`data/` path contract, per-machine `.env`, and the safe sync direction per `data/` subdir (bulk PDFs/TEI union, per-run-id gate outputs authoritative-side-wins, deduplicated spine rsynced once read-only). Companion probe [scripts/probe_zotero.py](../scripts/probe_zotero.py) + note [zotero-export-probe.md](../docs/explorations/zotero-export-probe.md) start on the Zotero-import open question in [fulltext-retrieval-diversified.md](done/fulltext-retrieval-diversified.md).
 
 ## Queued — ready to plan
 
-- [DOI → abstract lookup](doi-abstract-lookup.md) — backfill missing
-  abstracts by DOI (Semantic Scholar → OpenAlex → Crossref) so screening
-  always has text. Motivated by [wos-starter-api.md](../docs/explorations/wos-starter-api.md)
-  (WoS Starter returns no abstracts) and the source comparison in
-  [zotero-retrieval.md](../docs/explorations/zotero-retrieval.md).
-- [Diversifying full-text retrieval](fulltext-retrieval-diversified.md) —
-  design direction, implementation deferred: a persistent work-keyed
-  catalogue + PDF store decoupled from the search term, with cheap manual
-  (DOI-list → Zotero → import-by-DOI) diversification. Open questions to
-  settle before it is ready to build; overlaps the project/run-grouping
-  gap in [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md).
+- [Run manifest](run-manifest.md) — one typed `RunManifest` file at `data/manifest.json`, written via `io.write_meta`, pinning the review's queries, the shared run-id, and an append-only per-stage input→output log. Each stage reads it to discover its upstream output and appends its own entry, dissolving the hand-carried path relay, the no-project-grouping gap, the "where was I" resume gap, and the cross-machine run-id-coordination gap from [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md). Settles the diversified-retrieval open question of where the persistent store lives relative to per-search runs.
 
 ## Deferred until pipeline is feature-complete
 
@@ -133,11 +212,17 @@ Update this file when a plan is written, implemented, or archived.
   second catalogue source ([wos-starter-api.md](../docs/explorations/wos-starter-api.md)),
   which the diversified-retrieval direction would consume.
 - `ExtractedDocument` quality gate — `extraction_status` enum + metrics.
-  Defer until a stage 9+ consumer arrives — stages 7 and 8 both fell
-  back to source-basis selection instead.
-- Shared CSV-export-for-human-review helper across stages 3, 4, 7, 8,
-  9. Each stage emits JSONL today; human spot-checking uses ad-hoc
-  conversions.
+  Defer until a stage 9+ consumer arrives — stages 7 and 8 are now
+  full-text-only, so a missing or empty extraction is simply skipped
+  (or recorded as `tei-parse-failure`) rather than routed to a fallback.
+- Shared export-for-human-review helper across stages 3, 4, 9. Exports
+  are XLSX-only now (CSV retired); stages 7 and 8 landed as separate
+  self-contained `export.py` modules by design — the
+  [full-text-only plan](done/fulltext-stages-full-text-only-and-review.md)
+  deliberately declined to force a shared abstraction before stage 9
+  shows what it needs. Each stage emits JSONL today; the open question
+  is whether stages 3, 4, and 9 should share scaffolding once stage 9's
+  reviewer-column ingestion is designed.
 
 ## Latest review
 

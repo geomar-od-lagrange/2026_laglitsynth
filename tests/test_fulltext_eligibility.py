@@ -56,6 +56,32 @@ def _write_empty_body_tei(path: Path) -> None:
     )
 
 
+def _write_full_text_for(
+    extractions_path: Path, output_dir: Path, work_ids: list[str]
+) -> None:
+    """Write a renderable TEI + extraction record for each work id.
+
+    Stage 7 is full-text-only, so run()-level tests need each work that
+    should be assessed to carry an extraction with non-empty TEI.
+    """
+    records: list[ExtractedDocument] = []
+    for wid in work_ids:
+        tei_path = f"tei/{wid.rsplit('/', 1)[-1]}.tei.xml"
+        _write_tei(
+            output_dir / tei_path,
+            f'<div xmlns="{TEI_NS}"><head>Methods</head><p>Body text.</p></div>',
+        )
+        records.append(
+            ExtractedDocument(
+                work_id=wid,
+                tei_path=tei_path,
+                content_sha256="0" * 64,
+                extracted_at="2026-04-17T00:00:00.000000+00:00",
+            )
+        )
+    _write_extractions_jsonl(extractions_path, records)
+
+
 # --- classify_eligibility ---
 
 
@@ -65,12 +91,11 @@ class TestClassifyEligibility:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt text", "full_text", model="m", client=mock_client, system_prompt="SP"
+            "W1", "prompt text", model="m", client=mock_client, system_prompt="SP"
         )
         assert verdict.work_id == "W1"
         assert verdict.eligible is True
         assert verdict.reason == "matches"
-        assert verdict.source_basis == "full_text"
         assert isinstance(verdict.seed, int)
         assert verdict.raw_response == '{"eligible": true, "reason": "matches"}'
 
@@ -79,17 +104,16 @@ class TestClassifyEligibility:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt text", "abstract_only", model="m", client=mock_client, system_prompt="SP"
+            "W1", "prompt text", model="m", client=mock_client, system_prompt="SP"
         )
         assert verdict.eligible is False
-        assert verdict.source_basis == "abstract_only"
 
     def test_malformed_json_returns_sentinel(self) -> None:
         resp = _mock_openai_response("not json at all")
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt", "full_text", model="m", client=mock_client, system_prompt="SP"
+            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
         )
         assert verdict.reason == "llm-parse-failure"
         assert verdict.eligible is None
@@ -101,7 +125,7 @@ class TestClassifyEligibility:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt", "full_text", model="m", client=mock_client, system_prompt="SP"
+            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
         )
         assert verdict.reason == "llm-parse-failure"
         assert verdict.raw_response == '{"reason": "ok"}'
@@ -114,7 +138,7 @@ class TestClassifyEligibility:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt", "full_text", model="m", client=mock_client, system_prompt="SP"
+            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
         )
         assert verdict.reason == "ok"
         assert verdict.eligible is True
@@ -126,7 +150,7 @@ class TestClassifyEligibility:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt", "full_text", model="m", client=mock_client, system_prompt="SP"
+            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
         )
         assert verdict.reason == "a / b"
 
@@ -136,7 +160,7 @@ class TestClassifyEligibility:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt", "full_text", model="m", client=mock_client, system_prompt="SP"
+            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
         )
         assert verdict.eligible is True
         assert verdict.reason == "ok"
@@ -148,11 +172,10 @@ class TestClassifyEligibility:
             request=MagicMock()
         )
         verdict = classify_eligibility(
-            "W1", "prompt", "full_text", model="m", client=mock_client, system_prompt="SP"
+            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
         )
         assert verdict.reason == "llm-timeout"
         assert verdict.eligible is None
-        assert verdict.source_basis == "full_text"
         assert verdict.seed is None
         assert verdict.raw_response is None
 
@@ -162,10 +185,9 @@ class TestClassifyEligibility:
             request=MagicMock()
         )
         verdict = classify_eligibility(
-            "W1", "prompt", "abstract_only", model="m", client=mock_client, system_prompt="SP"
+            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
         )
         assert verdict.reason == "llm-timeout"
-        assert verdict.source_basis == "abstract_only"
 
     def test_seed_forwarded_to_client(self) -> None:
         resp = _mock_openai_response('{"eligible": true, "reason": "ok"}')
@@ -176,7 +198,7 @@ class TestClassifyEligibility:
             return_value=42,
         ):
             verdict = classify_eligibility(
-                "W1", "prompt", "full_text", model="m", client=mock_client, system_prompt="SP"
+                "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
             )
         assert verdict.seed == 42
 
@@ -190,7 +212,7 @@ def test_num_ctx_flag_threads_to_options() -> None:
     mock_client = MagicMock()
     mock_client.chat.completions.create.return_value = resp
     classify_eligibility(
-        "W1", "prompt", "full_text", model="m", client=mock_client, system_prompt="SP",
+        "W1", "prompt", model="m", client=mock_client, system_prompt="SP",
         num_ctx=16384,
     )
     call_kwargs = mock_client.chat.completions.create.call_args[1]
@@ -220,7 +242,6 @@ def _mock_classify(
     def side_effect(
         work_id: str,
         prompt: str,
-        source_basis: str,
         *,
         model: str,
         client: Any,
@@ -232,7 +253,6 @@ def _mock_classify(
             return EligibilityVerdict(
                 work_id=work_id,
                 eligible=None,
-                source_basis=source_basis,
                 reason="llm-parse-failure",
                 seed=None,
                 raw_response="mock failure",
@@ -241,7 +261,6 @@ def _mock_classify(
         return EligibilityVerdict(
             work_id=work_id,
             eligible=entry["eligible"],
-            source_basis=source_basis,
             reason=entry["reason"],
             seed=entry.get("seed", 12345),
         )
@@ -293,7 +312,6 @@ class TestAssessWorksCascade:
             )
 
         assert len(verdicts) == 1
-        assert verdicts[0].source_basis == "full_text"
         assert verdicts[0].eligible is True
 
         # The prompt should contain the flattened section text, not the abstract.
@@ -304,44 +322,10 @@ class TestAssessWorksCascade:
         assert "full_text:" in prompt
         assert "The abstract." not in prompt
 
-    def test_abstract_only_branch_when_extraction_missing(
-        self, tmp_path: Path
-    ) -> None:
+    def test_no_extraction_is_not_assessed(self, tmp_path: Path) -> None:
+        """A work without an extraction gets no row and never calls the LLM."""
         output_dir = tmp_path / "ext_out"
         work = _make_work("W1", abstract="Paper abstract text.")
-
-        mock_classify = MagicMock(
-            side_effect=_mock_classify(
-                {"W1": {"eligible": False, "reason": "not a match"}}
-            )
-        )
-        with patch(
-            "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
-            mock_classify,
-        ):
-            verdicts = list(
-                assess_works(
-                    [work],
-                    {},
-                    output_dir,
-                    client=MagicMock(),
-                    model="m",
-                    max_records=None,
-                    system_prompt="SP",
-                )
-            )
-
-        assert len(verdicts) == 1
-        assert verdicts[0].source_basis == "abstract_only"
-        assert verdicts[0].eligible is False
-
-        prompt = mock_classify.call_args.args[1]
-        assert "abstract_only:" in prompt
-        assert "Paper abstract text." in prompt
-
-    def test_no_source_sentinel(self, tmp_path: Path) -> None:
-        output_dir = tmp_path / "ext_out"
-        work = _make_work("W1", abstract=None)
 
         with patch(
             "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility"
@@ -358,14 +342,10 @@ class TestAssessWorksCascade:
                 )
             )
 
-        assert len(verdicts) == 1
-        assert verdicts[0].source_basis == "none"
-        assert verdicts[0].eligible is None
-        assert verdicts[0].reason == "no-source"
-        assert verdicts[0].seed is None
+        assert verdicts == []
         mock_classify.assert_not_called()
 
-    def test_malformed_tei_no_abstract_fallback(self, tmp_path: Path) -> None:
+    def test_malformed_tei_records_sentinel(self, tmp_path: Path) -> None:
         output_dir = tmp_path / "ext_out"
         work = _make_work("W1", abstract="Paper abstract.")
 
@@ -398,12 +378,11 @@ class TestAssessWorksCascade:
         assert len(verdicts) == 1
         assert verdicts[0].reason == "tei-parse-failure"
         assert verdicts[0].eligible is None
-        assert verdicts[0].source_basis == "full_text"
         assert verdicts[0].seed is None
-        # No abstract fallback: malformed TEI is an operator-visible bug.
+        # Malformed TEI on a paper we have a PDF for is an operator-visible bug.
         mock_classify.assert_not_called()
 
-    def test_empty_body_falls_back_to_abstract(self, tmp_path: Path) -> None:
+    def test_empty_body_records_sentinel(self, tmp_path: Path) -> None:
         output_dir = tmp_path / "ext_out"
         work = _make_work("W1", abstract="Paper abstract.")
 
@@ -418,14 +397,48 @@ class TestAssessWorksCascade:
         )
         extractions = {extracted.work_id: extracted}
 
-        mock_classify = MagicMock(
-            side_effect=_mock_classify(
-                {"W1": {"eligible": True, "reason": "fine"}}
+        with patch(
+            "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility"
+        ) as mock_classify:
+            verdicts = list(
+                assess_works(
+                    [work],
+                    extractions,
+                    output_dir,
+                    client=MagicMock(),
+                    model="m",
+                    max_records=None,
+                    system_prompt="SP",
+                )
             )
+
+        # Empty body (valid XML, no content): no abstract fallback — a paper
+        # we have a PDF for but extracted nothing usable is a broken extraction.
+        assert len(verdicts) == 1
+        assert verdicts[0].reason == "tei-parse-failure"
+        assert verdicts[0].eligible is None
+        mock_classify.assert_not_called()
+
+    def test_llm_parse_failure_recorded(self, tmp_path: Path) -> None:
+        output_dir = tmp_path / "ext_out"
+        work = _make_work("W1", abstract="Paper abstract.")
+
+        tei_path = "tei/W1.tei.xml"
+        _write_tei(
+            output_dir / tei_path,
+            f'<div xmlns="{TEI_NS}"><head>Methods</head><p>Body.</p></div>',
         )
+        extracted = ExtractedDocument(
+            work_id="W1",
+            tei_path=tei_path,
+            content_sha256="0" * 64,
+            extracted_at="2026-04-17T00:00:00.000000+00:00",
+        )
+        extractions = {extracted.work_id: extracted}
+
         with patch(
             "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
-            mock_classify,
+            side_effect=_mock_classify({"W1": "error"}),
         ):
             verdicts = list(
                 assess_works(
@@ -440,32 +453,8 @@ class TestAssessWorksCascade:
             )
 
         assert len(verdicts) == 1
-        assert verdicts[0].source_basis == "abstract_only"
-
-    def test_llm_parse_failure_recorded(self, tmp_path: Path) -> None:
-        output_dir = tmp_path / "ext_out"
-        work = _make_work("W1", abstract="Paper abstract.")
-
-        with patch(
-            "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
-            side_effect=_mock_classify({"W1": "error"}),
-        ):
-            verdicts = list(
-                assess_works(
-                    [work],
-                    {},
-                    output_dir,
-                    client=MagicMock(),
-                    model="m",
-                    max_records=None,
-                    system_prompt="SP",
-                )
-            )
-
-        assert len(verdicts) == 1
         assert verdicts[0].reason == "llm-parse-failure"
         assert verdicts[0].eligible is None
-        assert verdicts[0].source_basis == "abstract_only"
         assert verdicts[0].seed is None
 
     def test_timeout_does_not_stop_loop(self, tmp_path: Path) -> None:
@@ -476,10 +465,23 @@ class TestAssessWorksCascade:
             _make_work("W2", abstract="second abs"),
         ]
 
+        extractions: dict[str, ExtractedDocument] = {}
+        for w in works:
+            tei_path = f"tei/{w.id}.tei.xml"
+            _write_tei(
+                output_dir / tei_path,
+                f'<div xmlns="{TEI_NS}"><head>H</head><p>body</p></div>',
+            )
+            extractions[w.id] = ExtractedDocument(
+                work_id=w.id,
+                tei_path=tei_path,
+                content_sha256="0" * 64,
+                extracted_at="2026-04-17T00:00:00.000000+00:00",
+            )
+
         def side_effect(
             work_id: str,
             prompt: str,
-            source_basis: str,
             *,
             model: str,
             client: Any,
@@ -490,7 +492,6 @@ class TestAssessWorksCascade:
                 return EligibilityVerdict(
                     work_id=work_id,
                     eligible=None,
-                    source_basis=source_basis,
                     reason="llm-timeout",
                     seed=None,
                     raw_response=None,
@@ -498,7 +499,6 @@ class TestAssessWorksCascade:
             return EligibilityVerdict(
                 work_id=work_id,
                 eligible=True,
-                source_basis=source_basis,
                 reason="ok",
                 seed=42,
             )
@@ -510,7 +510,7 @@ class TestAssessWorksCascade:
             verdicts = list(
                 assess_works(
                     works,
-                    {},
+                    extractions,
                     output_dir,
                     client=MagicMock(),
                     model="m",
@@ -528,6 +528,19 @@ class TestAssessWorksCascade:
         output_dir = tmp_path / "ext_out"
         work = _make_work("W1", abstract="Abstract text.")
 
+        tei_path = "tei/W1.tei.xml"
+        _write_tei(
+            output_dir / tei_path,
+            f'<div xmlns="{TEI_NS}"><head>H</head><p>body</p></div>',
+        )
+        extracted = ExtractedDocument(
+            work_id="W1",
+            tei_path=tei_path,
+            content_sha256="0" * 64,
+            extracted_at="2026-04-17T00:00:00.000000+00:00",
+        )
+        extractions = {extracted.work_id: extracted}
+
         with patch(
             "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
             side_effect=_mock_classify(
@@ -537,7 +550,7 @@ class TestAssessWorksCascade:
             verdicts = list(
                 assess_works(
                     [work],
-                    {},
+                    extractions,
                     output_dir,
                     client=MagicMock(),
                     model="m",
@@ -553,9 +566,9 @@ class TestAssessWorksCascade:
 
 class TestEligibilityVerdict:
     def test_tri_state_eligible(self) -> None:
-        EligibilityVerdict(work_id="W1", source_basis="none", eligible=None)
-        EligibilityVerdict(work_id="W1", source_basis="full_text", eligible=True)
-        EligibilityVerdict(work_id="W1", source_basis="full_text", eligible=False)
+        EligibilityVerdict(work_id="W1", eligible=None)
+        EligibilityVerdict(work_id="W1", eligible=True)
+        EligibilityVerdict(work_id="W1", eligible=False)
 
     def test_extra_fields_forbidden(self) -> None:
         from pydantic import ValidationError as PydanticValidationError
@@ -563,9 +576,19 @@ class TestEligibilityVerdict:
         with pytest.raises(PydanticValidationError):
             EligibilityVerdict(
                 work_id="W1",
-                source_basis="full_text",
                 eligible=True,
                 bonus="no",  # type: ignore[call-arg]
+            )
+
+    def test_source_basis_key_rejected(self) -> None:
+        """source_basis is gone; supplying it is now an unknown-field error."""
+        from pydantic import ValidationError as PydanticValidationError
+
+        with pytest.raises(PydanticValidationError):
+            EligibilityVerdict(
+                work_id="W1",
+                eligible=True,
+                source_basis="full_text",  # type: ignore[call-arg]
             )
 
 
@@ -626,7 +649,7 @@ class TestRun:
             verdicts_path,
             [ScreeningVerdict(work_id="W1", relevance_score=80)],
         )
-        extractions_path.write_text("")
+        _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
 
         args = _make_run_args(
             tmp_path,
@@ -668,7 +691,8 @@ class TestRun:
             verdicts_path,
             [ScreeningVerdict(work_id=w.id, relevance_score=80) for w in works],
         )
-        extractions_path.write_text("")
+        # W1, W2 have full text; W3 has no extraction → not assessed, not counted.
+        _write_full_text_for(extractions_path, extractions_path.parent, ["W1", "W2"])
 
         args = _make_run_args(
             tmp_path,
@@ -705,16 +729,17 @@ class TestRun:
             for l in (out_dir / "verdicts.jsonl").read_text().splitlines()
             if l.strip()
         ]
-        assert len(verdict_lines) == 3
+        # W3 has no extraction: full-text-only means it is not assessed.
+        assert len(verdict_lines) == 2
 
         meta = json.loads((out_dir / "eligibility-meta.json").read_text())
-        assert meta["input_count"] == 3
+        assert meta["input_count"] == 2
         assert meta["eligible_count"] == 1
         assert meta["excluded_count"] == 1
-        assert meta["no_source_count"] == 1
+        assert "no_source_count" not in meta
         assert meta["tei_parse_failure_count"] == 0
         assert meta["llm_parse_failure_count"] == 0
-        assert meta["by_source_basis"] == {"abstract_only": 2, "none": 1}
+        assert "by_source_basis" not in meta
         assert meta["input_screening_verdicts"] == str(verdicts_path)
         assert meta["run"]["tool"] == "laglitsynth.fulltext_eligibility.assess"
         assert meta["llm"]["temperature"] == 0.8
@@ -734,7 +759,7 @@ class TestRun:
             verdicts_path,
             [ScreeningVerdict(work_id="W1", relevance_score=80)],
         )
-        extractions_path.write_text("")
+        _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
 
         run_id = "stale-run"
         out_dir = tmp_path / "fulltext-eligibility" / run_id
@@ -758,11 +783,9 @@ class TestRun:
             "input_count": 1,
             "eligible_count": 0,
             "excluded_count": 1,
-            "no_source_count": 0,
             "tei_parse_failure_count": 0,
             "llm_parse_failure_count": 0,
             "llm_timeout_count": 0,
-            "by_source_basis": {"abstract_only": 1},
         }
         # Validate the dict is a real valid EligibilityMeta shape; if the model
         # changes, this assertion fails loudly instead of silently.
@@ -810,7 +833,7 @@ class TestRun:
             f.write(valid_sv.model_dump_json() + "\n")
             f.write('{"not_a_real_field": "y"}\n')
 
-        extractions_path.write_text("")
+        _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
 
         args = _make_run_args(
             tmp_path,
@@ -851,7 +874,7 @@ class TestRun:
             verdicts_path,
             [ScreeningVerdict(work_id=w.id, relevance_score=80) for w in works],
         )
-        extractions_path.write_text("")
+        _write_full_text_for(extractions_path, extractions_path.parent, ["W1", "W2"])
 
         run_id = "resume-run"
         out_dir = tmp_path / "fulltext-eligibility" / run_id
@@ -860,7 +883,6 @@ class TestRun:
         prior = EligibilityVerdict(
             work_id="W1",
             eligible=True,
-            source_basis="abstract_only",
             reason="prior",
             seed=1,
         )
@@ -906,7 +928,7 @@ class TestRun:
         meta = json.loads((out_dir / "eligibility-meta.json").read_text())
         assert meta["eligible_count"] == 1
         assert meta["excluded_count"] == 1
-        assert meta["no_source_count"] == 0
+        assert "no_source_count" not in meta
         assert meta["tei_parse_failure_count"] == 0
         assert meta["llm_parse_failure_count"] == 0
 
@@ -1029,7 +1051,7 @@ def test_run_dir_printed_to_stderr_at_end(
         verdicts_path,
         [ScreeningVerdict(work_id="W1", relevance_score=80)],
     )
-    extractions_path.write_text("")
+    _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
 
     args = _make_run_args(
         tmp_path,
@@ -1092,7 +1114,7 @@ def test_concurrency_flag_threaded_to_assess_works(tmp_path: Path) -> None:
     _write_verdicts_jsonl(
         verdicts_path, [ScreeningVerdict(work_id="W1", relevance_score=80)]
     )
-    extractions_path.write_text("")
+    _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
 
     args = _make_run_args(
         tmp_path,
@@ -1142,7 +1164,7 @@ def test_concurrency_one_uses_sequential_path(tmp_path: Path) -> None:
     _write_verdicts_jsonl(
         verdicts_path, [ScreeningVerdict(work_id="W1", relevance_score=80)]
     )
-    extractions_path.write_text("")
+    _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
 
     args = _make_run_args(
         tmp_path,

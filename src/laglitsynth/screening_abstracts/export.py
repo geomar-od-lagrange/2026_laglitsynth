@@ -1,29 +1,20 @@
-"""CSV and XLSX export of stage 3 verdicts for human review.
+"""XLSX export of stage 3 verdicts for human review.
 
-Single subcommand ``screening-abstracts-export`` with ``--format csv|xlsx``.
-
-CSV mode writes a flat ``review.csv`` a reviewer opens in Excel, Numbers, or
-Keynote. Two empty columns (``reviewer_decision``, ``reviewer_reason``) are
-filled in the spreadsheet; a stage-4 ingestor will read them back.
-
-XLSX mode writes a workbook with an ``Index`` sheet plus one tab per included
-work. Per-work tabs use a vertical ``Field | Value`` layout so abstract and
-``raw_response`` wrap vertically without horizontal scrolling. The XLSX
-output also pulls the screening criterion (the user prompt) from
-``screening-meta.json`` so the reviewer sees the same question the LLM saw,
-verbatim. The LLM verdict block is collapsed by default so the reviewer
-forms an opinion before peeking.
+Single subcommand ``screening-abstracts-export`` that writes a workbook with
+an ``Index`` sheet plus one tab per included work. Per-work tabs use a
+vertical ``Field | Value`` layout so abstract and ``raw_response`` wrap
+vertically without horizontal scrolling. The output also pulls the screening
+criterion (the loaded ``system_prompt``) from ``screening-meta.json`` so the
+reviewer sees the same question the LLM saw, verbatim. The LLM verdict block is
+collapsed by default so the reviewer forms an opinion before peeking.
 
 ``--n-subset`` + ``--subset-seed`` draw a reproducible random sample;
 ``n_subset >= len(verdicts)`` (or unset) emits the full set in verdict order.
-``--n-subset`` and ``--subset-seed`` are valid only with ``--format xlsx``.
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
-import json
 import random
 import sys
 from pathlib import Path
@@ -35,74 +26,8 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.io import read_jsonl
+from laglitsynth.models import LlmMeta
 from laglitsynth.screening_abstracts.models import ScreeningMeta, ScreeningVerdict
-
-# ── CSV ───────────────────────────────────────────────────────────────────────
-
-COLUMNS: tuple[str, ...] = (
-    "work_id",
-    "title",
-    "doi",
-    "publication_year",
-    "abstract",
-    "relevance_score",
-    "llm_reason",
-    "reviewer_decision",
-    "reviewer_reason",
-    "raw_response",
-)
-
-
-def build_row(verdict: ScreeningVerdict, work: Work) -> dict[str, str]:
-    """One CSV row. Missing values render as empty cells."""
-    return {
-        "work_id": verdict.work_id,
-        "title": work.title or "",
-        "doi": work.doi or "",
-        "publication_year": (
-            str(work.publication_year) if work.publication_year is not None else ""
-        ),
-        "abstract": work.abstract or "",
-        "relevance_score": (
-            str(verdict.relevance_score)
-            if verdict.relevance_score is not None
-            else ""
-        ),
-        "llm_reason": verdict.reason or "",
-        "reviewer_decision": "",
-        "reviewer_reason": "",
-        "raw_response": verdict.raw_response or "",
-    }
-
-
-def export_review_csv(
-    verdicts_path: Path,
-    catalogue_path: Path,
-    output_path: Path,
-) -> int:
-    """Write the review CSV and return the number of data rows.
-
-    Raises ``ValueError`` naming the first ``work_id`` present in the
-    verdicts file but absent from the catalogue.
-    """
-    catalogue: dict[str, Work] = {w.id: w for w in read_jsonl(catalogue_path, Work)}
-    rows: list[dict[str, str]] = []
-    for verdict in read_jsonl(verdicts_path, ScreeningVerdict):
-        work = catalogue.get(verdict.work_id)
-        if work is None:
-            raise ValueError(
-                f"work_id {verdict.work_id!r} in {verdicts_path} not found in "
-                f"catalogue {catalogue_path}"
-            )
-        rows.append(build_row(verdict, work))
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(COLUMNS))
-        writer.writeheader()
-        writer.writerows(rows)
-    return len(rows)
-
 
 # ── XLSX ──────────────────────────────────────────────────────────────────────
 
@@ -272,14 +197,16 @@ def build_work_sheet(
     work: Work,
     *,
     criterion: str,
-    llm_meta: dict[str, object],
+    llm_meta: LlmMeta | None,
 ) -> None:
     """Per-work sheet: bibliographic block, criterion + scoring, LLM details (collapsed).
 
-    ``criterion`` is the screening prompt rendered verbatim so the
-    reviewer scores against the same question the LLM saw.
+    ``criterion`` is the screening-criteria system prompt rendered verbatim
+    so the reviewer scores against the same question the LLM saw.
     ``llm_meta`` carries the model/temperature/prompt_sha256 from
-    ScreeningMeta.llm so the reviewer can audit the LLM's run.
+    ScreeningMeta.llm so the reviewer can audit the LLM's run; it is ``None``
+    when no meta file was found, in which case the fingerprint cells are left
+    blank.
     """
     wrap_top_left = Alignment(wrap_text=True, vertical="top", horizontal="left")
     top_aligned = Alignment(vertical="top")
@@ -393,17 +320,17 @@ def build_work_sheet(
     llm_model_label = ws.cell(row=20, column=1, value="llm_model")
     llm_model_label.font = _BOLD
     llm_model_label.alignment = top_aligned
-    ws.cell(row=20, column=2, value=str(llm_meta.get("model", "")))
+    ws.cell(row=20, column=2, value=llm_meta.model if llm_meta else "")
 
     llm_temp_label = ws.cell(row=21, column=1, value="llm_temperature")
     llm_temp_label.font = _BOLD
     llm_temp_label.alignment = top_aligned
-    ws.cell(row=21, column=2, value=llm_meta.get("temperature"))
+    ws.cell(row=21, column=2, value=llm_meta.temperature if llm_meta else None)
 
     llm_sha_label = ws.cell(row=22, column=1, value="llm_prompt_sha256")
     llm_sha_label.font = _BOLD
     llm_sha_label.alignment = top_aligned
-    ws.cell(row=22, column=2, value=str(llm_meta.get("prompt_sha256", "")))
+    ws.cell(row=22, column=2, value=llm_meta.prompt_sha256 if llm_meta else "")
 
     llm_raw_label = ws.cell(row=23, column=1, value="llm_raw_response")
     llm_raw_label.font = _BOLD
@@ -422,14 +349,12 @@ def build_work_sheet(
     ws.freeze_panes = "B1"
 
 
-def _load_meta(meta_path: Path | None) -> tuple[str, dict[str, object]]:
-    """Return ``(criterion, llm_meta_dict)`` from a screening-meta.json file.
+def _load_meta(meta_path: Path | None) -> tuple[str, LlmMeta | None]:
+    """Return ``(criterion, llm_meta)`` from a screening-meta.json file.
 
-    Falls back to placeholders when ``meta_path`` is None or missing —
-    the export still works, just without the criterion / LLM
-    fingerprint. ``screening-meta.json`` may pre-date the addition of
-    ``prompt`` to ``ScreeningMeta``, in which case the criterion shows
-    a stub.
+    Returns ``(<placeholder>, None)`` when ``meta_path`` is None or missing —
+    the export still works, just without the criterion / LLM fingerprint. A
+    present but malformed meta raises (there are no older files to tolerate).
     """
     if meta_path is None or not meta_path.exists():
         print(
@@ -438,23 +363,11 @@ def _load_meta(meta_path: Path | None) -> tuple[str, dict[str, object]]:
             f"Pass --meta to point at the right file.",
             file=sys.stderr,
         )
-        return ("<screening criterion not available>", {})
+        return ("<screening criterion not available>", None)
 
-    raw = json.loads(meta_path.read_text())
-    # Use ScreeningMeta to validate, but tolerate older meta files.
-    try:
-        meta = ScreeningMeta.model_validate(raw)
-        criterion = meta.prompt or "<screening criterion not recorded in meta>"
-        llm_meta = {
-            "model": meta.llm.model,
-            "temperature": meta.llm.temperature,
-            "prompt_sha256": meta.llm.prompt_sha256,
-        }
-        return (criterion, llm_meta)
-    except Exception:
-        criterion = raw.get("prompt") or "<screening criterion not recorded in meta>"
-        llm_meta = raw.get("llm", {}) or {}
-        return (criterion, llm_meta)
+    meta = ScreeningMeta.model_validate_json(meta_path.read_text())
+    criterion = meta.criterion or "<screening criterion not recorded in meta>"
+    return (criterion, meta.llm)
 
 
 def export_review_xlsx(
@@ -529,13 +442,7 @@ def build_subparser(
 ) -> argparse.ArgumentParser:
     parser = subparsers.add_parser(
         "screening-abstracts-export",
-        help="Export stage 3 verdicts + catalogue to CSV or XLSX.",
-    )
-    parser.add_argument(
-        "--format",
-        choices=["csv", "xlsx"],
-        required=True,
-        help="Output format: 'csv' for flat review spreadsheet, 'xlsx' for per-work workbook.",
+        help="Export stage 3 verdicts + catalogue to an XLSX review workbook.",
     )
     parser.add_argument(
         "--verdicts",
@@ -555,29 +462,26 @@ def build_subparser(
         default=None,
         help=(
             "Path to screening-meta.json. Default: <verdicts parent>/screening-meta.json. "
-            "Used by --format xlsx to embed the screening criterion and LLM fingerprint."
+            "Embeds the screening criterion and LLM fingerprint into each per-work sheet."
         ),
     )
     parser.add_argument(
         "--output",
         type=Path,
         default=None,
-        help=(
-            "Output file path. Default: <verdicts parent>/review.csv (CSV) or "
-            "<verdicts parent>/review.xlsx (XLSX)."
-        ),
+        help="Output file path. Default: <verdicts parent>/review.xlsx.",
     )
     parser.add_argument(
         "--n-subset",
         type=int,
         default=None,
-        help="Random sample size; emit all when unset or >= total. XLSX only.",
+        help="Random sample size; emit all when unset or >= total.",
     )
     parser.add_argument(
         "--subset-seed",
         type=int,
         default=_DEFAULT_SUBSET_SEED,
-        help=f"Random seed for --n-subset (default: {_DEFAULT_SUBSET_SEED}). XLSX only.",
+        help=f"Random seed for --n-subset (default: {_DEFAULT_SUBSET_SEED}).",
     )
     parser.set_defaults(run=run)
     return parser
@@ -586,39 +490,25 @@ def build_subparser(
 def run(args: argparse.Namespace) -> None:
     verdicts_path: Path = args.verdicts
 
-    if args.format == "csv":
-        if args.n_subset is not None or args.subset_seed != _DEFAULT_SUBSET_SEED:
-            sys.exit(
-                "--n-subset and --subset-seed are only valid with --format xlsx"
-            )
-        output_path: Path = (
-            args.output
-            if args.output is not None
-            else verdicts_path.parent / "review.csv"
-        )
-        count = export_review_csv(verdicts_path, args.catalogue, output_path)
-        print(f"Wrote {count} rows to {output_path}", file=sys.stderr)
-
-    else:  # xlsx
-        output_path = (
-            args.output
-            if args.output is not None
-            else verdicts_path.parent / "review.xlsx"
-        )
-        meta_path: Path = (
-            args.meta
-            if args.meta is not None
-            else verdicts_path.parent / "screening-meta.json"
-        )
-        count = export_review_xlsx(
-            verdicts_path,
-            args.catalogue,
-            output_path,
-            n_subset=args.n_subset,
-            seed=args.subset_seed,
-            meta_path=meta_path,
-        )
-        print(
-            f"Wrote workbook with {count} per-work sheets to {output_path}",
-            file=sys.stderr,
-        )
+    output_path: Path = (
+        args.output
+        if args.output is not None
+        else verdicts_path.parent / "review.xlsx"
+    )
+    meta_path: Path = (
+        args.meta
+        if args.meta is not None
+        else verdicts_path.parent / "screening-meta.json"
+    )
+    count = export_review_xlsx(
+        verdicts_path,
+        args.catalogue,
+        output_path,
+        n_subset=args.n_subset,
+        seed=args.subset_seed,
+        meta_path=meta_path,
+    )
+    print(
+        f"Wrote workbook with {count} per-work sheets to {output_path}",
+        file=sys.stderr,
+    )

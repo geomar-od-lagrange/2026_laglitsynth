@@ -18,7 +18,7 @@ class ScreeningMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run: RunMeta
     llm: LlmMeta
-    threshold: int
+    threshold: float
     input_path: str
     input_count: int
     above_threshold_count: int
@@ -26,4 +26,4 @@ class ScreeningMeta(BaseModel):
     skipped_count: int
     llm_parse_failure_count: int = 0
     llm_timeout_count: int = 0
-    prompt: str = ""  # the user's screening prompt, recorded verbatim for reviewer export
+    criterion: str = ""  # the screening-criteria system prompt, verbatim for reviewer export

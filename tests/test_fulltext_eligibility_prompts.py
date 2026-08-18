@@ -95,12 +95,8 @@ class TestRenderFulltext:
 
 class TestBuildUserMessage:
     def test_full_text_tag(self) -> None:
-        msg = build_user_message("full_text", "body text")
+        msg = build_user_message("body text")
         assert msg == "full_text:\nbody text"
-
-    def test_abstract_only_tag(self) -> None:
-        msg = build_user_message("abstract_only", "just the abstract")
-        assert msg == "abstract_only:\njust the abstract"
 
 
 class TestLoadSystemPrompt:

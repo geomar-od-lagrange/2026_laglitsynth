@@ -2,7 +2,7 @@
 
 The LLM-driven stages
 ([screening-abstracts](screening-abstracts.md),
-[fulltext-eligibility](fulltext-eligibility.md), and
+[fulltext-eligibility](eligibility.md), and
 [extraction-codebook](extraction-codebook.md)) can dispatch multiple
 in-flight LLM requests against a single Ollama server. Throughput is shaped by two knobs —
 **client-side concurrency** and **server-side `OLLAMA_NUM_PARALLEL`**
@@ -113,15 +113,24 @@ stage. Adjudication exports re-sort by whatever the reviewer prefers
 At `--concurrency 1` the ordering degrades to catalogue order (one
 request at a time), matching the pre-parallel behaviour.
 
-## Clean rerun, not resume
+## Rerun and resume
 
-The output file is truncated at the start of each run and verdicts
-are appended as workers complete. A killed job leaves a valid
-partial JSONL — every line parses — but the stage does **not**
-support resuming mid-catalogue. Every rerun starts from scratch.
-Resume would require matching input hashes, prompt digests, and
-model/seed state; that engineering is deferred until throughput
-itself stops being the bottleneck.
+By default the output file is truncated at the start of each run and
+verdicts are appended as workers complete. A killed job leaves a valid
+partial JSONL — every line parses. Stage 3 only ever takes this
+truncate-and-restart path: it has no resume mode, so a killed stage-3
+job re-runs from scratch.
+
+Stages 7 and 8 add an explicit resume mode via `--skip-existing`.
+Within a pinned `--run-id` directory, the stage loads the prior
+`verdicts.jsonl` / `records.jsonl`, collects the already-done
+`work_id`s, and skips them — appending only newly-completed work to the
+existing sidecar. Without `--skip-existing` those stages also truncate
+the output at the start, so the resume behaviour is opt-in and tied to
+reusing the run-id directory (fresh run-ids start empty regardless). A
+clean resume still relies on the prompt-digest check (a `prompt_sha256`
+mismatch aborts rather than mixing record versions); matching input
+hashes and model/seed state across a resume is not attempted.
 
 ## VRAM trade-off
 

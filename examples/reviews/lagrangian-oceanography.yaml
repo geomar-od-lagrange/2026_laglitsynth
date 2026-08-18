@@ -1,0 +1,40 @@
+# Per-review config for scripts/run-pipeline.sh.
+#
+# This file reproduces the runner's historical smoke-run defaults, so
+# `scripts/run-pipeline.sh` with no argument behaves exactly as before.
+# Validated against the `ReviewConfig` model and emitted as CFG_* shell
+# assignments by `laglitsynth review-config`. See docs/configs.md.
+#
+# Only the knobs a review actually pins are set here; every omitted knob
+# (models, thresholds, num_ctx, concurrency) falls back to the runner's
+# built-in default. Env vars still override everything
+# (env > config > default).
+
+query: "Lagrangian particle tracking"
+
+# Smoke-sized cap. For a real corpus run, raise this (e.g. 500) or
+# override on the command line with `N=500 scripts/run-pipeline.sh`.
+max_records: 5
+
+# Criteria/codebook paths resolve relative to THIS file's directory.
+screening_criteria: ../screening-criteria/lagrangian-oceanography.yaml
+eligibility_criteria: ../eligibility-criteria/lagrangian-oceanography.yaml
+codebook: ../codebooks/lagrangian-oceanography.yaml
+
+# Optional knobs — uncomment to pin (otherwise the runner default wins):
+#
+# from_year: 2000
+# to_year: 2025
+# thresholds:
+#   retrieval: 50      # stage-5 PDF-fetch cutoff
+#   eligibility: 50    # stage-7 LLM-pass cutoff
+# models:
+#   screening: gemma3:4b
+#   eligibility: gemma3:4b
+#   extraction: llama3.1:8b
+# num_ctx:
+#   eligibility: 32768
+#   extraction: 32768
+# concurrency:
+#   llm: 1
+#   extraction: 1

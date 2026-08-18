@@ -4,7 +4,7 @@ The system-prompt / field-list assembly tests live in
 ``test_extraction_codebook_loader.py`` now that those concerns moved
 into the codebook module. This file only covers the user-message
 render path (TEI flattening + char-budget truncation) and the
-``source_basis`` framing tag.
+user-message wrapper.
 """
 
 from __future__ import annotations
@@ -117,9 +117,5 @@ class TestRenderFulltext:
 
 class TestBuildUserMessage:
     def test_full_text_tag(self) -> None:
-        msg = build_user_message("full_text", "body text")
+        msg = build_user_message("body text")
         assert msg == "full_text:\nbody text"
-
-    def test_abstract_only_tag(self) -> None:
-        msg = build_user_message("abstract_only", "just the abstract")
-        assert msg == "abstract_only:\njust the abstract"

@@ -24,7 +24,6 @@ from laglitsynth.fulltext_eligibility.models import (
     TOOL_NAME,
     EligibilityMeta,
     EligibilityVerdict,
-    SourceBasis,
     _EligibilityPayload,
 )
 from laglitsynth.fulltext_eligibility.prompts import (
@@ -90,7 +89,6 @@ def _active_works(
 def classify_eligibility(
     work_id: str,
     prompt: str,
-    source_basis: SourceBasis,
     *,
     model: str,
     client: OpenAI,
@@ -122,7 +120,6 @@ def classify_eligibility(
         return EligibilityVerdict(
             work_id=work_id,
             eligible=None,
-            source_basis=source_basis,
             reason="llm-timeout",
             seed=None,
             raw_response=None,
@@ -135,7 +132,6 @@ def classify_eligibility(
         return EligibilityVerdict(
             work_id=work_id,
             eligible=None,
-            source_basis=source_basis,
             reason="llm-parse-failure",
             seed=None,
             raw_response=content,
@@ -143,7 +139,6 @@ def classify_eligibility(
     return EligibilityVerdict(
         work_id=work_id,
         eligible=payload.eligible,
-        source_basis=source_basis,
         reason=payload.reason,
         seed=seed,
         raw_response=content,
@@ -174,6 +169,11 @@ def assess_works(
     for work in works:
         if work.id in skip_ids:
             continue
+        # Full-text-only: a work without an extraction never enters the
+        # loop — no verdict row, no count. The gap is already visible
+        # upstream (stage 5/6 provenance), so we don't flag it here.
+        if work.id not in extractions:
+            continue
         if max_records is not None and len(eligible) >= max_records:
             break
         eligible.append(work)
@@ -195,57 +195,42 @@ def _assess_one(
     system_prompt: str,
     num_ctx: int = _DEFAULT_NUM_CTX,
 ) -> EligibilityVerdict:
-    # Step 1: prefer full text when an extraction exists.
-    extracted = extractions.get(work.id)
-    if extracted is not None:
-        try:
-            tei = extracted.open_tei(extraction_output_dir)
-            rendered = render_fulltext(tei)
-        except etree.XMLSyntaxError:
-            logger.warning(
-                "Malformed TEI for %s; recording tei-parse-failure", work.id
-            )
-            return EligibilityVerdict(
-                work_id=work.id,
-                eligible=None,
-                source_basis="full_text",
-                reason="tei-parse-failure",
-                seed=None,
-            )
-        if rendered:
-            prompt = build_user_message("full_text", rendered)
-            return classify_eligibility(
-                work.id,
-                prompt,
-                "full_text",
-                client=client,
-                model=model,
-                system_prompt=system_prompt,
-                num_ctx=num_ctx,
-            )
-        # Empty body (valid XML, no content): fall through to abstract.
-
-    # Step 2: fall back to abstract when available.
-    if work.abstract:
-        prompt = build_user_message("abstract_only", work.abstract)
-        return classify_eligibility(
-            work.id,
-            prompt,
-            "abstract_only",
-            client=client,
-            model=model,
-            system_prompt=system_prompt,
-            num_ctx=num_ctx,
+    # Full text or nothing: the active set is already gated on extraction
+    # presence, so ``extractions[work.id]`` is always set here.
+    extracted = extractions[work.id]
+    try:
+        tei = extracted.open_tei(extraction_output_dir)
+        rendered = render_fulltext(tei)
+    except etree.XMLSyntaxError:
+        logger.warning(
+            "Malformed TEI for %s; recording tei-parse-failure", work.id
         )
-
-    # Step 3: no source at all.
-    logger.warning("No source for %s; recording no-source", work.id)
-    return EligibilityVerdict(
-        work_id=work.id,
-        eligible=None,
-        source_basis="none",
-        reason="no-source",
-        seed=None,
+        return EligibilityVerdict(
+            work_id=work.id,
+            eligible=None,
+            reason="tei-parse-failure",
+            seed=None,
+        )
+    if not rendered:
+        # Valid XML but empty body: broken extraction on a paper we do
+        # have a PDF for — worth surfacing, like malformed TEI.
+        logger.warning(
+            "Empty TEI body for %s; recording tei-parse-failure", work.id
+        )
+        return EligibilityVerdict(
+            work_id=work.id,
+            eligible=None,
+            reason="tei-parse-failure",
+            seed=None,
+        )
+    prompt = build_user_message(rendered)
+    return classify_eligibility(
+        work.id,
+        prompt,
+        client=client,
+        model=model,
+        system_prompt=system_prompt,
+        num_ctx=num_ctx,
     )
 
 
@@ -403,14 +388,19 @@ def run(args: argparse.Namespace) -> None:
     stats = JsonlReadStats()
     extractions = _load_extractions(args.extractions, stats)
 
-    active: list[Work] = list(
-        _active_works(
+    # Full-text-only: gate on extraction presence so works without a PDF
+    # never enter the assessed set, get no verdict row, and are not
+    # counted. The gap is already visible in upstream provenance.
+    active: list[Work] = [
+        work
+        for work in _active_works(
             args.catalogue,
             args.screening_verdicts,
             args.screening_threshold,
             stats,
         )
-    )
+        if work.id in extractions
+    ]
     total = len(active)
 
     skip_ids: set[str] = set()
@@ -467,14 +457,12 @@ def run(args: argparse.Namespace) -> None:
 
         if verdict.eligible is True:
             print(
-                f"  [{index}/{total}] eligible ({verdict.source_basis})"
-                f" — {verdict.work_id[-12:]}",
+                f"  [{index}/{total}] eligible — {verdict.work_id[-12:]}",
                 file=sys.stderr,
             )
         elif verdict.eligible is False:
             print(
-                f"  [{index}/{total}] excluded ({verdict.source_basis})"
-                f" — {verdict.work_id[-12:]}",
+                f"  [{index}/{total}] excluded — {verdict.work_id[-12:]}",
                 file=sys.stderr,
             )
         else:
@@ -490,7 +478,6 @@ def run(args: argparse.Namespace) -> None:
 
     eligible_count = sum(1 for v in all_verdicts if v.eligible is True)
     excluded_count = sum(1 for v in all_verdicts if v.eligible is False)
-    no_source_count = sum(1 for v in all_verdicts if v.reason == "no-source")
     tei_parse_failure_count = sum(
         1 for v in all_verdicts if v.reason == "tei-parse-failure"
     )
@@ -501,20 +488,15 @@ def run(args: argparse.Namespace) -> None:
         1 for v in all_verdicts if v.reason == "llm-timeout"
     )
 
-    by_source_basis: dict[str, int] = {}
-    for v in all_verdicts:
-        by_source_basis[v.source_basis] = by_source_basis.get(v.source_basis, 0) + 1
-
     skipped_total = (
-        no_source_count
-        + tei_parse_failure_count
+        tei_parse_failure_count
         + llm_parse_failure_count
         + llm_timeout_count
     )
     print(
         f"\nDone in {elapsed:.1f}s: {eligible_count} eligible, "
         f"{excluded_count} excluded, {skipped_total} skipped "
-        f"({no_source_count} no-source, {tei_parse_failure_count} tei-parse-failure, "
+        f"({tei_parse_failure_count} tei-parse-failure, "
         f"{llm_parse_failure_count} llm-parse-failure, "
         f"{llm_timeout_count} llm-timeout).",
         file=sys.stderr,
@@ -544,11 +526,10 @@ def run(args: argparse.Namespace) -> None:
             input_count=total,
             eligible_count=eligible_count,
             excluded_count=excluded_count,
-            no_source_count=no_source_count,
             tei_parse_failure_count=tei_parse_failure_count,
             llm_parse_failure_count=llm_parse_failure_count,
             llm_timeout_count=llm_timeout_count,
-            by_source_basis=by_source_basis,
+            criterion=system_prompt,
         ),
     )
     print(f"Run dir: {output_dir}", file=sys.stderr)

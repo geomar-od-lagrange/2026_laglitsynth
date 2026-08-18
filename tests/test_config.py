@@ -189,7 +189,6 @@ def test_cli_config_dispatch_does_not_bleed_across_subparsers(tmp_path: Path) ->
             [
                 "screening-abstracts",
                 str(tmp_path / "in.jsonl"),
-                "the-prompt",
                 "--config",
                 str(missing),
             ]
@@ -204,7 +203,6 @@ def test_cli_config_dispatch_does_not_bleed_across_subparsers(tmp_path: Path) ->
             [
                 "screening-abstracts",
                 str(tmp_path / "in.jsonl"),
-                "the-prompt",
             ]
         )
     assert captured.get("called") is True

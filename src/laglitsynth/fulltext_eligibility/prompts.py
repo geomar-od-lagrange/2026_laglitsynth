@@ -4,35 +4,22 @@ The system prompt is loaded from an external eligibility-criteria YAML
 at runtime so swapping topics is configuration work rather than a
 refactor. ``render_fulltext`` flattens a ``TeiDocument`` into a single
 string the LLM can consume. ``build_user_message`` wraps the rendered
-body with the ``source_basis`` tag the system prompt references.
+body for the user message.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
-
-from laglitsynth.config import resolve_yaml_arg
-from laglitsynth.fulltext_eligibility.models import SourceBasis
 from laglitsynth.fulltext_extraction.tei import TeiDocument, flatten_sections
+from laglitsynth.prompts import load_system_prompt
 
-USER_TEMPLATE = "{source_basis}:\n{text}"
+__all__ = [
+    "USER_TEMPLATE",
+    "build_user_message",
+    "load_system_prompt",
+    "render_fulltext",
+]
 
-
-def load_system_prompt(spec: str | Path | dict[str, Any]) -> str:
-    """Return the eligibility-criteria system prompt from a YAML spec.
-
-    ``spec`` may be a path to a YAML file or an already-loaded mapping
-    (the inlined-snapshot case). The mapping must carry a string-valued
-    ``system_prompt`` field.
-    """
-    loaded = resolve_yaml_arg(spec)
-    prompt = loaded.get("system_prompt")
-    if not isinstance(prompt, str):
-        raise ValueError(
-            "eligibility-criteria spec must include a string 'system_prompt' field"
-        )
-    return prompt
+USER_TEMPLATE = "full_text:\n{text}"
 
 
 def render_fulltext(tei: TeiDocument) -> str:
@@ -40,12 +27,13 @@ def render_fulltext(tei: TeiDocument) -> str:
 
     Depth-first walk of ``tei.sections()``; each section title + its
     paragraphs form one block, blocks separated by a blank line.
-    Returns the empty string when ``sections()`` is empty so the caller
-    can fall back to the abstract.
+    Returns the empty string when ``sections()`` is empty; the caller
+    treats an empty render as a ``tei-parse-failure`` since stage 7 has
+    no abstract fallback.
     """
     return "\n\n".join(flatten_sections(tei))
 
 
-def build_user_message(source_basis: SourceBasis, text: str) -> str:
-    """Wrap rendered body text with the ``source_basis`` tag."""
-    return USER_TEMPLATE.format(source_basis=source_basis, text=text)
+def build_user_message(text: str) -> str:
+    """Wrap rendered full-text body for the user message."""
+    return USER_TEMPLATE.format(text=text)

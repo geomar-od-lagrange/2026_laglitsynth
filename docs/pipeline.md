@@ -15,6 +15,7 @@ stages are still referenced by their original numbers throughout the pipeline.
 |---|---|---|
 | 1 | [catalogue-fetch](#1-catalogue-fetch) | catalogue |
 | 2 | [catalogue-dedup](#2-catalogue-dedup) | catalogue |
+| 2b | [abstract-lookup](#2b-abstract-lookup) | catalogue |
 | 3 | [screening-abstracts](#3-screening-abstracts) | catalogue |
 | 5 | [fulltext-retrieval](#5-fulltext-retrieval) | catalogue → corpus |
 | 6 | [fulltext-extraction](#6-fulltext-extraction) | corpus |
@@ -47,14 +48,29 @@ work appears under different OpenAlex IDs. Deduplication operates on metadata
 - **Consumes:** retrieved catalogue
 - **Produces:** deduplicated catalogue
 
+### 2b. abstract-lookup
+
+Backfills missing abstracts by DOI so screening always has text. For each work
+with no abstract and a DOI, it looks one up via Semantic Scholar → OpenAlex →
+Crossref, stopping at the first non-empty result, and writes the abstract to a
+sidecar keyed by work id — the deduplicated catalogue is never rewritten in
+place. Works without a DOI are skipped and reported. See
+[abstract-lookup.md](abstract-lookup.md).
+
+- **Consumes:** deduplicated catalogue, Semantic Scholar / OpenAlex / Crossref APIs
+- **Produces:** abstract sidecar (per-work resolved abstract and source)
+
 ### 3. screening-abstracts
 
 Applies a local LLM to score each abstract for relevance, assigning a verdict
-and confidence score. The dual output — retained and rejected — allows
-auditing of borderline cases.
+and confidence score. The stage flags rather than filters: it writes one
+`ScreeningVerdict` per work to a sidecar (covering every work, retained and
+rejected alike) and never removes records from the catalogue, so borderline
+cases stay auditable. Downstream stages join the verdict against the
+catalogue and apply their own threshold.
 
 - **Consumes:** deduplicated catalogue
-- **Produces:** screened catalogue, rejected records
+- **Produces:** per-work `ScreeningVerdict` sidecar (`verdicts.jsonl`)
 
 ### 5. fulltext-retrieval
 
@@ -87,11 +103,11 @@ Full-text assessment of whether each work meets the review's eligibility
 criteria. Distinct from screening (which uses only title and abstract).
 Reading the full text may reveal that a paper is not actually about
 computational Lagrangian methods, or that it is a review/meta-analysis
-rather than primary research. The stage prefers the extracted full text,
-falls back to the abstract when no `ExtractedDocument` is available, and
-records a sentinel verdict when neither source exists or the TEI is
-malformed. See [eligibility.md](eligibility.md) for the verdict shape
-and sentinel reasons.
+rather than primary research. The stage is **full-text-only**: it assesses
+only works that have a usable `ExtractedDocument`, skipping (not flagging)
+works without full text, and records a `tei-parse-failure` sentinel when
+the TEI is malformed or renders empty. See [eligibility.md](eligibility.md)
+for the verdict shape and sentinel reasons.
 
 - **Consumes:** deduplicated catalogue, stage 3 screening verdict sidecar,
   screening threshold, full-text corpus, eligibility criteria (defined in
@@ -104,10 +120,10 @@ An LLM processes each paper against the codebook, extracting: sub-discipline
 tags (e.g. water parcels, tracers, objects — not a fixed set), numerical integration scheme,
 time-step strategy, interpolation method, reproducibility indicators (code
 and method availability), and context snippets for numerical choices.
-Each extraction record flags its source basis (full text vs. abstract-only).
-The stage prefers the extracted full text, falls back to the abstract, and
-records a sentinel `reason` when neither source exists, the TEI is malformed,
-or the LLM response fails to validate. See
+Like stage 7, it is **full-text-only**: it extracts only eligible works
+that have a usable `ExtractedDocument`, skipping (not flagging) those
+without full text, and records a sentinel `reason` when the TEI is
+malformed/empty or the LLM response fails to validate. See
 [extraction-codebook.md](extraction-codebook.md) for the record shape and
 sentinel reasons, and [codebook.md](codebook.md) for the seed field list.
 
@@ -134,8 +150,7 @@ See [Optional extensions](#optional-extensions).*
 Validated extraction records are aggregated to produce quantitative answers to
 RQ1.1 (Reproducibility) and RQ1.2 (Prevalence): fraction of papers providing
 reproducible detail, distribution of each numerical choice, breakdowns by
-sub-discipline. Uncertainty is propagated from the source basis field
-(full-text vs. abstract-only extraction records carry different confidence).
+sub-discipline.
 
 - **Consumes:** validated extraction records
 - **Produces:** `statistics.json` — tabulated counts, proportions, breakdowns
@@ -168,12 +183,12 @@ papers, low-confidence extraction records) are explicitly flagged.
 ## Human spot-checking
 
 Every LLM-driven stage (screening-abstracts, fulltext-eligibility, extraction-codebook)
-produces output exportable as a flat table (e.g. CSV) for human
-spot-checking. The export contains one row per work with the stage's
-verdict or extracted values, the LLM's reasoning, and enough metadata
-(title, work ID) for a reviewer to locate the source. This is the
-general pattern for human oversight: export a sample, review, feed
-corrections back.
+produces an XLSX review workbook for human spot-checking
+(`<stage>-export` subcommands). Each workbook samples a random subset
+(`--n-subset` / `--subset-seed`) and gives each work its own tab as the
+working surface, with an Index sheet for navigation; the JSONL sidecars
+remain the machine-readable form. This is the general pattern for human
+oversight: export a sample, review, feed corrections back.
 
 ## Shared resources
 
@@ -228,6 +243,7 @@ graph TD
     OA[(OpenAlex API)]
     RCAT[(retrieved catalogue)]
     DCAT[(deduplicated catalogue)]
+    ABS[(abstract sidecar)]
     SVERD[(screening verdicts)]
     EVERD[(eligibility verdicts)]
     PDFS[(PDFs on disk)]
@@ -240,6 +256,7 @@ graph TD
 
     FETCH[catalogue-fetch]
     DEDUP[catalogue-dedup]
+    ALOOKUP[abstract-lookup]
     SCREEN[screening-abstracts]
     RETRIEVE[fulltext-retrieval]
     GROBID[fulltext-extraction]
@@ -255,6 +272,9 @@ graph TD
     FETCH --> RCAT
     RCAT --> DEDUP
     DEDUP --> DCAT
+    DCAT --> ALOOKUP
+    ALOOKUP --> ABS
+    ABS --> SCREEN
     DCAT --> SCREEN
     SCREEN --> SVERD
     DCAT --> RETRIEVE

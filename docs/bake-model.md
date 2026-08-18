@@ -17,7 +17,7 @@ capability without requiring shell scripting.
 ```bash
 laglitsynth bake-model \
     --tag laglit-eligibility \
-    --base llama3.1:8b \
+    --base gemma3:4b \
     --num-ctx 32768
 ```
 
@@ -25,7 +25,7 @@ The subcommand prints the new tag to stdout on success, so it can be
 captured in a script:
 
 ```bash
-TAG=$(laglitsynth bake-model --tag laglit-eligibility --base llama3.1:8b --num-ctx 32768)
+TAG=$(laglitsynth bake-model --tag laglit-eligibility --base gemma3:4b --num-ctx 32768)
 laglitsynth fulltext-eligibility --model "$TAG" ...
 ```
 

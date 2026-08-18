@@ -48,12 +48,13 @@ def _process_pdf(
     client: httpx.Client,
     *,
     timeout: float,
+    consolidate_citations: str,
 ) -> bytes:
     with open(pdf_path, "rb") as f:
         resp = client.post(
             f"{grobid_url}/api/processFulltextDocument",
             files={"input": (pdf_path.name, f, "application/pdf")},
-            data={"consolidateCitations": "0"},
+            data={"consolidateCitations": consolidate_citations},
             timeout=timeout,
         )
     resp.raise_for_status()
@@ -98,6 +99,17 @@ def build_subparser(
         "--skip-existing",
         action="store_true",
         help="Skip PDFs that already have an ExtractedDocument record",
+    )
+    parser.add_argument(
+        "--consolidate-citations",
+        choices=["0", "1"],
+        default="0",
+        help=(
+            "GROBID consolidateCitations flag: 0 (default) leaves extracted "
+            "references as-is; 1 enriches them via Crossref/Semantic Scholar "
+            "(needs internet, slower). OpenAlex is the metadata authority, so "
+            "0 is the recommended default."
+        ),
     )
     parser.set_defaults(run=run)
     return parser
@@ -165,7 +177,11 @@ def run(args: argparse.Namespace) -> None:
 
             try:
                 tei_bytes = _process_pdf(
-                    pdf, args.grobid_url, client, timeout=args.timeout
+                    pdf,
+                    args.grobid_url,
+                    client,
+                    timeout=args.timeout,
+                    consolidate_citations=args.consolidate_citations,
                 )
             except Exception as exc:
                 failed_count += 1

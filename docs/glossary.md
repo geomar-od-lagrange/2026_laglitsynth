@@ -53,9 +53,9 @@ The collection of works enriched with full paper text. In NLP and corpus
 linguistics, a corpus is a collection of *texts* — so we reserve "corpus"
 for the stage where we actually have texts. The catalogue becomes a corpus
 at full-text retrieval. Not all works will have retrievable full text;
-those that don't are abstract-only works and are tracked explicitly via the
-source basis field. Qualifiers indicate the pipeline phase: *full-text
-corpus* (after retrieval), *eligible corpus* (after eligibility assessment).
+those that don't are abstract-only works. Qualifiers indicate the pipeline
+phase: *full-text corpus* (after retrieval), *eligible corpus* (after
+eligibility assessment).
 
 ### full text
 
@@ -155,14 +155,21 @@ analysis. "Codebook" is the most portable term across communities.
 ### extraction record
 
 One structured record per work, produced by data
-extraction. Contains the fields defined by the codebook, plus metadata
-(work ID, source basis, confidence).
+extraction. Contains the fields defined by the codebook, plus identification
+metadata (work ID, sentinel reason, seed). Because the extraction stage is
+full-text-only, the record carries no source-basis field — the basis is
+always full text.
 
 ### source basis
 
-Whether an extraction record was produced from the full
-text or from the abstract alone. Downstream stages use this to weight
-confidence.
+Whether a record was produced from the full text or from the abstract
+alone — a conceptual distinction, not a stored field. In the current
+pipeline the eligibility and extraction stages are full-text-only (a work
+without a usable full-text extraction is skipped, not assessed from its
+abstract), so every record's basis is full text and neither
+`EligibilityVerdict` nor the extraction record carries a `source_basis`
+field. The term is retained for the eventual case where abstract-only
+assessment is reintroduced.
 
 ### confidence score
 

@@ -63,6 +63,7 @@ class TestRunWritesTrimmedRecord:
         args.grobid_url = "http://localhost:8070"
         args.timeout = 120.0
         args.skip_existing = False
+        args.consolidate_citations = "0"
 
         fake_tei = _fake_tei_bytes()
         preflight_client_mock, paper_client_mock = _patch_clients(fake_tei)
@@ -95,6 +96,41 @@ class TestRunWritesTrimmedRecord:
         assert (output_dir / record["tei_path"]).read_bytes() == fake_tei
 
 
+class TestConsolidateCitationsFlag:
+    def test_flag_value_reaches_grobid_form_field(self, tmp_path: Path) -> None:
+        pdf_dir = tmp_path / "pdfs"
+        pdf_dir.mkdir()
+        output_dir = tmp_path / "out"
+        (pdf_dir / "W1234.pdf").write_bytes(b"%PDF-1.4 fake")
+
+        args = MagicMock()
+        args.pdf_dir = pdf_dir
+        args.output_dir = output_dir
+        args.grobid_url = "http://localhost:8070"
+        args.timeout = 120.0
+        args.skip_existing = False
+        args.consolidate_citations = "1"
+
+        fake_tei = _fake_tei_bytes()
+        preflight_client_mock, paper_client_mock = _patch_clients(fake_tei)
+
+        def _make_client(timeout: float) -> MagicMock:
+            if timeout == 5.0:
+                return preflight_client_mock
+            return paper_client_mock
+
+        with patch(
+            "laglitsynth.fulltext_extraction.extract.httpx.Client",
+            side_effect=_make_client,
+        ):
+            run(args)
+
+        # The GROBID processing POST carried the flag's value in its form data.
+        assert paper_client_mock.post.call_count == 1
+        _, kwargs = paper_client_mock.post.call_args
+        assert kwargs["data"] == {"consolidateCitations": "1"}
+
+
 class TestInvalidStemSkipped:
     def test_invalid_stem_skipped(self, tmp_path: Path) -> None:
         pdf_dir = tmp_path / "pdfs"
@@ -111,6 +147,7 @@ class TestInvalidStemSkipped:
         args.grobid_url = "http://localhost:8070"
         args.timeout = 120.0
         args.skip_existing = False
+        args.consolidate_citations = "0"
 
         fake_tei = _fake_tei_bytes()
         preflight_client_mock, paper_client_mock = _patch_clients(fake_tei)
