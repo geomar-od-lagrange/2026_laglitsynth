@@ -18,13 +18,13 @@ from openai import APIConnectionError, APITimeoutError, OpenAI
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.concurrency import map_concurrent
 from laglitsynth.config import register_config_arg, resolve_yaml_arg, save_resolved_config
-from laglitsynth.ids import generate_run_id
 from laglitsynth.io import (
     JsonlReadStats,
     append_jsonl,
     read_jsonl,
     write_meta,
 )
+from laglitsynth.manifest import record_stage, resolve_input, resolve_run_id
 from laglitsynth.models import LlmMeta, RunMeta
 from laglitsynth.ollama import preflight
 from laglitsynth.prompts import load_system_prompt
@@ -205,7 +205,16 @@ def build_subparser(
         "screening-abstracts",
         help="Screen JSONL works by abstract relevance using a local LLM.",
     )
-    parser.add_argument("input", type=Path, help="Input JSONL file path")
+    parser.add_argument(
+        "input",
+        type=Path,
+        nargs="?",
+        default=None,
+        help=(
+            "Input JSONL file path. Falls back to the manifest's "
+            "catalogue-dedup output when omitted."
+        ),
+    )
     parser.add_argument(
         "--screening-criteria",
         type=Path,
@@ -271,9 +280,12 @@ def build_subparser(
 def run(args: argparse.Namespace) -> None:
     preflight(base_url=args.base_url, model=args.model)
 
-    if args.run_id is None:
-        args.run_id = generate_run_id()
-    output_dir: Path = Path(args.data_dir) / STAGE_SUBDIR / args.run_id
+    data_dir: Path = Path(args.data_dir)
+    args.run_id = resolve_run_id(data_dir, args.run_id)
+    args.input = resolve_input(
+        data_dir, args.input, upstream_stage="catalogue-dedup", flag_name="input"
+    )
+    output_dir: Path = data_dir / STAGE_SUBDIR / args.run_id
     verdicts_path = output_dir / "verdicts.jsonl"
     meta_path = output_dir / "screening-meta.json"
     threshold: float = args.screening_threshold
@@ -408,5 +420,12 @@ def run(args: argparse.Namespace) -> None:
                 parse_failures=llm_parse_failure_count,
                 timeouts=llm_timeout_count,
             ),
+        )
+        record_stage(
+            data_dir,
+            stage="screening-abstracts",
+            inputs={"catalogue": args.input},
+            output=verdicts_path,
+            meta_path=meta_path,
         )
         print(f"Run dir: {output_dir}", file=sys.stderr)

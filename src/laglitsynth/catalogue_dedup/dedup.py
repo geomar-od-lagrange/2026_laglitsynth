@@ -15,6 +15,7 @@ from pathlib import Path
 from laglitsynth.catalogue_dedup.models import TOOL_NAME, DeduplicationMeta, DroppedRecord
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.io import JsonlReadStats, read_jsonl, write_jsonl, write_meta
+from laglitsynth.manifest import record_stage, resolve_input
 from laglitsynth.models import RunMeta
 
 _DOI_PREFIXES = re.compile(
@@ -211,31 +212,50 @@ def build_subparser(
     parser.add_argument(
         "--input",
         type=str,
-        required=True,
+        required=False,
+        default=None,
         nargs="+",
         metavar="GLOB_OR_PATH",
         help=(
             "One or more input JSONL files or glob patterns "
-            '(e.g. "data/catalogue-fetch/*.jsonl").'
+            '(e.g. "data/catalogue-fetch/*.jsonl"). Falls back to the '
+            "manifest's catalogue-fetch output when omitted."
         ),
     )
     parser.add_argument(
         "--output-dir", type=Path, required=True, help="Output directory"
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path("data"),
+        help="Bucket root for stage outputs (default: data/)",
     )
     parser.set_defaults(run=run)
     return parser
 
 
 def run(args: argparse.Namespace) -> None:
+    data_dir: Path = Path(args.data_dir)
     output_dir: Path = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     t0 = time.monotonic()
     stats = JsonlReadStats()
 
-    input_patterns: list[str] = args.input
+    input_patterns: list[str]
+    if args.input is None:
+        resolved = resolve_input(
+            data_dir, None, upstream_stage="catalogue-fetch", flag_name="input"
+        )
+        input_patterns = [str(resolved)]
+    else:
+        input_patterns = args.input
+
     works: list[Work] = []
+    matched_inputs: list[Path] = []
     for path in _iter_inputs(input_patterns):
+        matched_inputs.append(path)
         works.extend(read_jsonl(path, Work, stats))
 
     input_count = len(works)
@@ -254,8 +274,9 @@ def run(args: argparse.Namespace) -> None:
         run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
         validation_skipped=stats.skipped,
     )
+    dedup_meta_path = output_dir / "dedup-meta.json"
     write_meta(
-        output_dir / "dedup-meta.json",
+        dedup_meta_path,
         DeduplicationMeta(
             run=run_meta,
             input_count=input_count,
@@ -263,6 +284,14 @@ def run(args: argparse.Namespace) -> None:
             duplicates_removed=len(dropped_records),
             by_rule=by_rule,
         ),
+    )
+
+    record_stage(
+        data_dir,
+        stage="catalogue-dedup",
+        inputs={f"input_{i}": path for i, path in enumerate(matched_inputs)},
+        output=output_dir / "deduplicated.jsonl",
+        meta_path=dedup_meta_path,
     )
 
     elapsed = time.monotonic() - t0
