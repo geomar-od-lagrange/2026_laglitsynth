@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -21,9 +22,40 @@ from laglitsynth.fulltext_retrieval.retrieve import (
 )
 from laglitsynth.fulltext_retrieval.store import load_provenance, store_pdf_path
 from laglitsynth.ids import work_id_to_filename
+from laglitsynth.io import write_meta
+from laglitsynth.manifest import RunManifest, StageEntry, load_manifest
+from laglitsynth.models import RunMeta
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
 from conftest import _make_work, _write_works_jsonl
+
+
+def _seed_manifest(data_dir: Path, stages: list[StageEntry]) -> None:
+    data_dir.mkdir(parents=True, exist_ok=True)
+    write_meta(
+        data_dir / "manifest.json",
+        RunManifest(
+            run=RunMeta(
+                tool="laglitsynth.manifest",
+                run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+                validation_skipped=0,
+            ),
+            run_id="2026-01-01T00-00-00_abcdef123456",
+            queries=["test query"],
+            data_dir=str(data_dir),
+            stages=stages,
+        ),
+    )
+
+
+def _stage_entry(stage: str, output: str) -> StageEntry:
+    return StageEntry(
+        stage=stage,
+        run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+        inputs={},
+        output=output,
+        meta_path=None,
+    )
 
 
 def _write_verdicts_jsonl(path: Path, verdicts: list[ScreeningVerdict]) -> None:
@@ -741,3 +773,177 @@ class TestEmailDotenvFallback:
 
         assert "UNPAYWALL_EMAIL" in str(exc_info.value)
         assert ".env" in str(exc_info.value)
+
+
+class TestManifestWiring:
+    def _write_verdicts(self, path: Path, work_id: str, score: float) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            f.write(
+                ScreeningVerdict(work_id=work_id, relevance_score=score).model_dump_json()
+                + "\n"
+            )
+
+    def test_omitted_inputs_resolve_from_manifest_and_append_entry(
+        self, tmp_path: Path
+    ) -> None:
+        data_dir = tmp_path / "data"
+        work = _make_work("https://openalex.org/W1", doi=None)
+
+        catalogue_path = data_dir / "catalogue-dedup" / "deduplicated.jsonl"
+        catalogue_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_works_jsonl(catalogue_path, [work])
+
+        verdicts_path = data_dir / "screening-abstracts" / "run1" / "verdicts.jsonl"
+        self._write_verdicts(verdicts_path, work.id, 80)
+
+        _seed_manifest(
+            data_dir,
+            [
+                _stage_entry("catalogue-dedup", str(catalogue_path)),
+                _stage_entry("screening-abstracts", str(verdicts_path)),
+            ],
+        )
+
+        args = MagicMock()
+        args.catalogue = None
+        args.screening_verdicts = None
+        args.screening_threshold = 50.0
+        args.data_dir = data_dir
+        args.email = "test@example.com"
+        args.refetch = False
+        args.dry_run = False
+
+        with patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client"):
+            run(args)
+
+        manifest = load_manifest(data_dir)
+        assert manifest is not None
+        entry = manifest.stages[-1]
+        assert entry.stage == "fulltext-retrieval"
+        assert entry.inputs == {
+            "catalogue": str(catalogue_path),
+            "screening_verdicts": str(verdicts_path),
+        }
+        assert entry.output == str(data_dir / "pdfs")
+        assert entry.meta_path == str(
+            data_dir / "fulltext-retrieval" / "retrieval-meta.json"
+        )
+
+    def test_explicit_flag_wins_over_manifest(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "data"
+        work = _make_work("https://openalex.org/W1", doi=None)
+
+        recorded_catalogue = data_dir / "catalogue-dedup" / "deduplicated.jsonl"
+        recorded_catalogue.parent.mkdir(parents=True, exist_ok=True)
+        _write_works_jsonl(recorded_catalogue, [work])
+        recorded_verdicts = data_dir / "screening-abstracts" / "run1" / "verdicts.jsonl"
+        self._write_verdicts(recorded_verdicts, work.id, 80)
+        _seed_manifest(
+            data_dir,
+            [
+                _stage_entry("catalogue-dedup", str(recorded_catalogue)),
+                _stage_entry("screening-abstracts", str(recorded_verdicts)),
+            ],
+        )
+
+        explicit_catalogue = tmp_path / "explicit-catalogue.jsonl"
+        _write_works_jsonl(explicit_catalogue, [work])
+        explicit_verdicts = tmp_path / "explicit-verdicts.jsonl"
+        self._write_verdicts(explicit_verdicts, work.id, 80)
+
+        args = MagicMock()
+        args.catalogue = explicit_catalogue
+        args.screening_verdicts = explicit_verdicts
+        args.screening_threshold = 50.0
+        args.data_dir = data_dir
+        args.email = "test@example.com"
+        args.refetch = False
+        args.dry_run = False
+
+        with patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client"):
+            run(args)
+
+        manifest = load_manifest(data_dir)
+        assert manifest is not None
+        entry = manifest.stages[-1]
+        assert entry.inputs == {
+            "catalogue": str(explicit_catalogue),
+            "screening_verdicts": str(explicit_verdicts),
+        }
+
+    def test_dry_run_does_not_record_a_stage_entry(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "data"
+        work = _make_work("https://openalex.org/W1", doi=None)
+        catalogue_path = data_dir / "catalogue-dedup" / "deduplicated.jsonl"
+        catalogue_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_works_jsonl(catalogue_path, [work])
+        verdicts_path = data_dir / "screening-abstracts" / "run1" / "verdicts.jsonl"
+        self._write_verdicts(verdicts_path, work.id, 80)
+        _seed_manifest(
+            data_dir,
+            [
+                _stage_entry("catalogue-dedup", str(catalogue_path)),
+                _stage_entry("screening-abstracts", str(verdicts_path)),
+            ],
+        )
+
+        args = MagicMock()
+        args.catalogue = None
+        args.screening_verdicts = None
+        args.screening_threshold = 50.0
+        args.data_dir = data_dir
+        args.email = "test@example.com"
+        args.refetch = False
+        args.dry_run = True
+
+        with patch("laglitsynth.fulltext_retrieval.retrieve.httpx.Client"):
+            run(args)
+
+        manifest = load_manifest(data_dir)
+        assert manifest is not None
+        assert [e.stage for e in manifest.stages] == [
+            "catalogue-dedup",
+            "screening-abstracts",
+        ]
+
+    def test_no_manifest_and_omitted_catalogue_names_the_flag(
+        self, tmp_path: Path
+    ) -> None:
+        data_dir = tmp_path / "data"
+        args = MagicMock()
+        args.catalogue = None
+        args.screening_verdicts = None
+        args.screening_threshold = 50.0
+        args.data_dir = data_dir
+        args.email = "test@example.com"
+        args.refetch = False
+        args.dry_run = True
+
+        with pytest.raises(SystemExit) as exc_info:
+            run(args)
+        assert "--catalogue" in str(exc_info.value)
+
+    def test_manifest_naming_a_missing_file_raises_operator_visible_error(
+        self, tmp_path: Path
+    ) -> None:
+        data_dir = tmp_path / "data"
+        # The manifest claims a catalogue-dedup output that never made it to
+        # this disk (e.g. rsync brought data/manifest.json but not the file).
+        _seed_manifest(
+            data_dir,
+            [_stage_entry("catalogue-dedup", str(data_dir / "nowhere.jsonl"))],
+        )
+
+        args = MagicMock()
+        args.catalogue = None
+        args.screening_verdicts = None
+        args.screening_threshold = 50.0
+        args.data_dir = data_dir
+        args.email = "test@example.com"
+        args.refetch = False
+        args.dry_run = True
+
+        with pytest.raises(SystemExit) as exc_info:
+            run(args)
+        assert "does not exist here" in str(exc_info.value)

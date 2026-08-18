@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -12,8 +13,27 @@ from laglitsynth.catalogue_dedup.dedup import (
     run,
 )
 from laglitsynth.catalogue_dedup.models import DeduplicationMeta
+from laglitsynth.io import write_meta
+from laglitsynth.manifest import RunManifest, load_manifest
+from laglitsynth.models import RunMeta
 
 from conftest import _make_authorship, _make_work, _write_works_jsonl
+
+
+def _write_manifest(data_dir: Path, run_id: str = "2026-01-01T00-00-00_abcdef123456") -> None:
+    """Write a bare initialised manifest (no stage entries) at ``data_dir``."""
+    manifest = RunManifest(
+        run=RunMeta(
+            tool="laglitsynth.manifest",
+            run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+            validation_skipped=0,
+        ),
+        run_id=run_id,
+        queries=["lagrangian oceanography"],
+        data_dir=str(data_dir),
+        stages=[],
+    )
+    write_meta(data_dir / "manifest.json", manifest)
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +136,7 @@ def test_dropped_jsonl_records_rule(tmp_path: Path) -> None:
     args = MagicMock()
     args.input = [str(tmp_path / "input.jsonl")]
     args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
     run(args)
 
     dropped_lines = (tmp_path / "out" / "dropped.jsonl").read_text().strip().splitlines()
@@ -137,6 +158,7 @@ def test_multi_input_glob(tmp_path: Path) -> None:
     args = MagicMock()
     args.input = [str(tmp_path / "fetch_*.jsonl")]
     args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
     run(args)
 
     dedup_lines = (tmp_path / "out" / "deduplicated.jsonl").read_text().strip().splitlines()
@@ -160,6 +182,7 @@ def test_multi_input_glob_deduplicates_across_files(tmp_path: Path) -> None:
     args = MagicMock()
     args.input = [str(tmp_path / "file_a.jsonl"), str(tmp_path / "file_b.jsonl")]
     args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
     run(args)
 
     dedup_lines = (tmp_path / "out" / "deduplicated.jsonl").read_text().strip().splitlines()
@@ -188,6 +211,7 @@ def test_works_without_doi_use_title_author_year(tmp_path: Path) -> None:
     args = MagicMock()
     args.input = [str(tmp_path / "input.jsonl")]
     args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
     run(args)
 
     dedup_lines = (tmp_path / "out" / "deduplicated.jsonl").read_text().strip().splitlines()
@@ -216,6 +240,7 @@ def test_no_duplicates_passes_through_unchanged(tmp_path: Path) -> None:
     args = MagicMock()
     args.input = [str(tmp_path / "input.jsonl")]
     args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
     run(args)
 
     dedup_lines = (tmp_path / "out" / "deduplicated.jsonl").read_text().strip().splitlines()
@@ -296,6 +321,7 @@ def test_meta_correctness(tmp_path: Path) -> None:
     args = MagicMock()
     args.input = [str(tmp_path / "input.jsonl")]
     args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
     run(args)
 
     meta_data = json.loads((tmp_path / "out" / "dedup-meta.json").read_text())
@@ -317,6 +343,7 @@ def test_validation_skipped_counted(tmp_path: Path) -> None:
     args = MagicMock()
     args.input = [str(tmp_path / "input.jsonl")]
     args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
     run(args)
 
     meta_data = json.loads((tmp_path / "out" / "dedup-meta.json").read_text())
@@ -331,6 +358,7 @@ def test_empty_input(tmp_path: Path) -> None:
     args = MagicMock()
     args.input = [str(tmp_path / "input.jsonl")]
     args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
     run(args)
 
     dedup_lines = (tmp_path / "out" / "deduplicated.jsonl").read_text().strip()
@@ -517,3 +545,83 @@ def test_unicode_dashes_enable_title_dedup() -> None:
     assert len(survivors) == 1
     assert len(dropped) == 1
     assert dropped[0].rule == "title_author_year"
+
+
+# ---------------------------------------------------------------------------
+# Run-manifest wiring
+# ---------------------------------------------------------------------------
+
+
+def test_no_manifest_behaviour_unchanged(tmp_path: Path) -> None:
+    """With every path passed explicitly and no manifest present, dedup
+    runs exactly as before and writes no manifest.json."""
+    w1 = _make_work("https://openalex.org/W1")
+    _write_works_jsonl(tmp_path / "input.jsonl", [w1])
+
+    args = MagicMock()
+    args.input = [str(tmp_path / "input.jsonl")]
+    args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
+    run(args)
+
+    assert (tmp_path / "out" / "deduplicated.jsonl").exists()
+    assert not (tmp_path / "manifest.json").exists()
+
+
+def test_omitted_input_with_no_manifest_names_the_flag(tmp_path: Path) -> None:
+    """--input omitted, no manifest to resolve it from -> SystemExit naming it."""
+    args = MagicMock()
+    args.input = None
+    args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
+
+    try:
+        run(args)
+    except SystemExit as exc:
+        assert "--input" in str(exc)
+    else:
+        raise AssertionError("expected SystemExit when --input and manifest are both absent")
+
+
+def test_omitted_input_with_manifest_but_no_catalogue_fetch_entry(tmp_path: Path) -> None:
+    """catalogue-fetch is not wired to the manifest (deferred by the plan):
+    an omitted --input still falls through to the required-flag SystemExit
+    even once a manifest exists, because there is no catalogue-fetch entry
+    to resolve it from."""
+    _write_manifest(tmp_path)
+
+    args = MagicMock()
+    args.input = None
+    args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
+
+    try:
+        run(args)
+    except SystemExit as exc:
+        assert "catalogue-fetch" in str(exc)
+    else:
+        raise AssertionError("expected SystemExit for a stage never run")
+
+
+def test_records_own_stage_entry_when_manifest_exists(tmp_path: Path) -> None:
+    """dedup appends its own StageEntry to an existing manifest, independent
+    of whether catalogue-fetch ever recorded one."""
+    _write_manifest(tmp_path)
+
+    w1 = _make_work("https://openalex.org/W1")
+    _write_works_jsonl(tmp_path / "input.jsonl", [w1])
+
+    args = MagicMock()
+    args.input = [str(tmp_path / "input.jsonl")]
+    args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
+    run(args)
+
+    manifest = load_manifest(tmp_path)
+    assert manifest is not None
+    assert len(manifest.stages) == 1
+    entry = manifest.stages[0]
+    assert entry.stage == "catalogue-dedup"
+    assert entry.output == str(tmp_path / "out" / "deduplicated.jsonl")
+    assert entry.meta_path == str(tmp_path / "out" / "dedup-meta.json")
+    assert entry.inputs == {"input_0": str(tmp_path / "input.jsonl")}

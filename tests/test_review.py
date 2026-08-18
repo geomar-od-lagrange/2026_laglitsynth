@@ -75,6 +75,7 @@ def test_emit_full_config_round_trips(tmp_path: Path) -> None:
             },
             "num_ctx": {"eligibility": 32768, "extraction": 16384},
             "concurrency": {"llm": 4, "extraction": 1},
+            "export_gap": True,
         },
     )
     parsed = _as_dict(emit_cfg_lines(load_review_config(cfg)))
@@ -96,6 +97,15 @@ def test_emit_full_config_round_trips(tmp_path: Path) -> None:
     assert parsed["CFG_EXTRACTION_NUM_CTX"] == "16384"
     assert parsed["CFG_LLM_CONCURRENCY"] == "4"
     assert parsed["CFG_EXTRACTION_CONCURRENCY"] == "1"
+    assert parsed["CFG_EXPORT_GAP"] == "1"
+
+
+def test_export_gap_false_emits_zero(tmp_path: Path) -> None:
+    """A bool renders as 1/0, the form the runner's numeric flags take."""
+    cfg = _write_yaml(tmp_path / "review.yaml", {"query": "x", "export_gap": False})
+    parsed = _as_dict(emit_cfg_lines(load_review_config(cfg)))
+
+    assert parsed["CFG_EXPORT_GAP"] == "0"
 
 
 def test_emit_none_fields_are_empty(tmp_path: Path) -> None:

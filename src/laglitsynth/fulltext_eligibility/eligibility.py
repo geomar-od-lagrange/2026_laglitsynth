@@ -33,13 +33,13 @@ from laglitsynth.fulltext_eligibility.prompts import (
     render_fulltext,
 )
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
-from laglitsynth.ids import generate_run_id
 from laglitsynth.io import (
     JsonlReadStats,
     append_jsonl,
     read_jsonl,
     write_meta,
 )
+from laglitsynth.manifest import record_stage, resolve_input, resolve_run_id
 from laglitsynth.models import LlmMeta, RunMeta
 from laglitsynth.ollama import preflight
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
@@ -244,14 +244,20 @@ def build_subparser(
     parser.add_argument(
         "--catalogue",
         type=Path,
-        required=True,
-        help="Deduplicated catalogue JSONL (data/catalogue-dedup/deduplicated.jsonl)",
+        default=None,
+        help=(
+            "Deduplicated catalogue JSONL (data/catalogue-dedup/deduplicated.jsonl). "
+            "Falls back to the manifest's catalogue-dedup output when omitted."
+        ),
     )
     parser.add_argument(
         "--screening-verdicts",
         type=Path,
-        required=True,
-        help="Stage 3 verdicts JSONL (data/screening-abstracts/<run-id>/verdicts.jsonl)",
+        default=None,
+        help=(
+            "Stage 3 verdicts JSONL (data/screening-abstracts/<run-id>/verdicts.jsonl). "
+            "Falls back to the manifest's screening-abstracts output when omitted."
+        ),
     )
     parser.add_argument(
         "--screening-threshold",
@@ -262,8 +268,12 @@ def build_subparser(
     parser.add_argument(
         "--extractions",
         type=Path,
-        required=True,
-        help="Extraction JSONL (data/fulltext-extraction/extraction.jsonl)",
+        default=None,
+        help=(
+            "Extraction JSONL (data/fulltext-extraction/extraction.jsonl). Falls "
+            "back to the manifest's fulltext-extraction output when omitted "
+            "(not currently wired — normally exits naming this flag)."
+        ),
     )
     parser.add_argument(
         "--extraction-output-dir",
@@ -347,11 +357,29 @@ def build_subparser(
 
 
 def run(args: argparse.Namespace) -> None:
-    preflight(base_url=args.base_url, model=args.model)
+    data_dir: Path = Path(args.data_dir)
+    args.run_id = resolve_run_id(data_dir, args.run_id)
+    args.catalogue = resolve_input(
+        data_dir,
+        args.catalogue,
+        upstream_stage="catalogue-dedup",
+        flag_name="--catalogue",
+    )
+    args.screening_verdicts = resolve_input(
+        data_dir,
+        args.screening_verdicts,
+        upstream_stage="screening-abstracts",
+        flag_name="--screening-verdicts",
+    )
+    args.extractions = resolve_input(
+        data_dir,
+        args.extractions,
+        upstream_stage="fulltext-extraction",
+        flag_name="--extractions",
+    )
 
-    if args.run_id is None:
-        args.run_id = generate_run_id()
-    output_dir: Path = Path(args.data_dir) / STAGE_SUBDIR / args.run_id
+    preflight(base_url=args.base_url, model=args.model)
+    output_dir: Path = data_dir / STAGE_SUBDIR / args.run_id
     verdicts_path = output_dir / "verdicts.jsonl"
     meta_path = output_dir / "eligibility-meta.json"
 
@@ -533,3 +561,15 @@ def run(args: argparse.Namespace) -> None:
         ),
     )
     print(f"Run dir: {output_dir}", file=sys.stderr)
+
+    record_stage(
+        data_dir,
+        stage="fulltext-eligibility",
+        inputs={
+            "catalogue": args.catalogue,
+            "screening_verdicts": args.screening_verdicts,
+            "extractions": args.extractions,
+        },
+        output=verdicts_path,
+        meta_path=meta_path,
+    )

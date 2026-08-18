@@ -19,6 +19,8 @@ import pytest
 from openai import APIConnectionError, APITimeoutError
 from pydantic import BaseModel
 
+from datetime import UTC, datetime
+
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.extraction_codebook.codebook import CodebookContext
 from laglitsynth.extraction_codebook.extract import (
@@ -28,6 +30,9 @@ from laglitsynth.extraction_codebook.extract import (
 )
 from laglitsynth.fulltext_eligibility.models import EligibilityVerdict
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
+from laglitsynth.io import write_meta
+from laglitsynth.manifest import RunManifest, StageEntry, load_manifest
+from laglitsynth.models import RunMeta
 
 from conftest import (
     TEI_NS,
@@ -1089,3 +1094,192 @@ def test_concurrency_one_uses_sequential_path(
         run(args)
 
     mock_tpe.assert_not_called()
+
+
+# --- run() manifest wiring ---
+
+
+def _write_manifest(
+    tmp_path: Path,
+    *,
+    run_id: str,
+    catalogue: Path | None = None,
+    eligibility_verdicts: Path | None = None,
+) -> None:
+    def _entry(stage: str, output: Path) -> StageEntry:
+        return StageEntry(
+            stage=stage,
+            run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+            inputs={},
+            output=str(output),
+            meta_path=None,
+        )
+
+    stages = []
+    if catalogue is not None:
+        stages.append(_entry("catalogue-dedup", catalogue))
+    if eligibility_verdicts is not None:
+        stages.append(_entry("fulltext-eligibility", eligibility_verdicts))
+
+    manifest = RunManifest(
+        run=RunMeta(
+            tool="laglitsynth.manifest",
+            run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+            validation_skipped=0,
+        ),
+        run_id=run_id,
+        queries=["a query"],
+        data_dir="data",
+        stages=stages,
+    )
+    write_meta(tmp_path / "manifest.json", manifest)
+
+
+class TestManifestWiring:
+    def _setup_inputs(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> tuple[Path, Path, Path, MagicMock]:
+        catalogue = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        extractions_path = tmp_path / "extraction.jsonl"
+        _write_works_jsonl(catalogue, [_make_work("W1", abstract="about oceans")])
+        _write_eligibility_verdicts_jsonl(
+            verdicts_path, [EligibilityVerdict(work_id="W1", eligible=True)]
+        )
+        _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
+        mock_client = _make_mock_client(
+            _valid_payload_json(ctx.payload_field_names)
+        )
+        return catalogue, verdicts_path, extractions_path, mock_client
+
+    def _run(self, args: argparse.Namespace, mock_client: MagicMock) -> None:
+        with (
+            patch("laglitsynth.extraction_codebook.extract.preflight"),
+            patch(
+                "laglitsynth.extraction_codebook.extract.OpenAI",
+                return_value=mock_client,
+            ),
+        ):
+            from laglitsynth.extraction_codebook.extract import run
+
+            run(args)
+
+    def test_explicit_run_id_wins_over_manifest(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        catalogue, verdicts_path, extractions_path, mock_client = self._setup_inputs(
+            tmp_path, ctx
+        )
+        _write_manifest(tmp_path, run_id="from-manifest")
+
+        args = _make_run_args(
+            tmp_path,
+            catalogue=catalogue,
+            eligibility_verdicts=verdicts_path,
+            extractions=extractions_path,
+            run_id="explicit-run-id",
+        )
+        self._run(args, mock_client)
+
+        assert (tmp_path / "extraction-codebook" / "explicit-run-id").exists()
+        assert not (tmp_path / "extraction-codebook" / "from-manifest").exists()
+
+    def test_omitted_run_id_adopts_the_manifests(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        catalogue, verdicts_path, extractions_path, mock_client = self._setup_inputs(
+            tmp_path, ctx
+        )
+        _write_manifest(tmp_path, run_id="from-manifest-run")
+
+        args = _make_run_args(
+            tmp_path,
+            catalogue=catalogue,
+            eligibility_verdicts=verdicts_path,
+            extractions=extractions_path,
+            run_id="placeholder",
+        )
+        args.run_id = None
+        self._run(args, mock_client)
+
+        assert (tmp_path / "extraction-codebook" / "from-manifest-run").exists()
+
+    def test_omitted_inputs_adopt_latest_output(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        catalogue, verdicts_path, extractions_path, mock_client = self._setup_inputs(
+            tmp_path, ctx
+        )
+        _write_manifest(
+            tmp_path,
+            run_id="ignored",
+            catalogue=catalogue,
+            eligibility_verdicts=verdicts_path,
+        )
+
+        args = _make_run_args(
+            tmp_path,
+            catalogue=catalogue,
+            eligibility_verdicts=verdicts_path,
+            extractions=extractions_path,
+            run_id="resolved-run",
+        )
+        args.catalogue = None
+        args.eligibility_verdicts = None
+        self._run(args, mock_client)
+
+        out_dir = tmp_path / "extraction-codebook" / "resolved-run"
+        meta = json.loads((out_dir / "extraction-codebook-meta.json").read_text())
+        assert meta["input_catalogue"] == str(catalogue)
+        assert meta["input_eligibility_verdicts"] == str(verdicts_path)
+
+    def test_appends_stage_entry_with_resolved_paths(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        catalogue, verdicts_path, extractions_path, mock_client = self._setup_inputs(
+            tmp_path, ctx
+        )
+        _write_manifest(tmp_path, run_id="ignored")
+
+        args = _make_run_args(
+            tmp_path,
+            catalogue=catalogue,
+            eligibility_verdicts=verdicts_path,
+            extractions=extractions_path,
+            run_id="recorded-run",
+        )
+        self._run(args, mock_client)
+
+        manifest = load_manifest(tmp_path)
+        assert manifest is not None
+        entry = manifest.stages[-1]
+        assert entry.stage == "extraction-codebook"
+        assert entry.inputs == {
+            "catalogue": str(catalogue),
+            "eligibility_verdicts": str(verdicts_path),
+            "extractions": str(extractions_path),
+        }
+        out_dir = tmp_path / "extraction-codebook" / "recorded-run"
+        assert entry.output == str(out_dir / "records.jsonl")
+        assert entry.meta_path == str(out_dir / "extraction-codebook-meta.json")
+
+    def test_no_manifest_is_a_no_op_and_behaviour_is_unchanged(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        catalogue, verdicts_path, extractions_path, mock_client = self._setup_inputs(
+            tmp_path, ctx
+        )
+
+        args = _make_run_args(
+            tmp_path,
+            catalogue=catalogue,
+            eligibility_verdicts=verdicts_path,
+            extractions=extractions_path,
+            run_id="no-manifest-run",
+        )
+        self._run(args, mock_client)
+
+        assert not (tmp_path / "manifest.json").exists()
+        assert (
+            tmp_path / "extraction-codebook" / "no-manifest-run" / "records.jsonl"
+        ).exists()

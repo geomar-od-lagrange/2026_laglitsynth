@@ -79,6 +79,7 @@ class ReviewConfig(BaseModel):
     models: _Models = _Models()
     num_ctx: _NumCtx = _NumCtx()
     concurrency: _Concurrency = _Concurrency()
+    export_gap: bool | None = None
 
 
 def load_review_config(path: Path) -> ReviewConfig:
@@ -108,11 +109,14 @@ def _shell_value(value: object) -> str:
     """Render a config value as a shell-quoted assignment RHS.
 
     ``None`` becomes the empty string (the runner supplies the
-    default); everything else is stringified and ``shlex.quote``-d so
-    queries with spaces or quotes survive ``eval``.
+    default); a bool becomes ``1`` or ``0``, the form the runner's
+    numeric flags already take; everything else is stringified and
+    ``shlex.quote``-d so queries with spaces or quotes survive ``eval``.
     """
     if value is None:
         return "''"
+    if isinstance(value, bool):
+        return "1" if value else "0"
     return shlex.quote(str(value))
 
 
@@ -139,6 +143,7 @@ def emit_cfg_lines(config: ReviewConfig) -> list[str]:
         ("CFG_EXTRACTION_NUM_CTX", config.num_ctx.extraction),
         ("CFG_LLM_CONCURRENCY", config.concurrency.llm),
         ("CFG_EXTRACTION_CONCURRENCY", config.concurrency.extraction),
+        ("CFG_EXPORT_GAP", config.export_gap),
     ]
     return [f"{name}={_shell_value(value)}" for name, value in pairs]
 

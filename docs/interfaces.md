@@ -50,6 +50,14 @@ on real data. Stages 3, 5, and 7 all take `--screening-threshold` as a
 
 ## Artifact map
 
+Every path below can be passed explicitly. Where a review has a
+`data/manifest.json`, the stage resolves an omitted input from the last entry
+its upstream recorded instead — see [run-manifest.md](run-manifest.md).
+
+| Path | Model | Description |
+|---|---|---|
+| `data/manifest.json` | [`RunManifest`](../src/laglitsynth/manifest.py) | The review's queries, shared run-id, and append-only per-stage input→output log |
+
 ### Stage 1 — catalogue-fetch *(exists)*
 
 | Path | Model | Description |

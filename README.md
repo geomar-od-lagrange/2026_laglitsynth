@@ -293,5 +293,7 @@ tuning and macOS workarounds.
 
 - [`docs/`](docs/) — component documentation
 - [`docs/pipeline.md`](docs/pipeline.md) — end-to-end pipeline overview
+- [`docs/run-manifest.md`](docs/run-manifest.md) — `data/manifest.json`: the
+  run-id and the per-stage path relay
 - [`plans/`](plans/) — implementation plans (active and archived)
 - [`AGENTS.md`](AGENTS.md) — project principles and structure

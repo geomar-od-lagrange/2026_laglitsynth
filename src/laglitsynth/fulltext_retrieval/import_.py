@@ -33,14 +33,17 @@ from pathlib import Path
 from pypdf import PdfReader
 from pypdf.errors import PyPdfError
 
+from laglitsynth.fulltext_retrieval.export import PDF_MANIFEST_FILENAME
 from laglitsynth.fulltext_retrieval.models import PdfProvenanceRecord, PdfSource
 from laglitsynth.fulltext_retrieval.retrieve import _DOI_PREFIX_RE, _validate_pdf
 from laglitsynth.fulltext_retrieval.store import (
     load_provenance,
+    pdfs_dir,
     sha256_of,
     store_pdf_path,
     upsert_provenance,
 )
+from laglitsynth.manifest import record_stage, resolve_input
 
 # DOI syntax per Crossref's recommended regex (case-insensitive).
 _DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:a-z0-9]+", re.IGNORECASE)
@@ -56,6 +59,8 @@ class ManifestEntry:
     work_id: str
     stem: str
     doi: str | None
+    title: str | None
+    year: int | None
 
 
 @dataclass
@@ -80,14 +85,20 @@ def read_manifest(path: Path) -> list[ManifestEntry]:
     with open(path, newline="", encoding="utf-8") as f:
         # The export also writes an ``expected_filename`` column; it is an
         # advisory round-trip hint for the collaborator (written, never read
-        # back here), so only work_id/stem/doi are pulled into the entry.
+        # back here), so it is not pulled into the entry. ``title``/``year``
+        # are read but not yet used for matching (precursor for a future
+        # title-matching tier).
         for row in csv.DictReader(f):
             doi = row.get("doi") or None
+            title = row.get("title") or None
+            year_raw = row.get("year") or None
             entries.append(
                 ManifestEntry(
                     work_id=row["work_id"],
                     stem=row["stem"],
                     doi=doi if doi else None,
+                    title=title,
+                    year=int(year_raw) if year_raw else None,
                 )
             )
     return entries
@@ -280,8 +291,11 @@ def build_subparser(
     parser.add_argument(
         "--manifest",
         type=Path,
-        required=True,
-        help="pdf-manifest.csv from the matching export.",
+        default=None,
+        help=(
+            "pdf-manifest.csv from the matching export. Resolved from "
+            "data/manifest.json's fulltext-retrieval-export entry when omitted."
+        ),
     )
     parser.add_argument(
         "--data-dir",
@@ -305,11 +319,19 @@ def build_subparser(
 
 
 def run(args: argparse.Namespace) -> None:
+    data_dir: Path = args.data_dir
     source = _IMPORT_SOURCES[args.source]
+    manifest_path = resolve_input(
+        data_dir,
+        args.manifest,
+        upstream_stage="fulltext-retrieval-export",
+        flag_name="--manifest",
+        subpath=PDF_MANIFEST_FILENAME,
+    )
     summary, still_missing = import_pdfs(
         args.import_dir,
-        args.manifest,
-        args.data_dir,
+        manifest_path,
+        data_dir,
         source,
         overwrite=args.overwrite,
     )
@@ -340,3 +362,11 @@ def run(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
     print(f"  Manifest works still missing: {still_missing}", file=sys.stderr)
+
+    record_stage(
+        data_dir,
+        stage="fulltext-retrieval-import",
+        inputs={"import_dir": args.import_dir, "manifest": manifest_path},
+        output=pdfs_dir(data_dir),
+        meta_path=None,
+    )

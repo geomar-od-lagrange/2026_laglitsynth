@@ -12,6 +12,7 @@ import pytest
 from openai import APIConnectionError, APITimeoutError
 
 import hashlib
+from datetime import UTC, datetime
 
 from laglitsynth.fulltext_eligibility.eligibility import (
     _active_works,
@@ -20,6 +21,9 @@ from laglitsynth.fulltext_eligibility.eligibility import (
 )
 from laglitsynth.fulltext_eligibility.models import EligibilityVerdict
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
+from laglitsynth.io import write_meta
+from laglitsynth.manifest import RunManifest, StageEntry, load_manifest
+from laglitsynth.models import RunMeta
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
 from conftest import (
@@ -1188,3 +1192,170 @@ def test_concurrency_one_uses_sequential_path(tmp_path: Path) -> None:
         run(args)
 
     mock_tpe.assert_not_called()
+
+
+# --- run() manifest wiring ---
+
+
+def _write_manifest(
+    tmp_path: Path,
+    *,
+    run_id: str,
+    catalogue: Path | None = None,
+    screening_verdicts: Path | None = None,
+) -> None:
+    def _entry(stage: str, output: Path) -> StageEntry:
+        return StageEntry(
+            stage=stage,
+            run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+            inputs={},
+            output=str(output),
+            meta_path=None,
+        )
+
+    stages = []
+    if catalogue is not None:
+        stages.append(_entry("catalogue-dedup", catalogue))
+    if screening_verdicts is not None:
+        stages.append(_entry("screening-abstracts", screening_verdicts))
+
+    manifest = RunManifest(
+        run=RunMeta(
+            tool="laglitsynth.manifest",
+            run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+            validation_skipped=0,
+        ),
+        run_id=run_id,
+        queries=["a query"],
+        data_dir="data",
+        stages=stages,
+    )
+    write_meta(tmp_path / "manifest.json", manifest)
+
+
+class TestManifestWiring:
+    def _setup_inputs(self, tmp_path: Path) -> tuple[Path, Path, Path]:
+        catalogue = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        extractions_path = tmp_path / "extraction.jsonl"
+        _write_works_jsonl(catalogue, [_make_work("W1", abstract="about oceans")])
+        _write_verdicts_jsonl(
+            verdicts_path, [ScreeningVerdict(work_id="W1", relevance_score=80)]
+        )
+        _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
+        return catalogue, verdicts_path, extractions_path
+
+    def _run(self, args: argparse.Namespace) -> None:
+        with (
+            patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
+            patch(
+                "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
+                side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
+            ),
+            patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
+        ):
+            from laglitsynth.fulltext_eligibility.eligibility import run
+
+            run(args)
+
+    def test_explicit_run_id_wins_over_manifest(self, tmp_path: Path) -> None:
+        catalogue, verdicts_path, extractions_path = self._setup_inputs(tmp_path)
+        _write_manifest(tmp_path, run_id="from-manifest")
+
+        args = _make_run_args(
+            tmp_path,
+            catalogue=catalogue,
+            screening_verdicts=verdicts_path,
+            extractions=extractions_path,
+            run_id="explicit-run-id",
+        )
+        self._run(args)
+
+        assert (tmp_path / "fulltext-eligibility" / "explicit-run-id").exists()
+        assert not (tmp_path / "fulltext-eligibility" / "from-manifest").exists()
+
+    def test_omitted_run_id_adopts_the_manifests(self, tmp_path: Path) -> None:
+        catalogue, verdicts_path, extractions_path = self._setup_inputs(tmp_path)
+        _write_manifest(tmp_path, run_id="from-manifest-run")
+
+        args = _make_run_args(
+            tmp_path,
+            catalogue=catalogue,
+            screening_verdicts=verdicts_path,
+            extractions=extractions_path,
+            run_id="placeholder",
+        )
+        args.run_id = None
+        self._run(args)
+
+        assert (tmp_path / "fulltext-eligibility" / "from-manifest-run").exists()
+
+    def test_omitted_inputs_adopt_latest_output(self, tmp_path: Path) -> None:
+        catalogue, verdicts_path, extractions_path = self._setup_inputs(tmp_path)
+        _write_manifest(
+            tmp_path,
+            run_id="ignored",
+            catalogue=catalogue,
+            screening_verdicts=verdicts_path,
+        )
+
+        args = _make_run_args(
+            tmp_path,
+            catalogue=catalogue,
+            screening_verdicts=verdicts_path,
+            extractions=extractions_path,
+            run_id="resolved-run",
+        )
+        args.catalogue = None
+        args.screening_verdicts = None
+        self._run(args)
+
+        out_dir = tmp_path / "fulltext-eligibility" / "resolved-run"
+        meta = json.loads((out_dir / "eligibility-meta.json").read_text())
+        assert meta["input_catalogue"] == str(catalogue)
+        assert meta["input_screening_verdicts"] == str(verdicts_path)
+
+    def test_appends_stage_entry_with_resolved_paths(self, tmp_path: Path) -> None:
+        catalogue, verdicts_path, extractions_path = self._setup_inputs(tmp_path)
+        _write_manifest(tmp_path, run_id="ignored")
+
+        args = _make_run_args(
+            tmp_path,
+            catalogue=catalogue,
+            screening_verdicts=verdicts_path,
+            extractions=extractions_path,
+            run_id="recorded-run",
+        )
+        self._run(args)
+
+        manifest = load_manifest(tmp_path)
+        assert manifest is not None
+        entry = manifest.stages[-1]
+        assert entry.stage == "fulltext-eligibility"
+        assert entry.inputs == {
+            "catalogue": str(catalogue),
+            "screening_verdicts": str(verdicts_path),
+            "extractions": str(extractions_path),
+        }
+        out_dir = tmp_path / "fulltext-eligibility" / "recorded-run"
+        assert entry.output == str(out_dir / "verdicts.jsonl")
+        assert entry.meta_path == str(out_dir / "eligibility-meta.json")
+
+    def test_no_manifest_is_a_no_op_and_behaviour_is_unchanged(
+        self, tmp_path: Path
+    ) -> None:
+        catalogue, verdicts_path, extractions_path = self._setup_inputs(tmp_path)
+
+        args = _make_run_args(
+            tmp_path,
+            catalogue=catalogue,
+            screening_verdicts=verdicts_path,
+            extractions=extractions_path,
+            run_id="no-manifest-run",
+        )
+        self._run(args)
+
+        assert not (tmp_path / "manifest.json").exists()
+        assert (
+            tmp_path / "fulltext-eligibility" / "no-manifest-run" / "verdicts.jsonl"
+        ).exists()
