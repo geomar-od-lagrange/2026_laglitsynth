@@ -86,6 +86,107 @@ class TestWriteExport:
         manifest = _read_manifest(tmp_path / "pdf-manifest.csv")
         assert manifest[0]["doi"] == "10.1/B"
 
+    def test_manifest_title_and_year_columns(self, tmp_path: Path) -> None:
+        works = [
+            _work_with_journal(
+                "https://openalex.org/W1",
+                doi="10.1/a",
+                title="A Great Paper",
+                year=2019,
+            ),
+        ]
+        write_export(works, tmp_path)
+        manifest = _read_manifest(tmp_path / "pdf-manifest.csv")
+        assert manifest[0]["title"] == "A Great Paper"
+        assert manifest[0]["year"] == "2019"
+        # Column order: doi, then title, then year, then expected_filename.
+        assert list(manifest[0].keys()) == [
+            "work_id",
+            "stem",
+            "doi",
+            "title",
+            "year",
+            "expected_filename",
+        ]
+
+    def test_manifest_null_title_and_year_write_empty_cells(
+        self, tmp_path: Path
+    ) -> None:
+        work = _make_work(
+            "https://openalex.org/W1",
+            title=None,
+            doi="10.1/a",
+            publication_year=None,
+        )
+        write_export([work], tmp_path)
+        manifest = _read_manifest(tmp_path / "pdf-manifest.csv")
+        assert manifest[0]["title"] == ""
+        assert manifest[0]["year"] == ""
+        # Never the literal string "None".
+        assert "None" not in manifest[0]["title"]
+        assert "None" not in manifest[0]["year"]
+
+
+class TestNoDoiCsv:
+    def test_empty_when_all_works_have_a_doi(self, tmp_path: Path) -> None:
+        works = [
+            _work_with_journal("https://openalex.org/W1", doi="10.1/a"),
+            _work_with_journal("https://openalex.org/W2", doi="10.1/b"),
+        ]
+        write_export(works, tmp_path)
+
+        no_doi_path = tmp_path / "no-doi.csv"
+        assert no_doi_path.exists()
+        rows = _read_manifest(no_doi_path)
+        assert rows == []
+        # Header row is always present, even for zero data rows.
+        with open(no_doi_path, newline="") as f:
+            header = next(csv.reader(f))
+        assert header == ["work_id", "stem", "title", "year", "expected_filename"]
+
+    def test_doi_less_work_listed_and_absent_from_dois_txt(
+        self, tmp_path: Path
+    ) -> None:
+        works = [
+            _work_with_journal(
+                "https://openalex.org/W1",
+                doi=None,
+                title="No DOI Paper",
+                year=2021,
+            ),
+            _work_with_journal("https://openalex.org/W2", doi="10.1/b"),
+        ]
+        write_export(works, tmp_path)
+
+        no_doi_rows = _read_manifest(tmp_path / "no-doi.csv")
+        assert len(no_doi_rows) == 1
+        row = no_doi_rows[0]
+        assert row["work_id"] == "https://openalex.org/W1"
+        assert row["stem"] == "W1"
+        assert row["title"] == "No DOI Paper"
+        assert row["year"] == "2021"
+        assert row["expected_filename"] == "W1.pdf"
+
+        dois = (tmp_path / "dois.txt").read_text().splitlines()
+        assert "https://doi.org/W1" not in dois
+        assert dois == ["https://doi.org/10.1/b"]
+
+
+class TestReadme:
+    def test_names_the_work_count(self, tmp_path: Path) -> None:
+        works = [
+            _work_with_journal("https://openalex.org/W1", doi="10.1/a"),
+            _work_with_journal("https://openalex.org/W2", doi=None),
+            _work_with_journal("https://openalex.org/W3", doi=None),
+        ]
+        write_export(works, tmp_path)
+
+        readme = (tmp_path / "README.md").read_text(encoding="utf-8")
+        assert "3 works" in readme
+        # Names the two return shapes the importer accepts.
+        assert "<stem>.pdf" in readme
+        assert "DOI" in readme
+
 
 class TestRun:
     def test_only_missing_in_selection_exported(self, tmp_path: Path) -> None:

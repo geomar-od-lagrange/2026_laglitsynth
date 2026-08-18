@@ -56,6 +56,8 @@ class ManifestEntry:
     work_id: str
     stem: str
     doi: str | None
+    title: str | None
+    year: int | None
 
 
 @dataclass
@@ -80,14 +82,20 @@ def read_manifest(path: Path) -> list[ManifestEntry]:
     with open(path, newline="", encoding="utf-8") as f:
         # The export also writes an ``expected_filename`` column; it is an
         # advisory round-trip hint for the collaborator (written, never read
-        # back here), so only work_id/stem/doi are pulled into the entry.
+        # back here), so it is not pulled into the entry. ``title``/``year``
+        # are read but not yet used for matching (precursor for a future
+        # title-matching tier).
         for row in csv.DictReader(f):
             doi = row.get("doi") or None
+            title = row.get("title") or None
+            year_raw = row.get("year") or None
             entries.append(
                 ManifestEntry(
                     work_id=row["work_id"],
                     stem=row["stem"],
                     doi=doi if doi else None,
+                    title=title,
+                    year=int(year_raw) if year_raw else None,
                 )
             )
     return entries

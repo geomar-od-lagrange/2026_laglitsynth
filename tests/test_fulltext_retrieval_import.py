@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 from pypdf import PdfWriter
 
-from laglitsynth.fulltext_retrieval.import_ import import_pdfs, run
+from laglitsynth.fulltext_retrieval.import_ import import_pdfs, read_manifest, run
 from laglitsynth.fulltext_retrieval.models import PdfSource
 from laglitsynth.fulltext_retrieval.store import load_provenance, store_pdf_path
 
@@ -35,6 +35,46 @@ def _make_pdf(path: Path, *, doi_in_metadata: str | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as f:
         writer.write(f)
+
+
+class TestReadManifest:
+    def test_round_trips_title_and_year_columns(self, tmp_path: Path) -> None:
+        manifest = tmp_path / "pdf-manifest.csv"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        with open(manifest, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(
+                ["work_id", "stem", "doi", "title", "year", "expected_filename"]
+            )
+            writer.writerow(
+                [
+                    "https://openalex.org/W1",
+                    "W1",
+                    "10.1/a",
+                    "A Great Paper",
+                    "2019",
+                    "W1.pdf",
+                ]
+            )
+
+        entries = read_manifest(manifest)
+        assert len(entries) == 1
+        assert entries[0].title == "A Great Paper"
+        assert entries[0].year == 2019
+
+    def test_empty_title_and_year_cells_become_none(self, tmp_path: Path) -> None:
+        manifest = tmp_path / "pdf-manifest.csv"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        with open(manifest, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(
+                ["work_id", "stem", "doi", "title", "year", "expected_filename"]
+            )
+            writer.writerow(["https://openalex.org/W1", "W1", "", "", "", "W1.pdf"])
+
+        entries = read_manifest(manifest)
+        assert entries[0].title is None
+        assert entries[0].year is None
 
 
 class TestImportByDoi:

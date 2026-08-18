@@ -7,7 +7,13 @@ bundle a collaborator can act on through their own institutional access:
 - ``dois.txt`` — one ``https://doi.org/<doi>`` per line (DOI-bearing works).
 - ``missing.ris`` — one RIS record per missing work (any reference manager).
 - ``pdf-manifest.csv`` — the round-trip key import reads back: columns
-  ``work_id``, ``stem``, ``doi``, ``expected_filename`` (``<stem>.pdf``).
+  ``work_id``, ``stem``, ``doi``, ``title``, ``year``, ``expected_filename``
+  (``<stem>.pdf``).
+- ``no-doi.csv`` — the works ``dois.txt`` cannot represent (no DOI), with
+  ``work_id``, ``stem``, ``title``, ``year``, ``expected_filename``. Always
+  written, with its header row, even when empty.
+- ``README.md`` — what the bundle is, what each file is for, and what to
+  send back, filled in from a template with the work count and export date.
 
 Inputs are explicit flags (manifest wiring deferred).
 """
@@ -18,6 +24,7 @@ import argparse
 import csv
 import sys
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
 
 from laglitsynth.catalogue_fetch.models import Work
@@ -63,11 +70,63 @@ def _ris_record(work: Work) -> str:
     return "\n".join(lines)
 
 
+def _title_cell(work: Work) -> str:
+    return work.title or ""
+
+
+def _year_cell(work: Work) -> str:
+    return str(work.publication_year) if work.publication_year is not None else ""
+
+
+_README_TEMPLATE = """\
+# PDF handoff bundle
+
+Exported {export_date}. {work_count} works still need a PDF ({doi_count} \
+with a DOI, {no_doi_count} without).
+
+## What's in this folder
+
+- `dois.txt` — one `https://doi.org/...` link per DOI-bearing work. Open
+  each link through your institution's access and download the PDF.
+- `no-doi.csv` — the {no_doi_count} works with no DOI, so they can't go
+  through `dois.txt`. Search for each by its `title` and `year` column.
+- `missing.ris` — the same missing works as one RIS file, importable into
+  a reference manager (Zotero, EndNote, ...) instead of working link by
+  link.
+- `pdf-manifest.csv` — the full list, read back by whoever imports your
+  PDFs into the pipeline. Nothing for you to edit.
+- `README.md` — this file.
+
+## Sending PDFs back
+
+Return PDFs in either of these forms:
+
+1. A folder of PDFs each named `<stem>.pdf`, where `<stem>` is the `stem`
+   column in `pdf-manifest.csv` or `no-doi.csv` (also given as
+   `expected_filename` in both files).
+2. A folder of PDFs with any filenames, as long as each PDF carries its
+   DOI in its own metadata or on the first page of text, as most publisher
+   PDFs do. Import reads the DOI out of the file to match it.
+
+Either form works for any subset of the missing works — send back whatever
+you found.
+"""
+
+
+def _readme_content(*, work_count: int, doi_count: int, export_date: str) -> str:
+    return _README_TEMPLATE.format(
+        export_date=export_date,
+        work_count=work_count,
+        doi_count=doi_count,
+        no_doi_count=work_count - doi_count,
+    )
+
+
 def write_export(
     works: Iterable[Work],
     export_dir: Path,
 ) -> int:
-    """Write the three handoff files for ``works``; return the work count.
+    """Write the handoff bundle for ``works``; return the work count.
 
     ``works`` is the already-filtered missing selection.
     """
@@ -88,11 +147,37 @@ def write_export(
     manifest_path = export_dir / "pdf-manifest.csv"
     with open(manifest_path, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["work_id", "stem", "doi", "expected_filename"])
+        writer.writerow(
+            ["work_id", "stem", "doi", "title", "year", "expected_filename"]
+        )
         for work in works:
             stem = work_id_to_filename(work.id)
             doi = _DOI_PREFIX_RE.sub("", work.doi).strip() if work.doi else ""
-            writer.writerow([work.id, stem, doi, f"{stem}.pdf"])
+            writer.writerow(
+                [work.id, stem, doi, _title_cell(work), _year_cell(work), f"{stem}.pdf"]
+            )
+
+    no_doi_path = export_dir / "no-doi.csv"
+    with open(no_doi_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["work_id", "stem", "title", "year", "expected_filename"])
+        for work in works:
+            if work.doi is None:
+                stem = work_id_to_filename(work.id)
+                writer.writerow(
+                    [work.id, stem, _title_cell(work), _year_cell(work), f"{stem}.pdf"]
+                )
+
+    doi_count = sum(1 for work in works if work.doi is not None)
+    readme_path = export_dir / "README.md"
+    readme_path.write_text(
+        _readme_content(
+            work_count=len(works),
+            doi_count=doi_count,
+            export_date=datetime.now(UTC).date().isoformat(),
+        ),
+        encoding="utf-8",
+    )
 
     return len(works)
 
