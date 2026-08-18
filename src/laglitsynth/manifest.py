@@ -86,6 +86,85 @@ def latest_output(manifest: RunManifest, stage: str) -> str | None:
     return None
 
 
+def resolve_input(
+    data_dir: Path,
+    flag_value: Path | None,
+    *,
+    upstream_stage: str,
+    flag_name: str,
+) -> Path:
+    """Return the path for one input flag, falling back to the manifest.
+
+    An explicit flag always wins, so an invocation that passes every path
+    behaves exactly as it did before the manifest existed. When the flag is
+    omitted, the last ``StageEntry`` for ``upstream_stage`` supplies the
+    path. Raises ``SystemExit`` when neither source has one, and when the
+    manifest names a path that is absent on this disk -- a manifest that
+    crossed machines ahead of its data is an operator-visible error, never a
+    silent skip.
+    """
+    if flag_value is not None:
+        return flag_value
+    manifest = load_manifest(data_dir)
+    if manifest is None:
+        raise SystemExit(
+            f"{flag_name} is required (no manifest at {_manifest_path(data_dir)} "
+            f"to resolve it from; run `laglitsynth manifest-init` to start one)"
+        )
+    recorded = latest_output(manifest, upstream_stage)
+    if recorded is None:
+        raise SystemExit(
+            f"{flag_name} is required: {_manifest_path(data_dir)} has no "
+            f"{upstream_stage} entry to resolve it from"
+        )
+    path = Path(recorded)
+    if not path.exists():
+        raise SystemExit(
+            f"{flag_name} resolved to {path} from {_manifest_path(data_dir)}, "
+            f"but that path does not exist here"
+        )
+    return path
+
+
+def resolve_run_id(data_dir: Path, flag_value: str | None) -> str:
+    """Return the run-id: the flag, else the manifest's, else a fresh one."""
+    if flag_value is not None:
+        return flag_value
+    manifest = load_manifest(data_dir)
+    if manifest is not None:
+        return manifest.run_id
+    return generate_run_id()
+
+
+def record_stage(
+    data_dir: Path,
+    *,
+    stage: str,
+    inputs: dict[str, Path],
+    output: Path,
+    meta_path: Path | None = None,
+) -> None:
+    """Append this stage's entry to the manifest, if the review has one.
+
+    A run with no ``data/manifest.json`` records nothing and reports nothing:
+    the manifest is additive, and every invocation that predates it keeps
+    working unchanged. ``output`` is the path a downstream stage would pass
+    as its own input flag.
+    """
+    if load_manifest(data_dir) is None:
+        return
+    append_stage(
+        data_dir,
+        StageEntry(
+            stage=stage,
+            run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+            inputs={name: str(path) for name, path in inputs.items()},
+            output=str(output),
+            meta_path=str(meta_path) if meta_path is not None else None,
+        ),
+    )
+
+
 def build_subparser(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> argparse.ArgumentParser:
