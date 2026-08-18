@@ -79,8 +79,9 @@ the query, the year window (`from_year` / `to_year`) and record cap
 (`max_records`), the three criteria/codebook paths (`screening_criteria`,
 `eligibility_criteria`, `codebook`), and nested per-stage groups for
 `thresholds.{retrieval,eligibility}`, `models.{screening,eligibility,extraction}`,
-`num_ctx.{eligibility,extraction}`, and `concurrency.{llm,extraction}`.
-Only `query` is required; every other field is optional. An absent
+`num_ctx.{eligibility,extraction}`, and `concurrency.{llm,extraction}`,
+plus `export_gap`, which turns on the collaborator handoff export after
+stage 5. Only `query` is required; every other field is optional. An absent
 optional field means "fall back to the runner's built-in default" — it
 is not invented at validation time (None means None). The committed
 default is [examples/reviews/lagrangian-oceanography.yaml](../examples/reviews/lagrangian-oceanography.yaml),
@@ -106,6 +107,10 @@ The stable, documented name set is:
 | `CFG_SCREENING_MODEL` / `CFG_ELIGIBILITY_MODEL` / `CFG_EXTRACTION_MODEL` | `models.{screening,eligibility,extraction}` |
 | `CFG_ELIGIBILITY_NUM_CTX` / `CFG_EXTRACTION_NUM_CTX` | `num_ctx.{eligibility,extraction}` |
 | `CFG_LLM_CONCURRENCY` / `CFG_EXTRACTION_CONCURRENCY` | `concurrency.{llm,extraction}` |
+| `CFG_EXPORT_GAP` | `export_gap` |
+
+A boolean field emits `1` or `0` rather than `True` or `False`, matching
+the form the runner's other numeric flags take.
 
 The three criteria/codebook paths are resolved against the config file's
 own directory before emission (mirroring the

@@ -144,12 +144,29 @@ non-`missing` provenance record, and writes a handoff bundle into
 - `missing.ris` — one RIS record per missing work (title, authors, year,
   journal, DOI), for import into any reference manager.
 - `pdf-manifest.csv` — the round-trip key, columns `work_id`, `stem`, `doi`,
-  `expected_filename` (`<stem>.pdf`). Import reads this to match returned
-  PDFs back to works; it is written by us, so matching never depends on what
-  a collaborator's tool names a file.
+  `title`, `year`, `expected_filename` (`<stem>.pdf`). Import reads this to
+  match returned PDFs back to works; it is written by us, so matching never
+  depends on what a collaborator's tool names a file. `title` and `year` are
+  written but not yet read: they let a person read the manifest, and they are
+  the precursor for a title-matching import tier.
+- `no-doi.csv` — the works with no DOI, with `work_id`, `stem`, `title`,
+  `year`, and `expected_filename`. These are the ones a collaborator has to
+  search for by title. Always written, header row included, so its absence
+  never has to be interpreted.
+- `README.md` — what the bundle is, what each file is for, and the two shapes
+  import accepts a return in. It travels with the bundle, because the bundle
+  travels and the repo does not.
 
-Works without a DOI appear in `pdf-manifest.csv` and `missing.ris` (DOI
-empty) but not in `dois.txt` — there is no link to resolve.
+Works without a DOI appear in `pdf-manifest.csv`, `no-doi.csv`, and
+`missing.ris` (DOI empty) but not in `dois.txt` — there is no link to
+resolve.
+
+The runner exports the gap when `EXPORT_GAP=1`, straight after stage 5. With
+`STOP_AFTER_STAGE=5 EXPORT_GAP=1`, one invocation of
+[run-pipeline.sh](../scripts/run-pipeline.sh) fetches the catalogue, screens
+it, takes what open access gives, and writes the bundle for everything still
+missing. The `export_gap` key in the per-review config sets the same knob;
+see [configs.md](configs.md).
 
 ### `fulltext-retrieval-import`
 

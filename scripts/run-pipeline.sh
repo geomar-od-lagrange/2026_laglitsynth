@@ -44,11 +44,16 @@
 #   EXTRACTION_CONCURRENCY  (--concurrency for stage 8 only; default 1 — prefill-bound),
 #   RUN_ID (LLM-stage leaf under <data-dir>/<stage-subdir>/<run-id>/;
 #           a fresh ISO+hex id is generated when unset).
+#   EXPORT_GAP             1 = after stage 5, export the still-missing
+#                          selection as a collaborator handoff bundle into
+#                          <root>/pdfs/export/ (default 0).
 #
 # Stage gating:
 #   STOP_AFTER_STAGE=N  run stages 1..N and stop (default: 8 — full pipeline).
 #   Useful while stabilising upstream stages: STOP_AFTER_STAGE=3 iterates on
 #   screening without paying retrieval/extraction time.
+#   STOP_AFTER_STAGE=5 EXPORT_GAP=1 is the collaborator handoff run: screen the
+#   corpus, fetch what open access gives, then export the remaining gap.
 
 set -euo pipefail
 
@@ -96,6 +101,9 @@ EXTRACTION_NUM_CTX="${EXTRACTION_NUM_CTX:-${CFG_EXTRACTION_NUM_CTX:-32768}}"
 LLM_CONCURRENCY="${LLM_CONCURRENCY:-${CFG_LLM_CONCURRENCY:-1}}"
 ELIGIBILITY_CONCURRENCY="${ELIGIBILITY_CONCURRENCY:-$LLM_CONCURRENCY}"
 EXTRACTION_CONCURRENCY="${EXTRACTION_CONCURRENCY:-${CFG_EXTRACTION_CONCURRENCY:-1}}"
+
+# Collaborator handoff: export the still-missing selection after stage 5.
+EXPORT_GAP="${EXPORT_GAP:-${CFG_EXPORT_GAP:-0}}"
 
 ROOT="${OUTPUT_ROOT:-data/run}"
 OLLAMA_BASE="${OLLAMA_BASE:-http://localhost:11434}"
@@ -158,6 +166,15 @@ run_stage 5 fulltext-retrieval \
         --screening-threshold "$RETRIEVAL_THRESHOLD" \
         --data-dir "$ROOT" \
         --email "$UNPAYWALL_EMAIL"
+
+if [[ "$EXPORT_GAP" == "1" ]]; then
+    run_stage 5 fulltext-retrieval-export \
+        laglitsynth fulltext-retrieval-export \
+            --catalogue "$ROOT/catalogue-dedup/deduplicated.jsonl" \
+            --screening-verdicts "$ROOT/screening-abstracts/$RUN_ID/verdicts.jsonl" \
+            --screening-threshold "$RETRIEVAL_THRESHOLD" \
+            --data-dir "$ROOT"
+fi
 
 run_stage 6 fulltext-extraction \
     laglitsynth fulltext-extraction \
