@@ -49,15 +49,15 @@ the cleanest source first, accepting a match only when it lands in the
 closed manifest set, and never guessing:
 
 1. **XMP metadata** (`prism:doi`, `dc:identifier`). Publisher-stamped, exact,
-   immune to text-extraction corruption. The current importer reads only the
-   legacy Info dictionary (`reader.metadata`) and misses XMP
-   (`reader.xmp_metadata`) — this is the single biggest cheap gap.
+   immune to text-extraction corruption. *(Implemented. The measurement below
+   shows it wins nothing this corpus does not already get elsewhere — the
+   prediction that it was "the single biggest cheap gap" was wrong.)*
 2. **Title-page link annotations** — the clickable `doi.org` link in
    `/Annots` → `/A` → `/URI`. Machine-clean, and dodges the line-break and
-   ligature corruption that breaks DOIs pulled from extracted text. pypdf
-   exposes annotations directly.
-3. **First-page text regex** — what the importer already does. Keep as the
-   next tier.
+   ligature corruption that breaks DOIs pulled from extracted text.
+   *(Implemented; same result as XMP.)*
+3. **First-page text regex** — what the importer already did. *(Kept, and it
+   turns out to be the single most productive source: 17 of 26.)*
 4. **Title fuzzy-match against the manifest** — for DOI-less works (the
    WoS-only slice) and for born-digital PDFs that embed no DOI anywhere.
    Extract the first-page title block, fuzzy-match (e.g. `rapidfuzz`
@@ -81,6 +81,68 @@ link annotation, and the first-page top region — and **never** DOIs
 harvested from the references section or deep body text. "Just regex every
 page" is the wrong instinct precisely *because* the corpus is clustered.
 
+## Measured against real PDFs
+
+The note above was written before any real return existed. It has now been run
+against 26 publisher PDFs from a local Zotero library — AGU, Copernicus,
+Nature, Elsevier, APS, AMS, AIP, Wiley, IOP, Springer, Cambridge, and arXiv —
+copied into a folder under names carrying no information (`download (3).pdf`)
+and fed to `fulltext-retrieval-import` with a manifest built from their true
+DOIs. 16 of 26 were filed correctly with no filename discipline.
+
+Where the true DOI actually lives, counted over those 26 PDFs:
+
+| Location | PDFs whose true DOI appears there |
+|---|---|
+| First-page text | 17 |
+| Info dictionary | 10 |
+| XMP metadata | 9 |
+| Title-page link annotation | 6 |
+| None of the above | 7 |
+
+Three findings, in the order they matter.
+
+**The first-match rule loses three PDFs that carry their DOI twice.** For the
+AGU and Wiley files, `_embedded_doi` returns the first regex hit in the Info
+dictionary, which is the journal's ISSN-DOI (`10.1002/(ISSN)1942-2466`), and
+never looks at the first-page text where the article DOI sits. The metadata hit
+short-circuits a correct text hit. This is the closed-set reframe not being
+applied: import knows the manifest, so it should gather every candidate and
+accept the one that lands in the manifest, rather than trusting the first
+string that looks like a DOI.
+
+**XMP is not the gap the note predicted.** Every PDF whose XMP carries the true
+DOI also carries it in the Info dictionary or the first-page text, so XMP wins
+nothing on this corpus. The same holds for link annotations. Both remain
+correct to read, but neither is the "single biggest cheap gap" this note
+claimed before measuring.
+
+**Two AMS DOIs cannot be represented by the DOI pattern at all.**
+`10.1175/1520-0485(1997)027<1038:KOTPEU>2.0.CO;2` contains angle brackets,
+which the Crossref-recommended character class excludes, so the regex truncates
+the DOI even where the text contains it in full.
+
+Seven PDFs carry the DOI in none of the four locations. For those, title
+matching is the only route left, and it now has a measured reason to exist
+rather than an assumed one.
+
+### After gathering candidates instead of taking the first match
+
+[import-matching-tiers.md](../../plans/done/import-matching-tiers.md) applied
+the closed-set rule to extraction: gather every self-identifying DOI and keep
+the first one that appears in the manifest. The same 26 PDFs, re-run:
+
+| | Before | After |
+|---|---|---|
+| Filed with no filename discipline | 16 | 19 |
+| Candidates found, none of them correct | 3 | 0 |
+| No candidate found anywhere | 7 | 7 |
+
+The three AGU and Wiley files now file correctly. No PDF any longer produces
+candidates without the right one among them, so the DOI path is exhausted:
+everything still unmatched embeds no DOI in any inspected location, and the
+remainder is the title-matching question.
+
 ## Why this is deferred, and what splits cleanly
 
 Nothing is broken while we wait: the current importer already matches
@@ -92,7 +154,8 @@ The two halves defer differently:
 - **Data-independent, no-regret:** broadening DOI extraction to XMP and
   title-page link annotations (tiers 1–2). Strictly-more-correct DOI reading
   with no thresholds to tune; it helps any real publisher PDF and can't be
-  "wrong." If we do anything before contributions arrive, it is this.
+  "wrong." **This half has landed**, together with the candidate-set fix the
+  measurement turned up, which mattered more than either new source.
 - **Data-dependent, defer until real returns exist:** the title fuzzy-match
   fallback (tier 4), its acceptance threshold, and how to pull the title
   block off a first page. Choosing those without real PDFs to measure

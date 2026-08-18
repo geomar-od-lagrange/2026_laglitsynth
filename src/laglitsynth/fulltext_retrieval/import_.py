@@ -8,8 +8,11 @@ a real PDF, dedups by content hash, copies matched PDFs into
 
 Stem resolution order, per work, never guessed:
 
-1. an embedded DOI (PDF metadata or first-page text) that appears in the
-   manifest's DOI→stem map;
+1. a self-identifying DOI that appears in the manifest's DOI→stem map, taken
+   from the Info dictionary, XMP metadata, a title-page link annotation, or
+   first-page text. Every candidate is gathered and the first one present in
+   the manifest wins, because a publisher's Info dictionary often carries the
+   journal's DOI rather than the article's;
 2. a filename whose stem matches the manifest directly (plain folder drop);
 3. a returned sidecar ``*.csv`` / ``*.json`` mapping the collaborator's
    filenames to DOIs.
@@ -45,8 +48,10 @@ from laglitsynth.fulltext_retrieval.store import (
 )
 from laglitsynth.manifest import record_stage, resolve_input
 
-# DOI syntax per Crossref's recommended regex (case-insensitive).
-_DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:a-z0-9]+", re.IGNORECASE)
+# DOI syntax per Crossref's recommended regex (case-insensitive), plus the
+# angle brackets AMS DOIs carry:
+# 10.1175/1520-0485(1997)027<1038:KOTPEU>2.0.CO;2 truncates without them.
+_DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:a-z0-9<>]+", re.IGNORECASE)
 
 _IMPORT_SOURCES = {
     "zotero-import": PdfSource.zotero_import,
@@ -145,26 +150,57 @@ def _strip_trailing_punct(doi: str) -> str:
     return doi.rstrip(".,;:)")
 
 
-def _embedded_doi(pdf_path: Path) -> str | None:
-    """Return a DOI found in the PDF metadata or first-page text, or None."""
+def _embedded_dois(pdf_path: Path) -> list[str]:
+    """Return every self-identifying DOI in a PDF, most trustworthy first.
+
+    Four sources, in trust order: the Info dictionary, XMP metadata,
+    title-page link annotations, and first-page text. The caller keeps the
+    first candidate that appears in the manifest, so returning several is what
+    lets a wrong one be discarded — an AGU or Wiley Info dictionary carries the
+    journal's ISSN-DOI, and the article's own DOI is printed on page 1.
+
+    Never reads the reference list or deep body text. This corpus is topically
+    clustered, so a bibliography very likely cites other works in the same
+    manifest, and a DOI harvested there would file the PDF under the wrong
+    work.
+    """
+    candidates: list[str] = []
+
+    def add(text: str) -> None:
+        for match in _DOI_RE.finditer(text):
+            doi = _strip_trailing_punct(match.group(0))
+            if doi not in candidates:
+                candidates.append(doi)
+
     try:
         reader = PdfReader(str(pdf_path))
         meta = reader.metadata
         if meta is not None:
             for value in meta.values():
                 if isinstance(value, str):
-                    m = _DOI_RE.search(value)
-                    if m is not None:
-                        return _strip_trailing_punct(m.group(0))
+                    add(value)
+        try:
+            xmp = reader.xmp_metadata
+            if xmp is not None:
+                add(str(xmp.stream.get_data(), "utf-8", "replace"))
+        except (PyPdfError, OSError, ValueError, TypeError, AttributeError):
+            # Malformed XMP is common and never fatal: other sources remain.
+            pass
+        try:
+            for page in reader.pages[:1]:
+                for annotation in page.get("/Annots") or []:
+                    uri = (annotation.get_object().get("/A") or {}).get("/URI")
+                    if uri is not None:
+                        add(str(uri))
+        except (PyPdfError, OSError, ValueError, TypeError, AttributeError):
+            # Damaged or absent annotation objects; other sources remain.
+            pass
         if reader.pages:
-            text = reader.pages[0].extract_text() or ""
-            m = _DOI_RE.search(text)
-            if m is not None:
-                return _strip_trailing_punct(m.group(0))
+            add(reader.pages[0].extract_text() or "")
     except (PyPdfError, OSError, ValueError) as exc:
         # A malformed PDF yields no embedded DOI; later strategies still apply.
         print(f"  ! could not parse {pdf_path.name} for embedded DOI: {exc}", file=sys.stderr)
-    return None
+    return candidates
 
 
 def _resolve_stem(
@@ -175,10 +211,12 @@ def _resolve_stem(
     sidecar: dict[str, str],
 ) -> str | None:
     """Resolve a returned PDF to a manifest stem, or None if unmatched."""
-    # (a) embedded DOI in metadata / first-page text.
-    embedded = _normalise_doi(_embedded_doi(pdf_path))
-    if embedded is not None and embedded in doi_to_stem:
-        return doi_to_stem[embedded]
+    # (a) a self-identifying DOI that lands in the manifest. Membership
+    # decides, not position: the first candidate is often a journal-level DOI.
+    for candidate in _embedded_dois(pdf_path):
+        embedded = _normalise_doi(candidate)
+        if embedded is not None and embedded in doi_to_stem:
+            return doi_to_stem[embedded]
 
     # (b) filename stem matching the manifest directly.
     if pdf_path.stem in stems:
