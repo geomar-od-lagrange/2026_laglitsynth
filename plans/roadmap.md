@@ -193,18 +193,14 @@ Update this file when a plan is written, implemented, or archived.
   the collaborator to send PDFs back as downloaded, unrenamed. `EXPORT_GAP=1`
   runs the export from the runner after stage 5.
 
-- [Import matching tiers](done/import-matching-tiers.md) — driven by a
-  measurement over 26 real publisher PDFs
-  ([contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md)),
-  renamed with no filename discipline and fed to the real importer. Import now
-  gathers every self-identifying DOI — Info dictionary, XMP, title-page link
-  annotations, first-page text — and keeps the first that appears in
-  `pdf-manifest.csv`, instead of trusting the first string that looks like a
-  DOI: publisher Info dictionaries often carry the journal's DOI rather than
-  the article's. The DOI pattern gained the angle brackets AMS DOIs contain.
-  Filed PDFs went from 16 to 19 of 26, and no PDF now yields candidates
-  without the correct one among them. The remaining 7 embed no DOI anywhere
-  inspectable, which is the title-matching question and stays open.
+- [Import matching tiers](done/import-matching-tiers.md) — import gathers
+  every self-identifying DOI (Info dictionary, XMP, link annotations,
+  first-page text) and keeps the first metadata hit present in
+  `pdf-manifest.csv`; page text counts only when it names one work. The DOI
+  pattern accepts the angle brackets in AMS DOIs. Measured on real publisher
+  PDFs in
+  [contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md);
+  the residual that embeds no DOI is the title-matching question.
 
 ## In flight
 

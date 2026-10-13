@@ -10,7 +10,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pypdf import PdfWriter
 
-from laglitsynth.fulltext_retrieval.import_ import import_pdfs, read_manifest, run
+from laglitsynth.fulltext_retrieval.import_ import (
+    _ImportSummary,
+    import_pdfs,
+    read_manifest,
+    run,
+)
 from laglitsynth.fulltext_retrieval.models import PdfSource
 from laglitsynth.fulltext_retrieval.store import load_provenance, store_pdf_path
 from laglitsynth.layout import pdf_manifest_path
@@ -423,3 +428,113 @@ class TestAmsStyleDois:
         assert summary.copied == 1
         assert still_missing == 0
         assert load_provenance(data_dir)["https://openalex.org/W1"].stem == "W1"
+
+
+def _fake_reader(
+    *,
+    metadata: dict[str, str] | None = None,
+    xmp_text: str | None = None,
+    page_texts: list[str] | None = None,
+    annotation_uris: list[list[str]] | None = None,
+) -> MagicMock:
+    """Stand in a pypdf reader with the given sources populated.
+
+    ``annotation_uris`` is one list of link URIs per page; ``page_texts`` is
+    the extractable text per page.
+    """
+    page_texts = page_texts or [""]
+    annotation_uris = annotation_uris or [[] for _ in page_texts]
+    pages = []
+    for text, uris in zip(page_texts, annotation_uris, strict=True):
+        page = MagicMock()
+        page.extract_text.return_value = text
+        annots = []
+        for uri in uris:
+            annotation = MagicMock()
+            annotation.get_object.return_value = {"/A": {"/URI": uri}}
+            annots.append(annotation)
+        page.get.return_value = annots or None
+        pages.append(page)
+    reader = MagicMock()
+    reader.metadata = metadata
+    if xmp_text is None:
+        reader.xmp_metadata = None
+    else:
+        reader.xmp_metadata.stream.get_data.return_value = xmp_text.encode()
+    reader.pages = pages
+    return reader
+
+
+def _import_with(
+    reader: MagicMock, tmp_path: Path, rows: list[tuple[str, str, str]]
+) -> tuple[_ImportSummary, int, Path]:
+    import_dir = tmp_path / "incoming"
+    data_dir = tmp_path / "data"
+    manifest = tmp_path / "pdf-manifest.csv"
+    _write_pdf_manifest(manifest, rows)
+    _make_pdf(import_dir / "anything.pdf")
+    with patch("laglitsynth.fulltext_retrieval.import_.PdfReader", return_value=reader):
+        summary, still_missing = import_pdfs(
+            import_dir, manifest, data_dir, PdfSource.manual, overwrite=False
+        )
+    return summary, still_missing, data_dir
+
+
+class TestMetadataSources:
+    ROWS = [("https://openalex.org/W1", "W1", "10.1234/only-here")]
+
+    def test_a_pdf_carrying_only_an_xmp_doi_resolves(self, tmp_path: Path) -> None:
+        reader = _fake_reader(
+            xmp_text='<rdf:Description prism:doi="10.1234/only-here"/>'
+        )
+        summary, still_missing, data_dir = _import_with(reader, tmp_path, self.ROWS)
+        assert summary.copied == 1
+        assert still_missing == 0
+        assert load_provenance(data_dir)["https://openalex.org/W1"].stem == "W1"
+
+    def test_a_pdf_carrying_only_a_link_annotation_doi_resolves(
+        self, tmp_path: Path
+    ) -> None:
+        reader = _fake_reader(annotation_uris=[["https://doi.org/10.1234/only-here"]])
+        summary, _, data_dir = _import_with(reader, tmp_path, self.ROWS)
+        assert summary.copied == 1
+        assert load_provenance(data_dir)["https://openalex.org/W1"].stem == "W1"
+
+    def test_a_link_annotation_on_the_second_page_is_read(self, tmp_path: Path) -> None:
+        # A cover sheet ahead of the title page: the first page has nothing.
+        reader = _fake_reader(
+            page_texts=["Cover sheet", "Title page"],
+            annotation_uris=[[], ["https://doi.org/10.1234/only-here"]],
+        )
+        summary, _, _ = _import_with(reader, tmp_path, self.ROWS)
+        assert summary.copied == 1
+
+
+class TestTextTierAmbiguity:
+    ROWS = [
+        ("https://openalex.org/W1", "W1", "10.1234/original"),
+        ("https://openalex.org/W2", "W2", "10.1234/correction"),
+    ]
+
+    def test_two_manifest_dois_on_page_one_are_not_guessed_between(
+        self, tmp_path: Path
+    ) -> None:
+        # A correction notice names itself and the paper it corrects.
+        reader = _fake_reader(
+            page_texts=["Correction to: 10.1234/original\nThis notice: 10.1234/correction"]
+        )
+        summary, still_missing, _ = _import_with(reader, tmp_path, self.ROWS)
+        assert summary.copied == 0
+        assert summary.skipped_unmatched == ["anything.pdf"]
+        assert still_missing == 2
+
+    def test_a_metadata_doi_settles_what_page_text_leaves_ambiguous(
+        self, tmp_path: Path
+    ) -> None:
+        reader = _fake_reader(
+            metadata={"/Subject": "doi:10.1234/correction"},
+            page_texts=["Correction to: 10.1234/original\nThis notice: 10.1234/correction"],
+        )
+        summary, _, data_dir = _import_with(reader, tmp_path, self.ROWS)
+        assert summary.copied == 1
+        assert load_provenance(data_dir)["https://openalex.org/W2"].stem == "W2"
