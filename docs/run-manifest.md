@@ -1,102 +1,67 @@
-# Run manifest
+# Run manifest and the `data/` layout
 
-One file, `data/manifest.json`, pins what a review is: the queries it ran, the
-shared run-id, and an append-only log of what each stage read and wrote. Stages
-resolve their inputs from it, so paths stop being carried between invocations by
-hand.
+A review is a `data/` directory with a fixed layout and one
+`data/manifest.json`. Every stage reads its inputs from, and writes its
+outputs to, a conventional path under `--data-dir`, so an invocation normally
+names no paths at all. The one value the layout cannot derive is the run-id
+leaf that stages 3, 7, and 8 write under, and the manifest carries that.
 
 ## The file
 
-A typed [`RunManifest`](../src/laglitsynth/manifest.py), written through the
-same [`io.write_meta`](../src/laglitsynth/io.py) every `*-meta.json` sidecar
-uses:
-
-| Field | Meaning |
-|---|---|
-| `run` | The `RunMeta` of the mint event: tool, version, timestamp |
-| `run_id` | The shared leaf under `<stage>/<run-id>/` for stages 3, 7, and 8 |
-| `queries` | The search terms this review ran |
-| `data_dir` | The project root marker |
-| `stages` | Append-only; one `StageEntry` per stage invocation |
-
-Each `StageEntry` records the stage's CLI subcommand name, an ISO-8601 UTC
-timestamp, its resolved `inputs` by logical name, its `output`, and its
-`meta_path` when it writes a sidecar. A re-run appends rather than rewriting, so
-the file is a lineage log and not a current-state snapshot. `latest_output`
-reads it backward, which makes the last entry for a stage its current output.
-
-`output` is always the path a downstream stage would pass as its own input flag.
-Stage 3 records `verdicts.jsonl`, not the run-id directory holding it, because
-`fulltext-retrieval` names that file.
-
-## Starting a review
+A typed [`RunManifest`](../src/laglitsynth/manifest.py) with three fields:
+`run` (the `RunMeta` of the mint event), `run_id`, and `queries` (the search
+terms the review ran). It is written once and never rewritten, so it is safe
+to copy between machines in either direction.
 
 ```sh
 laglitsynth manifest-init "Lagrangian particle tracking" --data-dir data
 ```
 
-This mints the run-id, records the queries, and writes the manifest with an
-empty stage log. It refuses to overwrite an existing manifest: a review is
-initialised once. `generate-run-id` remains for ad-hoc use.
+`manifest-init` mints the run-id and refuses to overwrite an existing
+manifest. The runner ([run-pipeline.sh](../scripts/run-pipeline.sh)) calls it
+when `$ROOT/manifest.json` is absent, so a review driven by the runner never
+needs it typed.
 
-## How a stage resolves its inputs
+## The layout
 
-Every wired stage follows one rule, in
-[`resolve_input`](../src/laglitsynth/manifest.py):
+[`layout.py`](../src/laglitsynth/layout.py) is the one place the conventional
+paths are spelled out. Under `<data-dir>/`:
 
-1. An explicit flag wins. An invocation that passes every path behaves exactly
-   as it did before the manifest existed.
-2. Otherwise the last entry for the named upstream stage supplies the path.
-3. Otherwise the stage exits with the same required-flag error as before,
-   naming the flag.
-
-A manifest that names a path absent on this disk is an error naming the
-manifest, never a silent skip. That is the case where `data/manifest.json`
-arrives on a second machine ahead of the data it describes.
-
-`--run-id` resolves the same way through `resolve_run_id`: the flag, else the
-manifest's `run_id`, else a fresh one.
-
-A stage records its own entry through `record_stage` when the run is finished.
-Where a review has no manifest, `record_stage` does nothing and no stage
-behaves differently — the manifest is additive.
-
-## How paths are stored
-
-A path under the working directory is stored relative to it, so a manifest
-written on a laptop resolves on NESH where the checkout sits at a different
-absolute location. This is why the project's run-from-root contract matters:
-run every stage from the project root, and `data/...` is what lands in the
-file.
-
-A path outside the working directory has no project-relative form and is
-stored as given. The folder a collaborator returned is the normal case, and
-it is recorded as an input to `fulltext-retrieval-import` for the record
-rather than for later resolution.
-
-## Wired stages
-
-| Stage | Resolves | Records as `output` |
+| Stage | Reads | Writes |
 |---|---|---|
-| `catalogue-dedup` | `--input` from `catalogue-fetch` | `deduplicated.jsonl` |
-| `screening-abstracts` | catalogue from `catalogue-dedup` | `verdicts.jsonl` |
-| `fulltext-retrieval` | catalogue, screening verdicts | the `pdfs/` store |
-| `fulltext-retrieval-export` | catalogue, screening verdicts | the bundle directory |
-| `fulltext-retrieval-import` | `--manifest` from the export bundle | the `pdfs/` store |
-| `fulltext-eligibility` | catalogue, screening verdicts, extractions | `verdicts.jsonl` |
-| `extraction-codebook` | catalogue, eligibility verdicts, extractions | `records.jsonl` |
+| `catalogue-fetch` | — | `catalogue-fetch/<slug>_<timestamp>.jsonl` |
+| `catalogue-dedup` | `catalogue-fetch/*.jsonl` | `catalogue-dedup/deduplicated.jsonl` |
+| `screening-abstracts` | `catalogue-dedup/deduplicated.jsonl` | `screening-abstracts/<run-id>/verdicts.jsonl` |
+| `fulltext-retrieval` | the catalogue, `screening-abstracts/<run-id>/verdicts.jsonl` | `pdfs/` |
+| `fulltext-retrieval-export` | the same pair | `pdfs/export/` |
+| `fulltext-retrieval-import` | `pdfs/export/pdf-manifest.csv` | `pdfs/` |
+| `fulltext-extraction` | `pdfs/` | `fulltext-extraction/extraction.jsonl` |
+| `fulltext-eligibility` | the catalogue, the screening verdicts, `fulltext-extraction/extraction.jsonl` | `fulltext-eligibility/<run-id>/verdicts.jsonl` |
+| `extraction-codebook` | the catalogue, `fulltext-eligibility/<run-id>/verdicts.jsonl`, the extractions | `extraction-codebook/<run-id>/records.jsonl` |
 
-`catalogue-fetch` and `fulltext-extraction` do not record entries yet, so the
-inputs that would resolve from them still have to be passed. Every other edge
-resolves.
+Every input flag stays available as an override and wins when passed. An
+omitted flag takes the conventional path; if that path does not exist the
+stage exits before doing any work, naming the upstream stage to run and the
+flag to pass instead (`… not found; run catalogue-dedup first or pass
+--catalogue`).
 
-`fulltext-retrieval-import` keeps `--import-dir` required. No upstream stage
-knows which folder a collaborator sent back.
+## The run-id
+
+`--run-id` resolves the same way on every stage that writes or reads a
+`<run-id>/` leaf: the flag wins, else the manifest's `run_id`, else the stage
+exits asking for one. No stage mints a run-id on its own, because a leaf
+nobody else knows about is exactly the divergence the manifest exists to
+prevent. `generate-run-id` remains for ad-hoc use with an explicit `--run-id`.
+
+One run-id per review means a re-run of `screening-abstracts` without
+`--run-id` writes into the same run directory and replaces its
+`verdicts.jsonl`; the stage says so on stderr when that is about to happen.
+Pass `--run-id` to keep an earlier run alongside, and pass the same `--run-id`
+to the stages that read it.
 
 ## The collaborator handoff
 
-The manifest is what reduces the handoff to two commands. Once a review is
-initialised and screening has run:
+Once screening and retrieval have run, the handoff is two commands:
 
 ```sh
 laglitsynth fulltext-retrieval-export --data-dir data
@@ -104,18 +69,12 @@ laglitsynth fulltext-retrieval-export --data-dir data
 laglitsynth fulltext-retrieval-import --import-dir ~/returned --source manual --data-dir data
 ```
 
-Both append their entry, so the manifest also answers which selection was sent
-and which import filled it. See
-[fulltext-retrieval.md](fulltext-retrieval.md) for the bundle contents.
+See [fulltext-retrieval.md](fulltext-retrieval.md) for the bundle contents
+and how import matches returned files.
 
 ## Across machines
 
 The manifest travels with `data/` under rsync, so the run-id crosses machines
-with the data rather than in someone's shell history. A collaborator who
-receives the catalogue and the verdicts receives the lineage that produced
-them. See [cross-machine.md](cross-machine.md) for which parts of `data/` are
-safe to sync in which direction.
-
-The manifest carries the shared run-id that makes a cross-machine merge
-addressable. Merging two machines' verdicts is a separate problem and is not
-what this file does.
+with the data rather than in someone's shell history. Because it is written
+once, it has no sync direction to get wrong. See
+[cross-machine.md](cross-machine.md) for the rules on the rest of `data/`.

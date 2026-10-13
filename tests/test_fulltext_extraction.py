@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import httpx
+import pytest
 
 from laglitsynth.fulltext_extraction.extract import run
 
@@ -174,3 +175,55 @@ class TestInvalidStemSkipped:
         meta = json.loads(meta_path.read_text())
         assert meta["invalid_stem_count"] == 1
         assert meta["extracted_count"] == 1
+
+
+class TestConventionalPaths:
+    def _args(self, data_dir: Path) -> MagicMock:
+        args = MagicMock()
+        args.pdf_dir = None
+        args.output_dir = None
+        args.data_dir = data_dir
+        args.grobid_url = "http://localhost:8070"
+        args.timeout = 120.0
+        args.skip_existing = False
+        args.consolidate_citations = "0"
+        return args
+
+    def test_data_dir_alone_reads_pdfs_and_writes_extraction_dir(
+        self, tmp_path: Path
+    ) -> None:
+        data_dir = tmp_path / "data"
+        (data_dir / "pdfs").mkdir(parents=True)
+        (data_dir / "pdfs" / "W1234.pdf").write_bytes(b"%PDF-1.4 fake")
+
+        preflight_client_mock, paper_client_mock = _patch_clients(_fake_tei_bytes())
+
+        def _make_client(timeout: float) -> MagicMock:
+            if timeout == 5.0:
+                return preflight_client_mock
+            return paper_client_mock
+
+        with patch(
+            "laglitsynth.fulltext_extraction.extract.httpx.Client",
+            side_effect=_make_client,
+        ):
+            run(self._args(data_dir))
+
+        output_dir = data_dir / "fulltext-extraction"
+        lines = [
+            l
+            for l in (output_dir / "extraction.jsonl").read_text().splitlines()
+            if l.strip()
+        ]
+        assert [json.loads(l)["work_id"] for l in lines] == [
+            "https://openalex.org/W1234"
+        ]
+        assert (output_dir / "tei" / "W1234.tei.xml").exists()
+        assert (output_dir / "extraction-meta.json").exists()
+
+    def test_missing_pdf_dir_names_upstream_and_flag(self, tmp_path: Path) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            run(self._args(tmp_path / "data"))
+        msg = str(exc_info.value)
+        assert "run fulltext-retrieval first" in msg
+        assert "--pdf-dir" in msg

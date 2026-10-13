@@ -178,32 +178,20 @@ Update this file when a plan is written, implemented, or archived.
   gains the two missing keys. Deferred: a sweep/matrix driver (investigation
   direction 4).
 
-- [Run manifest](done/run-manifest.md) — one typed `RunManifest` at
-  `data/manifest.json` pinning the review's queries, the shared run-id, and an
-  append-only per-stage input→output log. `manifest-init` mints a review;
-  every wired stage resolves an omitted input flag and `--run-id` from the log
-  (flag wins, else the manifest, else the previous required-flag error) and
-  records its own entry. `catalogue-dedup`, `screening-abstracts`,
-  `fulltext-retrieval`, `fulltext-retrieval-export`, `fulltext-retrieval-import`,
-  `fulltext-eligibility`, and `extraction-codebook` are wired;
-  `catalogue-fetch` and `fulltext-extraction` are the remaining two. The
-  manifest is additive: a fully-flagged invocation is unchanged, and
-  `record_stage` is a no-op where a review has none. Paths store relative to
-  the project root when they sit under it, so a manifest resolves in a
-  checkout at a different absolute location. See
-  [run-manifest.md](../docs/run-manifest.md).
+- [Run manifest](done/run-manifest.md) — `data/manifest.json` is a typed
+  `RunManifest {run, run_id, queries}` written once by `manifest-init`. Every
+  stage defaults its input flags to the conventional path under `--data-dir`
+  ([`layout.py`](../src/laglitsynth/layout.py)) and exits naming the upstream
+  stage when that path is missing; `--run-id` resolves flag, else manifest,
+  else exit, and no stage mints its own. The runner creates the manifest when
+  absent and passes no paths. See [run-manifest.md](../docs/run-manifest.md).
 
 - [Collaborator handoff loop](done/collaborator-handoff-loop.md) — the DOI
-  handoff is now two commands: `fulltext-retrieval-export --data-dir data`
-  writes the bundle, and `fulltext-retrieval-import --import-dir <folder>
-  --source manual --data-dir data` ingests what comes back, both resolving
-  their paths from the manifest. The bundle gained `title`/`year` columns on
-  `pdf-manifest.csv`, a `no-doi.csv` worklist for the works `dois.txt` cannot
-  represent, and a `README.md` that travels with it. `EXPORT_GAP=1` runs the
-  export from the runner, so `STOP_AFTER_STAGE=5 EXPORT_GAP=1` is the whole
-  handoff run. The `title`/`year` columns are the precursor for the
-  title-matching import tier in
-  [contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md).
+  handoff is `fulltext-retrieval-export` then `fulltext-retrieval-import
+  --import-dir <folder> --source manual`. The bundle carries `title`/`year`
+  on `pdf-manifest.csv`, a `no-doi.csv` worklist, and a `README.md` that asks
+  the collaborator to send PDFs back as downloaded, unrenamed. `EXPORT_GAP=1`
+  runs the export from the runner after stage 5.
 
 ## In flight
 
@@ -212,10 +200,10 @@ Update this file when a plan is written, implemented, or archived.
 
 ## Queued — ready to plan
 
-Nothing queued. The next candidates are the two unwired manifest stages
-(`catalogue-fetch`, `fulltext-extraction`) and the import matching tiers in
-[contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md),
-which wait on evidence from a real collaborator return.
+Title-based import matching for returned PDFs that embed no DOI
+([contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md)),
+tuned against the measured publisher-PDF corpus rather than an invented
+threshold.
 
 ## Deferred until pipeline is feature-complete
 

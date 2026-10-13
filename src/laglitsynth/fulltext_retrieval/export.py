@@ -15,10 +15,9 @@ bundle a collaborator can act on through their own institutional access:
 - ``README.md`` — what the bundle is, what each file is for, and what to
   send back, filled in from a template with the work count and export date.
 
-``--catalogue`` and ``--screening-verdicts`` fall back to
-``data/manifest.json`` when omitted, resolving to the last
-``catalogue-dedup`` and ``screening-abstracts`` entries respectively — see
-``laglitsynth.manifest``.
+``--catalogue`` and ``--screening-verdicts`` default to their conventional
+paths under ``--data-dir``; the verdicts path takes the run-id from
+``data/manifest.json`` (``laglitsynth.layout``).
 """
 
 from __future__ import annotations
@@ -35,14 +34,7 @@ from laglitsynth.fulltext_retrieval.models import PdfSource
 from laglitsynth.fulltext_retrieval.retrieve import _DOI_PREFIX_RE, _active_works
 from laglitsynth.fulltext_retrieval.store import load_provenance
 from laglitsynth.ids import work_id_to_filename
-from laglitsynth.manifest import record_stage, resolve_input
-
-DEFAULT_EXPORT_SUBDIR = "pdfs/export"
-
-# The round-trip key ``fulltext-retrieval-import`` reads back, appended to
-# the manifest's ``fulltext-retrieval-export`` output (the bundle directory)
-# when ``--manifest`` is omitted there.
-PDF_MANIFEST_FILENAME = "pdf-manifest.csv"
+from laglitsynth.layout import PDF_MANIFEST_FILENAME, export_dir, resolve_screening_inputs
 
 
 def _doi_url(doi: str) -> str:
@@ -90,44 +82,51 @@ def _year_cell(work: Work) -> str:
 _README_TEMPLATE = """\
 # PDF handoff bundle
 
-Exported {export_date}. {work_count} works still need a PDF ({doi_count} \
-with a DOI, {no_doi_count} without).
+Exported {export_date}. {work_count} works still need a PDF{no_doi_clause}.
 
 ## What's in this folder
 
-- `dois.txt` — one `https://doi.org/...` link per DOI-bearing work. Open
+- `dois.txt` — one `https://doi.org/...` link per work that has a DOI. Open
   each link through your institution's access and download the PDF.
-- `no-doi.csv` — the {no_doi_count} works with no DOI, so they can't go
-  through `dois.txt`. Search for each by its `title` and `year` column.
-- `missing.ris` — the same missing works as one RIS file, importable into
-  a reference manager (Zotero, EndNote, ...) instead of working link by
-  link.
-- `pdf-manifest.csv` — the full list, read back by whoever imports your
-  PDFs into the pipeline. Nothing for you to edit.
+- `missing.ris` — the same works as one RIS file, importable into a
+  reference manager (Zotero, EndNote, ...) instead of working link by link.
+{no_doi_bullet}\
+- `pdf-manifest.csv` — the full list, with title and year, for reference.
 - `README.md` — this file.
 
 ## Sending PDFs back
 
-Return PDFs in either of these forms:
+Put the PDFs in one folder and send it back as it is. No renaming is needed:
+the import reads each PDF's DOI out of the file itself and matches it to the
+list. Any subset of the works is fine — send back whatever you found.
 
-1. A folder of PDFs each named `<stem>.pdf`, where `<stem>` is the `stem`
-   column in `pdf-manifest.csv` or `no-doi.csv` (also given as
-   `expected_filename` in both files).
-2. A folder of PDFs with any filenames, as long as each PDF carries its
-   DOI in its own metadata or on the first page of text, as most publisher
-   PDFs do. Import reads the DOI out of the file to match it.
+If your reference manager can export a CSV with a `filename` and a `doi`
+column for the PDFs, drop it in the same folder; it is used as a fallback
+for any PDF whose DOI cannot be read from the file.
+"""
 
-Either form works for any subset of the missing works — send back whatever
-you found.
+_NO_DOI_BULLET = """\
+- `no-doi.csv` — the {no_doi_count} {work_word} with no DOI, which `dois.txt`
+  cannot list. Search for each by its `title` and `year`.
 """
 
 
 def _readme_content(*, work_count: int, doi_count: int, export_date: str) -> str:
+    no_doi_count = work_count - doi_count
     return _README_TEMPLATE.format(
         export_date=export_date,
         work_count=work_count,
-        doi_count=doi_count,
-        no_doi_count=work_count - doi_count,
+        no_doi_clause=(
+            f" ({doi_count} with a DOI, {no_doi_count} without)" if no_doi_count else ""
+        ),
+        no_doi_bullet=(
+            _NO_DOI_BULLET.format(
+                no_doi_count=no_doi_count,
+                work_word="work" if no_doi_count == 1 else "works",
+            )
+            if no_doi_count
+            else ""
+        ),
     )
 
 
@@ -202,18 +201,20 @@ def build_subparser(
         "--catalogue",
         type=Path,
         default=None,
-        help=(
-            "Deduplicated catalogue JSONL (data/catalogue-dedup/deduplicated.jsonl). "
-            "Resolved from data/manifest.json's catalogue-dedup entry when omitted."
-        ),
+        help="Deduplicated catalogue JSONL (default: <data-dir>/catalogue-dedup/deduplicated.jsonl).",
     )
     parser.add_argument(
         "--screening-verdicts",
         type=Path,
         default=None,
+        help="Stage 3 verdicts JSONL (default: <data-dir>/screening-abstracts/<run-id>/verdicts.jsonl).",
+    )
+    parser.add_argument(
+        "--run-id",
+        default=None,
         help=(
-            "Stage 3 verdicts JSONL (data/screening-abstracts/<run-id>/verdicts.jsonl). "
-            "Resolved from data/manifest.json's screening-abstracts entry when omitted."
+            "Screening run to read verdicts from (default: the run_id in "
+            "<data-dir>/manifest.json). Unused when --screening-verdicts is given."
         ),
     )
     parser.add_argument(
@@ -240,23 +241,12 @@ def build_subparser(
 
 def run(args: argparse.Namespace) -> None:
     data_dir: Path = args.data_dir
-    export_dir: Path = (
-        args.export_dir
-        if args.export_dir is not None
-        else data_dir / DEFAULT_EXPORT_SUBDIR
+    bundle_dir: Path = (
+        args.export_dir if args.export_dir is not None else export_dir(data_dir)
     )
 
-    catalogue = resolve_input(
-        data_dir,
-        args.catalogue,
-        upstream_stage="catalogue-dedup",
-        flag_name="--catalogue",
-    )
-    screening_verdicts = resolve_input(
-        data_dir,
-        args.screening_verdicts,
-        upstream_stage="screening-abstracts",
-        flag_name="--screening-verdicts",
+    catalogue, screening_verdicts = resolve_screening_inputs(
+        data_dir, args.catalogue, args.screening_verdicts, args.run_id
     )
 
     provenance = load_provenance(data_dir)
@@ -274,18 +264,10 @@ def run(args: argparse.Namespace) -> None:
         if w.id not in have_pdf
     ]
 
-    count = write_export(selection, export_dir)
+    count = write_export(selection, bundle_dir)
     with_doi = sum(1 for w in selection if w.doi is not None)
     print(
-        f"Exported {count} missing works to {export_dir} "
+        f"Exported {count} missing works to {bundle_dir} "
         f"({with_doi} with a DOI in dois.txt).",
         file=sys.stderr,
-    )
-
-    record_stage(
-        data_dir,
-        stage="fulltext-retrieval-export",
-        inputs={"catalogue": catalogue, "screening_verdicts": screening_verdicts},
-        output=export_dir,
-        meta_path=None,
     )

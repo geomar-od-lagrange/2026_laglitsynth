@@ -15,7 +15,7 @@ from pathlib import Path
 from laglitsynth.catalogue_dedup.models import TOOL_NAME, DeduplicationMeta, DroppedRecord
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.io import JsonlReadStats, read_jsonl, write_jsonl, write_meta
-from laglitsynth.manifest import record_stage, resolve_input
+from laglitsynth.layout import catalogue_fetch_glob, dedup_dir
 from laglitsynth.models import RunMeta
 
 _DOI_PREFIXES = re.compile(
@@ -212,18 +212,19 @@ def build_subparser(
     parser.add_argument(
         "--input",
         type=str,
-        required=False,
         default=None,
         nargs="+",
         metavar="GLOB_OR_PATH",
         help=(
             "One or more input JSONL files or glob patterns "
-            '(e.g. "data/catalogue-fetch/*.jsonl"). Falls back to the '
-            "manifest's catalogue-fetch output when omitted."
+            "(default: <data-dir>/catalogue-fetch/*.jsonl)."
         ),
     )
     parser.add_argument(
-        "--output-dir", type=Path, required=True, help="Output directory"
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Output directory (default: <data-dir>/catalogue-dedup/)",
     )
     parser.add_argument(
         "--data-dir",
@@ -237,27 +238,28 @@ def build_subparser(
 
 def run(args: argparse.Namespace) -> None:
     data_dir: Path = Path(args.data_dir)
-    output_dir: Path = args.output_dir
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir: Path = (
+        args.output_dir if args.output_dir is not None else dedup_dir(data_dir)
+    )
+    input_patterns: list[str] = (
+        args.input if args.input is not None else [catalogue_fetch_glob(data_dir)]
+    )
 
     t0 = time.monotonic()
     stats = JsonlReadStats()
 
-    input_patterns: list[str]
-    if args.input is None:
-        resolved = resolve_input(
-            data_dir, None, upstream_stage="catalogue-fetch", flag_name="--input"
-        )
-        input_patterns = [str(resolved)]
-    else:
-        input_patterns = args.input
-
     works: list[Work] = []
-    matched_inputs: list[Path] = []
+    matched = 0
     for path in _iter_inputs(input_patterns):
-        matched_inputs.append(path)
+        matched += 1
         works.extend(read_jsonl(path, Work, stats))
+    if matched == 0:
+        raise SystemExit(
+            f"no catalogue matches {' '.join(input_patterns)}; run "
+            f"catalogue-fetch first or pass --input"
+        )
 
+    output_dir.mkdir(parents=True, exist_ok=True)
     input_count = len(works)
 
     survivors, dropped_records = deduplicate(works)
@@ -274,9 +276,8 @@ def run(args: argparse.Namespace) -> None:
         run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
         validation_skipped=stats.skipped,
     )
-    dedup_meta_path = output_dir / "dedup-meta.json"
     write_meta(
-        dedup_meta_path,
+        output_dir / "dedup-meta.json",
         DeduplicationMeta(
             run=run_meta,
             input_count=input_count,
@@ -284,14 +285,6 @@ def run(args: argparse.Namespace) -> None:
             duplicates_removed=len(dropped_records),
             by_rule=by_rule,
         ),
-    )
-
-    record_stage(
-        data_dir,
-        stage="catalogue-dedup",
-        inputs={f"input_{i}": path for i, path in enumerate(matched_inputs)},
-        output=output_dir / "deduplicated.jsonl",
-        meta_path=dedup_meta_path,
     )
 
     elapsed = time.monotonic() - t0

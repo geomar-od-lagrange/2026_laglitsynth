@@ -1,11 +1,10 @@
-"""Run manifest: the one file that pins a review's queries, run-id, and
-the resolved input->output path chain per stage.
+"""Run manifest: the one file that pins a review's queries and run-id.
 
-See plans/run-manifest.md for the design. This module holds the typed
-models (``RunManifest``, ``StageEntry``) and the read/append/lookup
-helpers (``load_manifest``, ``append_stage``, ``latest_output``) that
-every run-id-aware stage will use to relay paths instead of a
-human-carried ``--input``/``--run-id`` handoff.
+``data/manifest.json`` is written once by ``manifest-init`` and never
+rewritten. Stages 3, 7, and 8 write under a ``<run-id>/`` leaf, and every
+stage that reads one of those leaves resolves the run-id from here when
+``--run-id`` is omitted. Everything else a stage needs is at a fixed path
+under ``--data-dir`` (``laglitsynth.layout``).
 """
 
 from __future__ import annotations
@@ -26,163 +25,41 @@ TOOL_NAME = "laglitsynth.manifest"
 MANIFEST_FILENAME = "manifest.json"
 
 
-class StageEntry(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    stage: str  # CLI subcommand name, e.g. "screening-abstracts"
-    run_at: str  # ISO-8601 UTC
-    inputs: dict[str, str]  # logical name -> resolved path
-    output: str  # the path/dir this stage wrote
-    meta_path: str | None  # the stage's own *-meta.json, when it writes one
-
-
 class RunManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run: RunMeta
     run_id: str  # the shared run-id leaf for stages 3/7/8
     queries: list[str]  # the search term(s) this review ran
-    data_dir: str  # repo-relative, the project root marker ("data")
-    stages: list[StageEntry]  # append-only; one entry per stage invocation
 
 
-def _manifest_path(data_dir: Path) -> Path:
+def manifest_path(data_dir: Path) -> Path:
     return data_dir / MANIFEST_FILENAME
-
-
-def portable(path: Path) -> str:
-    """Return ``path`` relative to the working directory where it sits under it.
-
-    The project contract is run-from-root with a fixed ``data/`` path (see
-    [cross-machine.md](../../docs/cross-machine.md)), so a path inside the
-    project stores as ``data/...`` and survives the move to a checkout at a
-    different absolute location. A path outside the working directory -- a
-    collaborator's drop folder, say -- has no project-relative form and is
-    stored as given.
-    """
-    try:
-        return str(path.resolve().relative_to(Path.cwd().resolve()))
-    except ValueError:
-        return str(path)
 
 
 def load_manifest(data_dir: Path) -> RunManifest | None:
     """Return the manifest at ``data_dir/manifest.json``, or ``None`` if absent."""
-    path = _manifest_path(data_dir)
+    path = manifest_path(data_dir)
     if not path.exists():
         return None
     return RunManifest.model_validate_json(path.read_text())
 
 
-def append_stage(data_dir: Path, entry: StageEntry) -> RunManifest:
-    """Append ``entry`` to the manifest's stage log and rewrite the file.
-
-    Reads the existing manifest at ``data_dir/manifest.json`` (which must
-    already exist -- a review is initialised via ``manifest-init`` before
-    any stage can append to it), appends ``entry``, rewrites via
-    ``write_meta``, and returns the updated manifest.
-    """
-    manifest = load_manifest(data_dir)
-    if manifest is None:
-        raise FileNotFoundError(
-            f"no manifest at {_manifest_path(data_dir)}; run `laglitsynth "
-            f"manifest-init` first"
-        )
-    updated = manifest.model_copy(update={"stages": [*manifest.stages, entry]})
-    write_meta(_manifest_path(data_dir), updated)
-    return updated
-
-
-def latest_output(manifest: RunManifest, stage: str) -> str | None:
-    """Return the ``output`` of the last ``StageEntry`` matching ``stage``.
-
-    ``None`` when the stage has never appended an entry.
-    """
-    for entry in reversed(manifest.stages):
-        if entry.stage == stage:
-            return entry.output
-    return None
-
-
-def resolve_input(
-    data_dir: Path,
-    flag_value: Path | None,
-    *,
-    upstream_stage: str,
-    flag_name: str,
-    subpath: str | None = None,
-) -> Path:
-    """Return the path for one input flag, falling back to the manifest.
-
-    An explicit flag always wins, so an invocation that passes every path
-    behaves exactly as it did before the manifest existed. When the flag is
-    omitted, the last ``StageEntry`` for ``upstream_stage`` supplies the
-    path. Raises ``SystemExit`` when neither source has one, and when the
-    manifest names a path that is absent on this disk -- a manifest that
-    crossed machines ahead of its data is an operator-visible error, never a
-    silent skip.
-
-    ``subpath`` names a file inside the recorded output, for the stages whose
-    upstream records a directory while they consume one file from it.
-    """
-    if flag_value is not None:
-        return flag_value
-    manifest = load_manifest(data_dir)
-    if manifest is None:
-        raise SystemExit(
-            f"{flag_name} is required (no manifest at {_manifest_path(data_dir)} "
-            f"to resolve it from; run `laglitsynth manifest-init` to start one)"
-        )
-    recorded = latest_output(manifest, upstream_stage)
-    if recorded is None:
-        raise SystemExit(
-            f"{flag_name} is required: {_manifest_path(data_dir)} has no "
-            f"{upstream_stage} entry to resolve it from"
-        )
-    path = Path(recorded) if subpath is None else Path(recorded) / subpath
-    if not path.exists():
-        raise SystemExit(
-            f"{flag_name} resolved to {path} from {_manifest_path(data_dir)}, "
-            f"but that path does not exist here"
-        )
-    return path
-
-
 def resolve_run_id(data_dir: Path, flag_value: str | None) -> str:
-    """Return the run-id: the flag, else the manifest's, else a fresh one."""
+    """Return the run-id: the flag, else the manifest's, else exit.
+
+    Nothing is minted here. A stage that silently invented a run-id would
+    write a leaf no other stage can find, which is the divergence the
+    manifest exists to prevent.
+    """
     if flag_value is not None:
         return flag_value
     manifest = load_manifest(data_dir)
-    if manifest is not None:
-        return manifest.run_id
-    return generate_run_id()
-
-
-def record_stage(
-    data_dir: Path,
-    *,
-    stage: str,
-    inputs: dict[str, Path],
-    output: Path,
-    meta_path: Path | None = None,
-) -> None:
-    """Append this stage's entry to the manifest, if the review has one.
-
-    A run with no ``data/manifest.json`` records nothing and reports nothing:
-    the manifest is additive, and every invocation that predates it keeps
-    working unchanged. ``output`` is the path a downstream stage would pass
-    as its own input flag.
-    """
-    if load_manifest(data_dir) is None:
-        return
-    append_stage(
-        data_dir,
-        StageEntry(
-            stage=stage,
-            run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
-            inputs={name: portable(path) for name, path in inputs.items()},
-            output=portable(output),
-            meta_path=portable(meta_path) if meta_path is not None else None,
-        ),
-    )
+    if manifest is None:
+        raise SystemExit(
+            f"no run-id: pass --run-id or run `laglitsynth manifest-init` "
+            f"to create {manifest_path(data_dir)}"
+        )
+    return manifest.run_id
 
 
 def build_subparser(
@@ -190,7 +67,7 @@ def build_subparser(
 ) -> argparse.ArgumentParser:
     parser = subparsers.add_parser(
         "manifest-init",
-        help="Mint a run-id and write the initial data/manifest.json for a review.",
+        help="Mint a run-id and write data/manifest.json for a review.",
     )
     parser.add_argument(
         "queries",
@@ -209,11 +86,11 @@ def build_subparser(
 
 def run(args: argparse.Namespace) -> None:
     data_dir: Path = args.data_dir
-    manifest_path = _manifest_path(data_dir)
+    path = manifest_path(data_dir)
 
-    if manifest_path.exists():
+    if path.exists():
         raise SystemExit(
-            f"{manifest_path} already exists; refusing to clobber it "
+            f"{path} already exists; refusing to clobber it "
             f"(a review is initialised once)"
         )
 
@@ -226,8 +103,6 @@ def run(args: argparse.Namespace) -> None:
         ),
         run_id=run_id,
         queries=list(args.queries),
-        data_dir=portable(data_dir),
-        stages=[],
     )
-    write_meta(manifest_path, manifest)
-    print(f"Initialised {manifest_path} (run_id={run_id})", file=sys.stderr)
+    write_meta(path, manifest)
+    print(f"Initialised {path} (run_id={run_id})", file=sys.stderr)

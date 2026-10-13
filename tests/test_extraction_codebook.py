@@ -19,8 +19,7 @@ import pytest
 from openai import APIConnectionError, APITimeoutError
 from pydantic import BaseModel
 
-from datetime import UTC, datetime
-
+from laglitsynth import layout
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.extraction_codebook.codebook import CodebookContext
 from laglitsynth.extraction_codebook.extract import (
@@ -30,15 +29,14 @@ from laglitsynth.extraction_codebook.extract import (
 )
 from laglitsynth.fulltext_eligibility.models import EligibilityVerdict
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
-from laglitsynth.io import write_meta
-from laglitsynth.manifest import RunManifest, StageEntry, load_manifest
-from laglitsynth.models import RunMeta
 
 from conftest import (
     TEI_NS,
+    TEST_RUN_ID,
     _make_work,
     _mock_openai_response,
     _write_extractions_jsonl,
+    _write_manifest,
     _write_tei,
     _write_works_jsonl,
 )
@@ -1096,63 +1094,39 @@ def test_concurrency_one_uses_sequential_path(
     mock_tpe.assert_not_called()
 
 
-# --- run() manifest wiring ---
+# --- run() conventional input paths ---
 
 
-def _write_manifest(
-    tmp_path: Path,
-    *,
-    run_id: str,
-    catalogue: Path | None = None,
-    eligibility_verdicts: Path | None = None,
-) -> None:
-    def _entry(stage: str, output: Path) -> StageEntry:
-        return StageEntry(
-            stage=stage,
-            run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
-            inputs={},
-            output=str(output),
-            meta_path=None,
-        )
-
-    stages = []
-    if catalogue is not None:
-        stages.append(_entry("catalogue-dedup", catalogue))
-    if eligibility_verdicts is not None:
-        stages.append(_entry("fulltext-eligibility", eligibility_verdicts))
-
-    manifest = RunManifest(
-        run=RunMeta(
-            tool="laglitsynth.manifest",
-            run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
-            validation_skipped=0,
-        ),
-        run_id=run_id,
-        queries=["a query"],
-        data_dir="data",
-        stages=stages,
-    )
-    write_meta(tmp_path / "manifest.json", manifest)
-
-
-class TestManifestWiring:
-    def _setup_inputs(
-        self, tmp_path: Path, ctx: CodebookContext
-    ) -> tuple[Path, Path, Path, MagicMock]:
-        catalogue = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        extractions_path = tmp_path / "extraction.jsonl"
+class TestConventionalPaths:
+    def _layout(self, data_dir: Path, run_id: str = TEST_RUN_ID) -> None:
+        catalogue = layout.deduplicated_path(data_dir)
+        catalogue.parent.mkdir(parents=True, exist_ok=True)
         _write_works_jsonl(catalogue, [_make_work("W1", abstract="about oceans")])
+        verdicts_path = layout.eligibility_verdicts_path(data_dir, run_id)
+        verdicts_path.parent.mkdir(parents=True, exist_ok=True)
         _write_eligibility_verdicts_jsonl(
             verdicts_path, [EligibilityVerdict(work_id="W1", eligible=True)]
         )
-        _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
-        mock_client = _make_mock_client(
-            _valid_payload_json(ctx.payload_field_names)
-        )
-        return catalogue, verdicts_path, extractions_path, mock_client
+        extractions = layout.extractions_path(data_dir)
+        extractions.parent.mkdir(parents=True, exist_ok=True)
+        _write_full_text_for(extractions, extractions.parent, ["W1"])
 
-    def _run(self, args: argparse.Namespace, mock_client: MagicMock) -> None:
+    def _bare_args(self, data_dir: Path) -> argparse.Namespace:
+        args = _make_run_args(
+            data_dir,
+            catalogue=Path("unused"),
+            eligibility_verdicts=Path("unused"),
+            extractions=Path("unused"),
+        )
+        args.catalogue = None
+        args.eligibility_verdicts = None
+        args.extractions = None
+        args.extraction_output_dir = None
+        args.run_id = None
+        return args
+
+    def _run(self, args: argparse.Namespace, ctx: CodebookContext) -> None:
+        mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
         with (
             patch("laglitsynth.extraction_codebook.extract.preflight"),
             patch(
@@ -1164,122 +1138,82 @@ class TestManifestWiring:
 
             run(args)
 
-    def test_explicit_run_id_wins_over_manifest(
+    def _meta(self, data_dir: Path, run_id: str) -> dict[str, Any]:
+        out_dir = data_dir / layout.EXTRACTION_CODEBOOK_SUBDIR / run_id
+        meta: dict[str, Any] = json.loads(
+            (out_dir / "extraction-codebook-meta.json").read_text()
+        )
+        return meta
+
+    def test_omitted_flags_resolve_to_conventional_paths(
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
-        catalogue, verdicts_path, extractions_path, mock_client = self._setup_inputs(
-            tmp_path, ctx
+        self._layout(tmp_path)
+        _write_manifest(tmp_path)
+
+        self._run(self._bare_args(tmp_path), ctx)
+
+        meta = self._meta(tmp_path, TEST_RUN_ID)
+        assert meta["input_catalogue"] == str(layout.deduplicated_path(tmp_path))
+        assert meta["input_eligibility_verdicts"] == str(
+            layout.eligibility_verdicts_path(tmp_path, TEST_RUN_ID)
         )
+        assert meta["input_extractions"] == str(layout.extractions_path(tmp_path))
+        assert meta["input_count"] == 1
+
+    def test_explicit_flags_win(self, tmp_path: Path, ctx: CodebookContext) -> None:
+        self._layout(tmp_path)
         _write_manifest(tmp_path, run_id="from-manifest")
 
-        args = _make_run_args(
-            tmp_path,
-            catalogue=catalogue,
-            eligibility_verdicts=verdicts_path,
-            extractions=extractions_path,
-            run_id="explicit-run-id",
+        explicit_catalogue = tmp_path / "explicit-catalogue.jsonl"
+        _write_works_jsonl(explicit_catalogue, [_make_work("W1", abstract="abs")])
+        explicit_verdicts = tmp_path / "explicit-verdicts.jsonl"
+        _write_eligibility_verdicts_jsonl(
+            explicit_verdicts, [EligibilityVerdict(work_id="W1", eligible=True)]
         )
-        self._run(args, mock_client)
+        args = self._bare_args(tmp_path)
+        args.catalogue = explicit_catalogue
+        args.eligibility_verdicts = explicit_verdicts
+        args.run_id = "explicit-run-id"
+        self._run(args, ctx)
 
-        assert (tmp_path / "extraction-codebook" / "explicit-run-id").exists()
-        assert not (tmp_path / "extraction-codebook" / "from-manifest").exists()
-
-    def test_omitted_run_id_adopts_the_manifests(
-        self, tmp_path: Path, ctx: CodebookContext
-    ) -> None:
-        catalogue, verdicts_path, extractions_path, mock_client = self._setup_inputs(
-            tmp_path, ctx
-        )
-        _write_manifest(tmp_path, run_id="from-manifest-run")
-
-        args = _make_run_args(
-            tmp_path,
-            catalogue=catalogue,
-            eligibility_verdicts=verdicts_path,
-            extractions=extractions_path,
-            run_id="placeholder",
-        )
-        args.run_id = None
-        self._run(args, mock_client)
-
-        assert (tmp_path / "extraction-codebook" / "from-manifest-run").exists()
-
-    def test_omitted_inputs_adopt_latest_output(
-        self, tmp_path: Path, ctx: CodebookContext
-    ) -> None:
-        catalogue, verdicts_path, extractions_path, mock_client = self._setup_inputs(
-            tmp_path, ctx
-        )
-        _write_manifest(
-            tmp_path,
-            run_id="ignored",
-            catalogue=catalogue,
-            eligibility_verdicts=verdicts_path,
-        )
-
-        args = _make_run_args(
-            tmp_path,
-            catalogue=catalogue,
-            eligibility_verdicts=verdicts_path,
-            extractions=extractions_path,
-            run_id="resolved-run",
-        )
-        args.catalogue = None
-        args.eligibility_verdicts = None
-        self._run(args, mock_client)
-
-        out_dir = tmp_path / "extraction-codebook" / "resolved-run"
-        meta = json.loads((out_dir / "extraction-codebook-meta.json").read_text())
-        assert meta["input_catalogue"] == str(catalogue)
-        assert meta["input_eligibility_verdicts"] == str(verdicts_path)
-
-    def test_appends_stage_entry_with_resolved_paths(
-        self, tmp_path: Path, ctx: CodebookContext
-    ) -> None:
-        catalogue, verdicts_path, extractions_path, mock_client = self._setup_inputs(
-            tmp_path, ctx
-        )
-        _write_manifest(tmp_path, run_id="ignored")
-
-        args = _make_run_args(
-            tmp_path,
-            catalogue=catalogue,
-            eligibility_verdicts=verdicts_path,
-            extractions=extractions_path,
-            run_id="recorded-run",
-        )
-        self._run(args, mock_client)
-
-        manifest = load_manifest(tmp_path)
-        assert manifest is not None
-        entry = manifest.stages[-1]
-        assert entry.stage == "extraction-codebook"
-        assert entry.inputs == {
-            "catalogue": str(catalogue),
-            "eligibility_verdicts": str(verdicts_path),
-            "extractions": str(extractions_path),
-        }
-        out_dir = tmp_path / "extraction-codebook" / "recorded-run"
-        assert entry.output == str(out_dir / "records.jsonl")
-        assert entry.meta_path == str(out_dir / "extraction-codebook-meta.json")
-
-    def test_no_manifest_is_a_no_op_and_behaviour_is_unchanged(
-        self, tmp_path: Path, ctx: CodebookContext
-    ) -> None:
-        catalogue, verdicts_path, extractions_path, mock_client = self._setup_inputs(
-            tmp_path, ctx
-        )
-
-        args = _make_run_args(
-            tmp_path,
-            catalogue=catalogue,
-            eligibility_verdicts=verdicts_path,
-            extractions=extractions_path,
-            run_id="no-manifest-run",
-        )
-        self._run(args, mock_client)
-
-        assert not (tmp_path / "manifest.json").exists()
-        assert (
-            tmp_path / "extraction-codebook" / "no-manifest-run" / "records.jsonl"
+        assert not (
+            tmp_path / layout.EXTRACTION_CODEBOOK_SUBDIR / "from-manifest"
         ).exists()
+        meta = self._meta(tmp_path, "explicit-run-id")
+        assert meta["input_catalogue"] == str(explicit_catalogue)
+        assert meta["input_eligibility_verdicts"] == str(explicit_verdicts)
+
+    def test_missing_eligibility_verdicts_names_upstream_and_flag(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        self._layout(tmp_path)
+        layout.eligibility_verdicts_path(tmp_path, TEST_RUN_ID).unlink()
+        _write_manifest(tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            self._run(self._bare_args(tmp_path), ctx)
+        msg = str(exc_info.value)
+        assert "run fulltext-eligibility first" in msg
+        assert "--eligibility-verdicts" in msg
+
+    def test_missing_catalogue_names_upstream_and_flag(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        _write_manifest(tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            self._run(self._bare_args(tmp_path), ctx)
+        msg = str(exc_info.value)
+        assert "run catalogue-dedup first" in msg
+        assert "--catalogue" in msg
+
+    def test_no_manifest_and_no_run_id_exits(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        self._layout(tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            self._run(self._bare_args(tmp_path), ctx)
+        assert "--run-id" in str(exc_info.value)
+        assert not (tmp_path / layout.EXTRACTION_CODEBOOK_SUBDIR).exists()

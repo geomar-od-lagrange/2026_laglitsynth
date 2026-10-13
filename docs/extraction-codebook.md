@@ -208,9 +208,9 @@ phase 3 identifies which fields suffer from attention dilution.
 
 ```
 laglitsynth extraction-codebook \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    --eligibility-verdicts data/fulltext-eligibility/<run-id>/verdicts.jsonl \
-    --extractions data/fulltext-extraction/extraction.jsonl \
+    [--catalogue data/catalogue-dedup/deduplicated.jsonl] \
+    [--eligibility-verdicts data/fulltext-eligibility/<run-id>/verdicts.jsonl] \
+    [--extractions data/fulltext-extraction/extraction.jsonl] \
     [--extraction-output-dir data/fulltext-extraction/] \
     [--data-dir data/] [--run-id <iso>_<12hex>] \
     [--codebook examples/codebooks/lagrangian-oceanography.yaml] \
@@ -221,6 +221,9 @@ laglitsynth extraction-codebook \
 ```
 
 The resolved output directory is `<data-dir>/extraction-codebook/<run-id>/`.
+The three input flags default to the paths shown under `--data-dir`; an
+omitted flag whose default does not exist exits naming the upstream stage
+to run (see [run-manifest.md](run-manifest.md)).
 
 ### Arguments
 
@@ -230,7 +233,7 @@ The resolved output directory is `<data-dir>/extraction-codebook/<run-id>/`.
   bibliographic block the review export attaches to each record.
 - `--eligibility-verdicts`: the stage 7 verdict sidecar (`EligibilityVerdict`
   records). The stage joins this against the catalogue to build the eligible
-  work set. Path pattern: `data/fulltext-eligibility/<run-id>/verdicts.jsonl`.
+  work set. The default path uses the resolved `--run-id`.
 - `--extractions`: the extraction JSONL (`ExtractedDocument` records).
   Eligible works without a matching record are skipped (not processed,
   not counted).
@@ -240,7 +243,9 @@ The resolved output directory is `<data-dir>/extraction-codebook/<run-id>/`.
   [`tei-wrapper`](../plans/done/tei-wrapper.md) for why the path is
   stored relative.
 - `--data-dir`: bucket root for stage outputs (default: `data/`).
-- `--run-id`: run identifier. Default: a generated `<iso>_<12hex>`.
+- `--run-id`: run identifier, shared with the eligibility run whose verdicts
+  are read. Default: the `run_id` in `<data-dir>/manifest.json`; the stage
+  exits when neither is available.
 - `--codebook`: path to the codebook YAML carrying the LLM system
   prompt and the field list. Default:
   `examples/codebooks/lagrangian-oceanography.yaml`. The codebook
@@ -258,9 +263,7 @@ The resolved output directory is `<data-dir>/extraction-codebook/<run-id>/`.
   `prompt_sha256` differs from the hash the current invocation would
   produce, the run aborts with an error — mixing records from
   different prompt versions in one file would silently corrupt any
-  downstream analysis. Run-id'd dirs are fresh by default, so this
-  flag is meaningful only when paired with an explicit
-  `--run-id <existing>`.
+  downstream analysis.
 - `--max-records`: process only the first N works from the eligible
   catalogue.
 - `--dry-run`: print summaries to stderr without writing any output.

@@ -165,26 +165,6 @@ the string travels with `data/` under rsync instead of living in operator
 memory and shell history. An explicit `--run-id` still wins where a stage
 needs to target a different leaf. See [run-manifest.md](run-manifest.md).
 
-The manifest also records each stage's resolved inputs and output, so a
-machine that receives `data/` receives the lineage that produced it and can
-resolve its own inputs from it. Paths are stored relative to the project root
-where they sit under it, which is what lets a manifest move between checkouts
-at different absolute locations — one more reason to keep to the
-run-from-root contract above.
-
-## Syncing the manifest
-
-`data/manifest.json` is the one file under `data/` that is neither a bulk
-artifact nor per-run-id, and it is rewritten whole on every stage append. So
-it takes neither of the rules above: **never** sync it bidirectionally, and
-never union it. Treat it as authoritative-side-wins, the same as the
-per-run-id gate outputs, and copy it in one direction only.
-
-The consequence is worth stating plainly, because it is a real limitation. If
-NESH appends an eligibility entry while the laptop appends an extraction entry
-to the same review, whichever manifest is copied last replaces the other
-wholesale, and the entries recorded on the losing side are gone. The stages
-themselves are unaffected — their outputs are still on disk — but a stage that
-relied on resolving an omitted flag will then report a missing upstream entry,
-and the path has to be passed explicitly. Merging two machines' stage logs is
-the separate append-only-log problem, not something the manifest does today.
+The manifest is written once and never rewritten, so it is the one file under
+`data/` with no sync direction to get wrong: copy it with the rest of the
+tree, in either direction.

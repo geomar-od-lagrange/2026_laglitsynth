@@ -39,14 +39,19 @@ from laglitsynth.io import (
     read_jsonl,
     write_meta,
 )
-from laglitsynth.manifest import record_stage, resolve_input, resolve_run_id
+from laglitsynth.layout import (
+    ELIGIBILITY_SUBDIR,
+    extractions_path,
+    require_input,
+    resolve_screening_inputs,
+)
+from laglitsynth.manifest import resolve_run_id
 from laglitsynth.models import LlmMeta, RunMeta
 from laglitsynth.ollama import preflight
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
 logger = logging.getLogger(__name__)
 
-STAGE_SUBDIR = "fulltext-eligibility"
 DEFAULT_ELIGIBILITY_CRITERIA = Path(
     "examples/eligibility-criteria/lagrangian-oceanography.yaml"
 )
@@ -245,19 +250,13 @@ def build_subparser(
         "--catalogue",
         type=Path,
         default=None,
-        help=(
-            "Deduplicated catalogue JSONL (data/catalogue-dedup/deduplicated.jsonl). "
-            "Falls back to the manifest's catalogue-dedup output when omitted."
-        ),
+        help="Deduplicated catalogue JSONL (default: <data-dir>/catalogue-dedup/deduplicated.jsonl).",
     )
     parser.add_argument(
         "--screening-verdicts",
         type=Path,
         default=None,
-        help=(
-            "Stage 3 verdicts JSONL (data/screening-abstracts/<run-id>/verdicts.jsonl). "
-            "Falls back to the manifest's screening-abstracts output when omitted."
-        ),
+        help="Stage 3 verdicts JSONL (default: <data-dir>/screening-abstracts/<run-id>/verdicts.jsonl).",
     )
     parser.add_argument(
         "--screening-threshold",
@@ -269,11 +268,7 @@ def build_subparser(
         "--extractions",
         type=Path,
         default=None,
-        help=(
-            "Extraction JSONL (data/fulltext-extraction/extraction.jsonl). Falls "
-            "back to the manifest's fulltext-extraction output when omitted "
-            "(not currently wired — normally exits naming this flag)."
-        ),
+        help="Extraction JSONL (default: <data-dir>/fulltext-extraction/extraction.jsonl).",
     )
     parser.add_argument(
         "--extraction-output-dir",
@@ -293,7 +288,10 @@ def build_subparser(
     parser.add_argument(
         "--run-id",
         default=None,
-        help="Run identifier; default = generate_run_id() (<iso>_<12hex>).",
+        help=(
+            "Run identifier, shared with the screening run whose verdicts are "
+            "read (default: the run_id in <data-dir>/manifest.json)."
+        ),
     )
     parser.add_argument(
         "--eligibility-criteria",
@@ -359,27 +357,17 @@ def build_subparser(
 def run(args: argparse.Namespace) -> None:
     data_dir: Path = Path(args.data_dir)
     args.run_id = resolve_run_id(data_dir, args.run_id)
-    args.catalogue = resolve_input(
-        data_dir,
-        args.catalogue,
-        upstream_stage="catalogue-dedup",
-        flag_name="--catalogue",
+    args.catalogue, args.screening_verdicts = resolve_screening_inputs(
+        data_dir, args.catalogue, args.screening_verdicts, args.run_id
     )
-    args.screening_verdicts = resolve_input(
-        data_dir,
-        args.screening_verdicts,
-        upstream_stage="screening-abstracts",
-        flag_name="--screening-verdicts",
-    )
-    args.extractions = resolve_input(
-        data_dir,
-        args.extractions,
-        upstream_stage="fulltext-extraction",
-        flag_name="--extractions",
+    args.extractions = require_input(
+        args.extractions if args.extractions is not None else extractions_path(data_dir),
+        flag="--extractions",
+        upstream="fulltext-extraction",
     )
 
     preflight(base_url=args.base_url, model=args.model)
-    output_dir: Path = data_dir / STAGE_SUBDIR / args.run_id
+    output_dir: Path = data_dir / ELIGIBILITY_SUBDIR / args.run_id
     verdicts_path = output_dir / "verdicts.jsonl"
     meta_path = output_dir / "eligibility-meta.json"
 
@@ -561,15 +549,3 @@ def run(args: argparse.Namespace) -> None:
         ),
     )
     print(f"Run dir: {output_dir}", file=sys.stderr)
-
-    record_stage(
-        data_dir,
-        stage="fulltext-eligibility",
-        inputs={
-            "catalogue": args.catalogue,
-            "screening_verdicts": args.screening_verdicts,
-            "extractions": args.extractions,
-        },
-        output=verdicts_path,
-        meta_path=meta_path,
-    )

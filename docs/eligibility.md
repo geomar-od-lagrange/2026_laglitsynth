@@ -189,10 +189,10 @@ sentinel (there is no abstract fallback).
 
 ```
 laglitsynth fulltext-eligibility \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    --screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
-    --screening-threshold 50 \
-    --extractions data/fulltext-extraction/extraction.jsonl \
+    [--catalogue data/catalogue-dedup/deduplicated.jsonl] \
+    [--screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl] \
+    [--screening-threshold 50] \
+    [--extractions data/fulltext-extraction/extraction.jsonl] \
     [--extraction-output-dir data/fulltext-extraction/] \
     [--data-dir data/] [--run-id <iso>_<12hex>] \
     [--eligibility-criteria examples/eligibility-criteria/lagrangian-oceanography.yaml] \
@@ -203,6 +203,9 @@ laglitsynth fulltext-eligibility \
 ```
 
 The resolved output directory is `<data-dir>/fulltext-eligibility/<run-id>/`.
+The three input flags default to the paths shown under `--data-dir`; an
+omitted flag whose default does not exist exits naming the upstream stage
+to run (see [run-manifest.md](run-manifest.md)).
 
 ### Arguments
 
@@ -210,6 +213,7 @@ The resolved output directory is `<data-dir>/fulltext-eligibility/<run-id>/`.
 - `--screening-verdicts`: the stage 3 verdict sidecar
   (`ScreeningVerdict` records). The stage joins this against the catalogue
   at the `--screening-threshold` cutoff to determine which works to assess.
+  The default path uses the resolved `--run-id`.
 - `--screening-threshold`: relevance score cutoff 0–100 (default: 50).
   Works whose stage 3 score is at or above this threshold are assessed.
 - `--extractions`: the extraction JSONL (`ExtractedDocument` records).
@@ -220,7 +224,9 @@ The resolved output directory is `<data-dir>/fulltext-eligibility/<run-id>/`.
   [`tei-wrapper`](../plans/done/tei-wrapper.md) for why the path is
   stored relative.
 - `--data-dir`: bucket root for stage outputs (default: `data/`).
-- `--run-id`: run identifier. Default: a generated `<iso>_<12hex>`.
+- `--run-id`: run identifier, shared with the screening run whose verdicts
+  are read. Default: the `run_id` in `<data-dir>/manifest.json`; the stage
+  exits when neither is available.
 - `--eligibility-criteria`: path to the YAML carrying the LLM system
   prompt (default:
   `examples/eligibility-criteria/lagrangian-oceanography.yaml`). The
@@ -234,8 +240,7 @@ The resolved output directory is `<data-dir>/fulltext-eligibility/<run-id>/`.
   already exists and its recorded `prompt_sha256` differs from the hash the
   current invocation would produce, the run aborts with an error — mixing
   verdicts from different prompt versions in one file would silently corrupt
-  any downstream analysis. Run-id'd dirs are fresh by default, so this flag
-  is meaningful only when paired with an explicit `--run-id <existing>`.
+  any downstream analysis.
 - `--max-records`: process only the first N works from the catalogue.
 - `--dry-run`: print verdicts to stderr without writing any output.
 - `--model`, `--base-url`: Ollama configuration. `--base-url` is checked

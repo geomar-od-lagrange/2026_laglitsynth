@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
+
+import pytest
 
 from laglitsynth.catalogue_dedup.dedup import (
     _normalise_title,
@@ -13,27 +14,8 @@ from laglitsynth.catalogue_dedup.dedup import (
     run,
 )
 from laglitsynth.catalogue_dedup.models import DeduplicationMeta
-from laglitsynth.io import write_meta
-from laglitsynth.manifest import RunManifest, load_manifest
-from laglitsynth.models import RunMeta
 
 from conftest import _make_authorship, _make_work, _write_works_jsonl
-
-
-def _write_manifest(data_dir: Path, run_id: str = "2026-01-01T00-00-00_abcdef123456") -> None:
-    """Write a bare initialised manifest (no stage entries) at ``data_dir``."""
-    manifest = RunManifest(
-        run=RunMeta(
-            tool="laglitsynth.manifest",
-            run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
-            validation_skipped=0,
-        ),
-        run_id=run_id,
-        queries=["lagrangian oceanography"],
-        data_dir=str(data_dir),
-        stages=[],
-    )
-    write_meta(data_dir / "manifest.json", manifest)
 
 
 # ---------------------------------------------------------------------------
@@ -548,15 +530,64 @@ def test_unicode_dashes_enable_title_dedup() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Run-manifest wiring
+# Conventional paths under --data-dir
 # ---------------------------------------------------------------------------
 
 
-def test_no_manifest_behaviour_unchanged(tmp_path: Path) -> None:
-    """With every path passed explicitly and no manifest present, dedup
-    runs exactly as before and writes no manifest.json."""
-    w1 = _make_work("https://openalex.org/W1")
-    _write_works_jsonl(tmp_path / "input.jsonl", [w1])
+def test_omitted_input_reads_catalogue_fetch_jsonl_under_data_dir(
+    tmp_path: Path,
+) -> None:
+    """--input omitted -> every <data-dir>/catalogue-fetch/*.jsonl is read."""
+    fetch_dir = tmp_path / "catalogue-fetch"
+    fetch_dir.mkdir()
+    _write_works_jsonl(fetch_dir / "a.jsonl", [_make_work("https://openalex.org/W1")])
+    _write_works_jsonl(fetch_dir / "b.jsonl", [_make_work("https://openalex.org/W2")])
+
+    args = MagicMock()
+    args.input = None
+    args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
+    run(args)
+
+    dedup_lines = (tmp_path / "out" / "deduplicated.jsonl").read_text().strip().splitlines()
+    assert len(dedup_lines) == 2
+
+
+def test_omitted_output_dir_writes_to_catalogue_dedup_under_data_dir(
+    tmp_path: Path,
+) -> None:
+    """--output-dir omitted -> outputs land in <data-dir>/catalogue-dedup/."""
+    _write_works_jsonl(tmp_path / "input.jsonl", [_make_work("https://openalex.org/W1")])
+
+    args = MagicMock()
+    args.input = [str(tmp_path / "input.jsonl")]
+    args.output_dir = None
+    args.data_dir = tmp_path
+    run(args)
+
+    out = tmp_path / "catalogue-dedup"
+    assert (out / "deduplicated.jsonl").exists()
+    assert (out / "dropped.jsonl").exists()
+    assert (out / "dedup-meta.json").exists()
+
+
+def test_no_matching_input_exits_naming_upstream_and_flag(tmp_path: Path) -> None:
+    """--input omitted and no catalogue-fetch output -> SystemExit, no output."""
+    args = MagicMock()
+    args.input = None
+    args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
+
+    with pytest.raises(SystemExit, match="catalogue-fetch") as exc_info:
+        run(args)
+
+    assert "--input" in str(exc_info.value)
+    assert not (tmp_path / "out").exists()
+
+
+def test_does_not_write_a_manifest(tmp_path: Path) -> None:
+    """dedup has no manifest involvement: none is created."""
+    _write_works_jsonl(tmp_path / "input.jsonl", [_make_work("https://openalex.org/W1")])
 
     args = MagicMock()
     args.input = [str(tmp_path / "input.jsonl")]
@@ -564,64 +595,4 @@ def test_no_manifest_behaviour_unchanged(tmp_path: Path) -> None:
     args.data_dir = tmp_path
     run(args)
 
-    assert (tmp_path / "out" / "deduplicated.jsonl").exists()
     assert not (tmp_path / "manifest.json").exists()
-
-
-def test_omitted_input_with_no_manifest_names_the_flag(tmp_path: Path) -> None:
-    """--input omitted, no manifest to resolve it from -> SystemExit naming it."""
-    args = MagicMock()
-    args.input = None
-    args.output_dir = tmp_path / "out"
-    args.data_dir = tmp_path
-
-    try:
-        run(args)
-    except SystemExit as exc:
-        assert "--input" in str(exc)
-    else:
-        raise AssertionError("expected SystemExit when --input and manifest are both absent")
-
-
-def test_omitted_input_with_manifest_but_no_catalogue_fetch_entry(tmp_path: Path) -> None:
-    """catalogue-fetch is not wired to the manifest (deferred by the plan):
-    an omitted --input still falls through to the required-flag SystemExit
-    even once a manifest exists, because there is no catalogue-fetch entry
-    to resolve it from."""
-    _write_manifest(tmp_path)
-
-    args = MagicMock()
-    args.input = None
-    args.output_dir = tmp_path / "out"
-    args.data_dir = tmp_path
-
-    try:
-        run(args)
-    except SystemExit as exc:
-        assert "catalogue-fetch" in str(exc)
-    else:
-        raise AssertionError("expected SystemExit for a stage never run")
-
-
-def test_records_own_stage_entry_when_manifest_exists(tmp_path: Path) -> None:
-    """dedup appends its own StageEntry to an existing manifest, independent
-    of whether catalogue-fetch ever recorded one."""
-    _write_manifest(tmp_path)
-
-    w1 = _make_work("https://openalex.org/W1")
-    _write_works_jsonl(tmp_path / "input.jsonl", [w1])
-
-    args = MagicMock()
-    args.input = [str(tmp_path / "input.jsonl")]
-    args.output_dir = tmp_path / "out"
-    args.data_dir = tmp_path
-    run(args)
-
-    manifest = load_manifest(tmp_path)
-    assert manifest is not None
-    assert len(manifest.stages) == 1
-    entry = manifest.stages[0]
-    assert entry.stage == "catalogue-dedup"
-    assert entry.output == str(tmp_path / "out" / "deduplicated.jsonl")
-    assert entry.meta_path == str(tmp_path / "out" / "dedup-meta.json")
-    assert entry.inputs == {"input_0": str(tmp_path / "input.jsonl")}

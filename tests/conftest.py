@@ -97,3 +97,29 @@ def _write_tei(path: Path, body_content: str) -> None:
             f'<TEI xmlns="{TEI_NS}"><text><body>{body_content}</body></text></TEI>'
         ).encode()
     )
+
+
+TEST_RUN_ID = "2026-01-01T00-00-00_abcdef123456"
+
+
+def _write_manifest(data_dir: Path, run_id: str = TEST_RUN_ID) -> None:
+    """Write an initialised ``manifest.json`` under ``data_dir``."""
+    from datetime import UTC, datetime
+
+    from laglitsynth.io import write_meta
+    from laglitsynth.manifest import RunManifest
+    from laglitsynth.models import RunMeta
+
+    data_dir.mkdir(parents=True, exist_ok=True)
+    write_meta(
+        data_dir / "manifest.json",
+        RunManifest(
+            run=RunMeta(
+                tool="laglitsynth.manifest",
+                run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+                validation_skipped=0,
+            ),
+            run_id=run_id,
+            queries=["lagrangian oceanography"],
+        ),
+    )

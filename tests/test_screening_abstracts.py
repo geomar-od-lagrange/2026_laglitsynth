@@ -22,7 +22,13 @@ from laglitsynth.screening_abstracts.screen import (
 from laglitsynth.screening_abstracts.models import ScreeningMeta, ScreeningVerdict
 from laglitsynth.models import LlmMeta, RunMeta
 
-from conftest import _make_work, _mock_openai_response, _write_works_jsonl
+from conftest import (
+    TEST_RUN_ID,
+    _make_work,
+    _mock_openai_response,
+    _write_manifest,
+    _write_works_jsonl,
+)
 
 # An inlined screening-criteria spec (dict form, consumed directly by
 # resolve_yaml_arg) standing in for the on-disk YAML in run()-level tests.
@@ -799,33 +805,6 @@ def test_run_streaming_append_partial_is_valid(tmp_path: Path) -> None:
 # --- Run dirs, config.yaml, --run-id ---
 
 
-def test_run_id_default_generates_fresh_dir(tmp_path: Path) -> None:
-    """run_id=None at parse time → generate_run_id() produces a fresh dir."""
-    works = [_make_work("W1", abstract="a")]
-    _write_works_jsonl(tmp_path / "input.jsonl", works)
-
-    args = _run_args(tmp_path, run_id=None)
-
-    classify_results = {"W1": {"relevance_score": 80, "reason": "ok"}}
-    with (
-        patch("laglitsynth.screening_abstracts.screen.preflight"),
-        patch(
-            "laglitsynth.screening_abstracts.screen.classify_abstract",
-            side_effect=_mock_classify(classify_results),
-        ),
-        patch("laglitsynth.screening_abstracts.screen.OpenAI"),
-    ):
-        from laglitsynth.screening_abstracts.screen import run
-
-        run(args)
-
-    # args.run_id is now resolved to a generated id, and the run dir lives under it.
-    assert args.run_id is not None
-    out_dir = tmp_path / "screening-abstracts" / args.run_id
-    assert (out_dir / "verdicts.jsonl").exists()
-    assert (out_dir / "config.yaml").exists()
-
-
 def test_config_yaml_records_resolved_args(tmp_path: Path) -> None:
     works = [_make_work("W1", abstract="a")]
     _write_works_jsonl(tmp_path / "input.jsonl", works)
@@ -924,58 +903,15 @@ def test_run_dir_printed_to_stderr_at_end(
 
 
 # ---------------------------------------------------------------------------
-# Run-manifest wiring
+# Conventional input path and run-id from the manifest
 # ---------------------------------------------------------------------------
 
-from laglitsynth.io import write_meta as _write_meta_for_manifest
-from laglitsynth.manifest import (
-    RunManifest as _RunManifest,
-    StageEntry as _StageEntry,
-    load_manifest as _load_manifest,
-)
-from laglitsynth.models import RunMeta as _RunMeta
 
-
-def _write_manifest_with_dedup_entry(
-    data_dir: Path,
-    dedup_output: Path,
-    run_id: str = "from-manifest",
-) -> None:
-    """Write a manifest whose last catalogue-dedup entry points at
-    ``dedup_output`` (an existing file on this disk)."""
-    manifest = _RunManifest(
-        run=_RunMeta(
-            tool="laglitsynth.manifest",
-            run_at="2026-01-01T00:00:00.000000+00:00",
-            validation_skipped=0,
-        ),
-        run_id=run_id,
-        queries=["lagrangian oceanography"],
-        data_dir=str(data_dir),
-        stages=[
-            _StageEntry(
-                stage="catalogue-dedup",
-                run_at="2026-01-01T00:00:00.000000+00:00",
-                inputs={},
-                output=str(dedup_output),
-                meta_path=None,
-            )
-        ],
-    )
-    _write_meta_for_manifest(data_dir / "manifest.json", manifest)
-
-
-def test_no_manifest_behaviour_unchanged(tmp_path: Path) -> None:
-    """Every path passed explicitly, no manifest present: run() behaves as
-    before and writes no manifest.json."""
-    works = [_make_work("W1", abstract="Ocean currents.")]
-    _write_works_jsonl(tmp_path / "input.jsonl", works)
-
+def _run_patched(args: argparse.Namespace) -> MagicMock:
+    """Run ``screen.run`` with preflight/LLM mocked; return the preflight mock."""
     classify_results = {"W1": {"relevance_score": 80, "reason": "yes"}}
-    args = _run_args(tmp_path)
-
     with (
-        patch("laglitsynth.screening_abstracts.screen.preflight"),
+        patch("laglitsynth.screening_abstracts.screen.preflight") as mock_preflight,
         patch(
             "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=_mock_classify(classify_results),
@@ -985,155 +921,114 @@ def test_no_manifest_behaviour_unchanged(tmp_path: Path) -> None:
         from laglitsynth.screening_abstracts.screen import run
 
         run(args)
-
-    out_dir = tmp_path / "screening-abstracts" / "test-run-id"
-    assert (out_dir / "verdicts.jsonl").exists()
-    assert not (tmp_path / "manifest.json").exists()
+    return mock_preflight
 
 
-def test_omitted_input_adopts_manifest_latest_output(tmp_path: Path) -> None:
-    """An omitted catalogue positional resolves to the manifest's recorded
-    catalogue-dedup output."""
-    works = [_make_work("W1", abstract="Ocean currents.")]
-    dedup_output = tmp_path / "dedup-output.jsonl"
-    _write_works_jsonl(dedup_output, works)
-    _write_manifest_with_dedup_entry(tmp_path, dedup_output)
+class TestDataDirResolution:
+    def test_omitted_input_reads_the_conventional_dedup_output(
+        self, tmp_path: Path
+    ) -> None:
+        dedup_output = tmp_path / "catalogue-dedup" / "deduplicated.jsonl"
+        dedup_output.parent.mkdir()
+        _write_works_jsonl(dedup_output, [_make_work("W1", abstract="Ocean currents.")])
 
-    classify_results = {"W1": {"relevance_score": 80, "reason": "yes"}}
-    args = _run_args(tmp_path, input=None)
+        args = _run_args(tmp_path, input=None)
+        _run_patched(args)
 
-    with (
-        patch("laglitsynth.screening_abstracts.screen.preflight"),
-        patch(
-            "laglitsynth.screening_abstracts.screen.classify_abstract",
-            side_effect=_mock_classify(classify_results),
-        ),
-        patch("laglitsynth.screening_abstracts.screen.OpenAI"),
-    ):
-        from laglitsynth.screening_abstracts.screen import run
+        assert args.input == dedup_output
+        out_dir = tmp_path / "screening-abstracts" / "test-run-id"
+        verdict_lines = (out_dir / "verdicts.jsonl").read_text().strip().splitlines()
+        assert [json.loads(line)["work_id"] for line in verdict_lines] == ["W1"]
 
-        run(args)
+    def test_missing_dedup_output_exits_before_any_llm_call(
+        self, tmp_path: Path
+    ) -> None:
+        args = _run_args(tmp_path, input=None)
 
-    assert args.input == dedup_output
-    out_dir = tmp_path / "screening-abstracts" / "test-run-id"
-    verdict_lines = (out_dir / "verdicts.jsonl").read_text().strip().splitlines()
-    assert len(verdict_lines) == 1
-    assert json.loads(verdict_lines[0])["work_id"] == "W1"
+        with (
+            patch("laglitsynth.screening_abstracts.screen.preflight") as mock_preflight,
+            patch("laglitsynth.screening_abstracts.screen.OpenAI"),
+            pytest.raises(SystemExit, match="catalogue-dedup") as exc_info,
+        ):
+            from laglitsynth.screening_abstracts.screen import run
 
+            run(args)
 
-def test_explicit_run_id_wins_over_manifest(tmp_path: Path) -> None:
-    """--run-id given explicitly wins even when a manifest names another."""
-    works = [_make_work("W1", abstract="Ocean currents.")]
-    _write_works_jsonl(tmp_path / "input.jsonl", works)
-    _write_manifest_with_dedup_entry(
-        tmp_path, tmp_path / "input.jsonl", run_id="from-manifest"
-    )
+        assert "deduplicated.jsonl" in str(exc_info.value)
+        mock_preflight.assert_not_called()
+        assert not (tmp_path / "screening-abstracts").exists()
 
-    classify_results = {"W1": {"relevance_score": 80, "reason": "yes"}}
-    args = _run_args(tmp_path, run_id="explicit-run-id")
+    def test_omitted_run_id_adopts_the_manifest(self, tmp_path: Path) -> None:
+        _write_works_jsonl(
+            tmp_path / "input.jsonl", [_make_work("W1", abstract="Ocean currents.")]
+        )
+        _write_manifest(tmp_path)
 
-    with (
-        patch("laglitsynth.screening_abstracts.screen.preflight"),
-        patch(
-            "laglitsynth.screening_abstracts.screen.classify_abstract",
-            side_effect=_mock_classify(classify_results),
-        ),
-        patch("laglitsynth.screening_abstracts.screen.OpenAI"),
-    ):
-        from laglitsynth.screening_abstracts.screen import run
+        args = _run_args(tmp_path, run_id=None)
+        _run_patched(args)
 
-        run(args)
+        assert args.run_id == TEST_RUN_ID
+        assert (
+            tmp_path / "screening-abstracts" / TEST_RUN_ID / "verdicts.jsonl"
+        ).exists()
 
-    assert args.run_id == "explicit-run-id"
-    assert (tmp_path / "screening-abstracts" / "explicit-run-id" / "verdicts.jsonl").exists()
+    def test_explicit_run_id_wins_over_the_manifest(self, tmp_path: Path) -> None:
+        _write_works_jsonl(
+            tmp_path / "input.jsonl", [_make_work("W1", abstract="Ocean currents.")]
+        )
+        _write_manifest(tmp_path)
 
+        args = _run_args(tmp_path, run_id="explicit-run-id")
+        _run_patched(args)
 
-def test_omitted_run_id_adopts_the_manifest(tmp_path: Path) -> None:
-    """An omitted --run-id adopts the manifest's run_id."""
-    works = [_make_work("W1", abstract="Ocean currents.")]
-    _write_works_jsonl(tmp_path / "input.jsonl", works)
-    _write_manifest_with_dedup_entry(
-        tmp_path, tmp_path / "input.jsonl", run_id="from-manifest"
-    )
+        assert args.run_id == "explicit-run-id"
+        assert (
+            tmp_path / "screening-abstracts" / "explicit-run-id" / "verdicts.jsonl"
+        ).exists()
+        assert not (tmp_path / "screening-abstracts" / TEST_RUN_ID).exists()
 
-    classify_results = {"W1": {"relevance_score": 80, "reason": "yes"}}
-    args = _run_args(tmp_path, run_id=None)
+    def test_no_manifest_and_no_run_id_exits_before_any_llm_call(
+        self, tmp_path: Path
+    ) -> None:
+        _write_works_jsonl(
+            tmp_path / "input.jsonl", [_make_work("W1", abstract="Ocean currents.")]
+        )
+        args = _run_args(tmp_path, run_id=None)
 
-    with (
-        patch("laglitsynth.screening_abstracts.screen.preflight"),
-        patch(
-            "laglitsynth.screening_abstracts.screen.classify_abstract",
-            side_effect=_mock_classify(classify_results),
-        ),
-        patch("laglitsynth.screening_abstracts.screen.OpenAI"),
-    ):
-        from laglitsynth.screening_abstracts.screen import run
+        with (
+            patch("laglitsynth.screening_abstracts.screen.preflight") as mock_preflight,
+            patch(
+                "laglitsynth.screening_abstracts.screen.classify_abstract"
+            ) as mock_classify,
+            patch("laglitsynth.screening_abstracts.screen.OpenAI"),
+            pytest.raises(SystemExit, match="manifest-init"),
+        ):
+            from laglitsynth.screening_abstracts.screen import run
 
-        run(args)
+            run(args)
 
-    assert args.run_id == "from-manifest"
-    assert (tmp_path / "screening-abstracts" / "from-manifest" / "verdicts.jsonl").exists()
+        mock_preflight.assert_not_called()
+        mock_classify.assert_not_called()
+        assert not (tmp_path / "screening-abstracts").exists()
 
+    def test_rerun_into_an_existing_run_dir_says_so(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _write_works_jsonl(
+            tmp_path / "input.jsonl", [_make_work("W1", abstract="Ocean currents.")]
+        )
 
-def test_records_own_stage_entry_when_manifest_exists(tmp_path: Path) -> None:
-    """screening-abstracts appends its own StageEntry with the resolved
-    catalogue path, verdicts output, and meta sidecar."""
-    works = [_make_work("W1", abstract="Ocean currents.")]
-    _write_works_jsonl(tmp_path / "input.jsonl", works)
-    _write_manifest_with_dedup_entry(
-        tmp_path, tmp_path / "input.jsonl", run_id="from-manifest"
-    )
+        _run_patched(_run_args(tmp_path))
+        assert "Reusing run dir" not in capsys.readouterr().err
 
-    classify_results = {"W1": {"relevance_score": 80, "reason": "yes"}}
-    args = _run_args(tmp_path, input=None, run_id=None)
+        _run_patched(_run_args(tmp_path))
+        assert "Reusing run dir" in capsys.readouterr().err
 
-    with (
-        patch("laglitsynth.screening_abstracts.screen.preflight"),
-        patch(
-            "laglitsynth.screening_abstracts.screen.classify_abstract",
-            side_effect=_mock_classify(classify_results),
-        ),
-        patch("laglitsynth.screening_abstracts.screen.OpenAI"),
-    ):
-        from laglitsynth.screening_abstracts.screen import run
+    def test_writes_no_manifest(self, tmp_path: Path) -> None:
+        _write_works_jsonl(
+            tmp_path / "input.jsonl", [_make_work("W1", abstract="Ocean currents.")]
+        )
 
-        run(args)
+        _run_patched(_run_args(tmp_path))
 
-    manifest = _load_manifest(tmp_path)
-    assert manifest is not None
-    assert len(manifest.stages) == 2  # catalogue-dedup (seeded) + screening-abstracts
-    entry = manifest.stages[-1]
-    out_dir = tmp_path / "screening-abstracts" / "from-manifest"
-    assert entry.stage == "screening-abstracts"
-    assert entry.output == str(out_dir / "verdicts.jsonl")
-    assert entry.meta_path == str(out_dir / "screening-meta.json")
-    assert entry.inputs == {"catalogue": str(tmp_path / "input.jsonl")}
-
-
-def test_dry_run_does_not_record_a_stage_entry(tmp_path: Path) -> None:
-    """--dry-run writes no output files, so it must not append a manifest
-    entry either."""
-    works = [_make_work("W1", abstract="Ocean currents.")]
-    _write_works_jsonl(tmp_path / "input.jsonl", works)
-    _write_manifest_with_dedup_entry(
-        tmp_path, tmp_path / "input.jsonl", run_id="from-manifest"
-    )
-
-    classify_results = {"W1": {"relevance_score": 80, "reason": "yes"}}
-    args = _run_args(tmp_path, dry_run=True)
-
-    with (
-        patch("laglitsynth.screening_abstracts.screen.preflight"),
-        patch(
-            "laglitsynth.screening_abstracts.screen.classify_abstract",
-            side_effect=_mock_classify(classify_results),
-        ),
-        patch("laglitsynth.screening_abstracts.screen.OpenAI"),
-    ):
-        from laglitsynth.screening_abstracts.screen import run
-
-        run(args)
-
-    manifest = _load_manifest(tmp_path)
-    assert manifest is not None
-    assert len(manifest.stages) == 1  # only the seeded catalogue-dedup entry
+        assert not (tmp_path / "manifest.json").exists()

@@ -33,14 +33,13 @@ from laglitsynth.fulltext_retrieval.models import (
 )
 from laglitsynth.fulltext_retrieval.store import (
     load_provenance,
-    pdfs_dir,
     sha256_of,
     store_pdf_path,
     upsert_provenance,
 )
 from laglitsynth.ids import work_id_to_filename
 from laglitsynth.io import JsonlReadStats, read_jsonl, write_meta
-from laglitsynth.manifest import record_stage, resolve_input
+from laglitsynth.layout import resolve_screening_inputs
 from laglitsynth.models import RunMeta
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
@@ -283,18 +282,20 @@ def build_subparser(
         "--catalogue",
         type=Path,
         default=None,
-        help=(
-            "Deduplicated catalogue JSONL (data/catalogue-dedup/deduplicated.jsonl). "
-            "Resolved from data/manifest.json's catalogue-dedup entry when omitted."
-        ),
+        help="Deduplicated catalogue JSONL (default: <data-dir>/catalogue-dedup/deduplicated.jsonl).",
     )
     parser.add_argument(
         "--screening-verdicts",
         type=Path,
         default=None,
+        help="Stage 3 verdicts JSONL (default: <data-dir>/screening-abstracts/<run-id>/verdicts.jsonl).",
+    )
+    parser.add_argument(
+        "--run-id",
+        default=None,
         help=(
-            "Stage 3 verdicts JSONL (data/screening-abstracts/<run-id>/verdicts.jsonl). "
-            "Resolved from data/manifest.json's screening-abstracts entry when omitted."
+            "Screening run to read verdicts from (default: the run_id in "
+            "<data-dir>/manifest.json). Unused when --screening-verdicts is given."
         ),
     )
     parser.add_argument(
@@ -352,17 +353,8 @@ def run(args: argparse.Namespace) -> None:
     data_dir: Path = args.data_dir
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    catalogue = resolve_input(
-        data_dir,
-        args.catalogue,
-        upstream_stage="catalogue-dedup",
-        flag_name="--catalogue",
-    )
-    screening_verdicts = resolve_input(
-        data_dir,
-        args.screening_verdicts,
-        upstream_stage="screening-abstracts",
-        flag_name="--screening-verdicts",
+    catalogue, screening_verdicts = resolve_screening_inputs(
+        data_dir, args.catalogue, args.screening_verdicts, args.run_id
     )
 
     stats = JsonlReadStats()
@@ -492,14 +484,3 @@ def run(args: argparse.Namespace) -> None:
         label = _SOURCE_LABELS.get(source, source.value)
         pct = 100.0 * count / total if total > 0 else 0.0
         print(f"  {label + ':':<26}{count:>4}  ({pct:.1f}%)", file=sys.stderr)
-
-    # A dry run fetched nothing, so it has no output to record. Screening,
-    # eligibility, and extraction take the same line.
-    if not args.dry_run:
-        record_stage(
-            data_dir,
-            stage="fulltext-retrieval",
-            inputs={"catalogue": catalogue, "screening_verdicts": screening_verdicts},
-            output=pdfs_dir(data_dir),
-            meta_path=meta_path,
-        )

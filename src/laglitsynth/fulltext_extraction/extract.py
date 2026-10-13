@@ -17,8 +17,10 @@ from laglitsynth.fulltext_extraction.models import (
     ExtractedDocument,
     ExtractionMeta,
 )
+from laglitsynth.fulltext_retrieval.store import pdfs_dir
 from laglitsynth.ids import filename_to_work_id
 from laglitsynth.io import append_jsonl, read_jsonl, write_meta
+from laglitsynth.layout import extraction_dir, require_input
 from laglitsynth.models import RunMeta
 
 logger = logging.getLogger(__name__)
@@ -78,10 +80,22 @@ def build_subparser(
         help="Extract structured text from PDFs via GROBID.",
     )
     parser.add_argument(
-        "--pdf-dir", type=Path, required=True, help="Directory containing PDFs"
+        "--pdf-dir",
+        type=Path,
+        default=None,
+        help="Directory containing PDFs (default: <data-dir>/pdfs/)",
     )
     parser.add_argument(
-        "--output-dir", type=Path, required=True, help="Output directory"
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Output directory (default: <data-dir>/fulltext-extraction/)",
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path("data"),
+        help="Bucket root for stage outputs (default: data/)",
     )
     parser.add_argument(
         "--grobid-url",
@@ -116,7 +130,15 @@ def build_subparser(
 
 
 def run(args: argparse.Namespace) -> None:
-    output_dir: Path = args.output_dir
+    data_dir: Path = args.data_dir
+    pdf_dir: Path = require_input(
+        args.pdf_dir if args.pdf_dir is not None else pdfs_dir(data_dir),
+        flag="--pdf-dir",
+        upstream="fulltext-retrieval",
+    )
+    output_dir: Path = (
+        args.output_dir if args.output_dir is not None else extraction_dir(data_dir)
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     tei_dir = output_dir / "tei"
     tei_dir.mkdir(parents=True, exist_ok=True)
@@ -144,7 +166,7 @@ def run(args: argparse.Namespace) -> None:
                 file=sys.stderr,
             )
 
-    pdfs = sorted(args.pdf_dir.glob("*.pdf"))
+    pdfs = sorted(pdf_dir.glob("*.pdf"))
     total = len(pdfs)
     print(f"Extracting {total} PDFs via GROBID ({version}).", file=sys.stderr)
 

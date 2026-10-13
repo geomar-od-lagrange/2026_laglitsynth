@@ -42,11 +42,14 @@
 #   LLM_CONCURRENCY        (--concurrency for stages 3 and 7; default 1),
 #   ELIGIBILITY_CONCURRENCY (--concurrency for stage 7 only; default LLM_CONCURRENCY),
 #   EXTRACTION_CONCURRENCY  (--concurrency for stage 8 only; default 1 — prefill-bound),
-#   RUN_ID (LLM-stage leaf under <data-dir>/<stage-subdir>/<run-id>/;
-#           a fresh ISO+hex id is generated when unset).
+#   RUN_ID                 run-id leaf for stages 3, 7, 8 and the stages that
+#                          read their verdicts. Unset (the default), every
+#                          stage takes the run_id in <root>/manifest.json;
+#                          set, it is passed as --run-id to each of them.
 #   EXPORT_GAP             1 = after stage 5, export the still-missing
 #                          selection as a collaborator handoff bundle into
-#                          <root>/pdfs/export/ (default 0).
+#                          <root>/pdfs/export/ (default 0). Env only — it is
+#                          a one-shot action, not a property of the review.
 #
 # Stage gating:
 #   STOP_AFTER_STAGE=N  run stages 1..N and stop (default: 8 — full pipeline).
@@ -103,16 +106,12 @@ ELIGIBILITY_CONCURRENCY="${ELIGIBILITY_CONCURRENCY:-$LLM_CONCURRENCY}"
 EXTRACTION_CONCURRENCY="${EXTRACTION_CONCURRENCY:-${CFG_EXTRACTION_CONCURRENCY:-1}}"
 
 # Collaborator handoff: export the still-missing selection after stage 5.
-EXPORT_GAP="${EXPORT_GAP:-${CFG_EXPORT_GAP:-0}}"
+EXPORT_GAP="${EXPORT_GAP:-0}"
 
 ROOT="${OUTPUT_ROOT:-data/run}"
 OLLAMA_BASE="${OLLAMA_BASE:-http://localhost:11434}"
 GROBID_URL="${GROBID_URL:-http://localhost:8070}"
 STOP_AFTER_STAGE="${STOP_AFTER_STAGE:-8}"
-
-# Single run-id threaded through stages 3, 7, 8 so downstream inputs
-# land at predictable <stage>/<RUN_ID>/ paths within $ROOT.
-RUN_ID="${RUN_ID:-$(laglitsynth generate-run-id)}"
 
 [[ "$STOP_AFTER_STAGE" =~ ^[0-9]+$ ]] || {
     echo "STOP_AFTER_STAGE must be a positive integer (got $STOP_AFTER_STAGE)" >&2
@@ -123,6 +122,17 @@ RUN_ID="${RUN_ID:-$(laglitsynth generate-run-id)}"
 : "${UNPAYWALL_EMAIL:?UNPAYWALL_EMAIL required — set in .env}"
 
 mkdir -p "$ROOT"
+
+# The manifest carries the run-id every run-id-aware stage reads when
+# --run-id is omitted. One per review: created on the first run, kept after.
+if [[ ! -f "$ROOT/manifest.json" ]]; then
+    laglitsynth manifest-init "$QUERY" --data-dir "$ROOT"
+fi
+
+# RUN_ID set: pass it explicitly to every stage that writes or reads a
+# <run-id>/ leaf. Unset: each stage reads the manifest's run_id itself.
+run_id_flags=()
+[[ -n "${RUN_ID:-}" ]] && run_id_flags=(--run-id "$RUN_ID")
 
 run_stage() {
     local n="$1" name="$2"
@@ -146,53 +156,44 @@ run_stage 1 catalogue-fetch \
 
 run_stage 2 catalogue-dedup \
     laglitsynth catalogue-dedup \
-        --input "$ROOT/catalogue-fetch/catalogue.jsonl" \
-        --output-dir "$ROOT/catalogue-dedup" \
         --data-dir "$ROOT"
 
 run_stage 3 screening-abstracts \
     laglitsynth screening-abstracts \
-        "$ROOT/catalogue-dedup/deduplicated.jsonl" \
         --screening-criteria "$SCREENING_CRITERIA" \
         --data-dir "$ROOT" \
-        --run-id "$RUN_ID" \
+        ${run_id_flags[@]+"${run_id_flags[@]}"} \
         --model "$SCREENING_MODEL" \
         --base-url "$OLLAMA_BASE" \
         --concurrency "$LLM_CONCURRENCY"
 
 run_stage 5 fulltext-retrieval \
     laglitsynth fulltext-retrieval \
-        --catalogue "$ROOT/catalogue-dedup/deduplicated.jsonl" \
-        --screening-verdicts "$ROOT/screening-abstracts/$RUN_ID/verdicts.jsonl" \
         --screening-threshold "$RETRIEVAL_THRESHOLD" \
         --data-dir "$ROOT" \
+        ${run_id_flags[@]+"${run_id_flags[@]}"} \
         --email "$UNPAYWALL_EMAIL"
 
 if [[ "$EXPORT_GAP" == "1" ]]; then
-    run_stage 5 fulltext-retrieval-export \
+    run_stage 5 "fulltext-retrieval-export (handoff bundle)" \
         laglitsynth fulltext-retrieval-export \
-            --catalogue "$ROOT/catalogue-dedup/deduplicated.jsonl" \
-            --screening-verdicts "$ROOT/screening-abstracts/$RUN_ID/verdicts.jsonl" \
             --screening-threshold "$RETRIEVAL_THRESHOLD" \
-            --data-dir "$ROOT"
+            --data-dir "$ROOT" \
+            ${run_id_flags[@]+"${run_id_flags[@]}"}
 fi
 
 run_stage 6 fulltext-extraction \
     laglitsynth fulltext-extraction \
-        --pdf-dir "$ROOT/pdfs" \
-        --output-dir "$ROOT/fulltext-extraction" \
+        --data-dir "$ROOT" \
         --grobid-url "$GROBID_URL" \
         --skip-existing
 
 run_stage 7 fulltext-eligibility \
     laglitsynth fulltext-eligibility \
-        --catalogue "$ROOT/catalogue-dedup/deduplicated.jsonl" \
-        --screening-verdicts "$ROOT/screening-abstracts/$RUN_ID/verdicts.jsonl" \
         --screening-threshold "$ELIGIBILITY_THRESHOLD" \
         --eligibility-criteria "$ELIGIBILITY_CRITERIA" \
-        --extractions "$ROOT/fulltext-extraction/extraction.jsonl" \
         --data-dir "$ROOT" \
-        --run-id "$RUN_ID" \
+        ${run_id_flags[@]+"${run_id_flags[@]}"} \
         --model "$ELIGIBILITY_MODEL" \
         --base-url "$OLLAMA_BASE" \
         --num-ctx "$ELIGIBILITY_NUM_CTX" \
@@ -200,12 +201,9 @@ run_stage 7 fulltext-eligibility \
 
 run_stage 8 extraction-codebook \
     laglitsynth extraction-codebook \
-        --catalogue "$ROOT/catalogue-dedup/deduplicated.jsonl" \
-        --eligibility-verdicts "$ROOT/fulltext-eligibility/$RUN_ID/verdicts.jsonl" \
-        --extractions "$ROOT/fulltext-extraction/extraction.jsonl" \
         --codebook "$CODEBOOK" \
         --data-dir "$ROOT" \
-        --run-id "$RUN_ID" \
+        ${run_id_flags[@]+"${run_id_flags[@]}"} \
         --model "$EXTRACTION_MODEL" \
         --base-url "$OLLAMA_BASE" \
         --num-ctx "$EXTRACTION_NUM_CTX" \
@@ -213,4 +211,4 @@ run_stage 8 extraction-codebook \
 
 echo
 echo "Pipeline complete (stages 1..$STOP_AFTER_STAGE). Outputs under: $ROOT/"
-echo "LLM-stage leaf for this run: $RUN_ID"
+echo "Run-id: ${RUN_ID:-the run_id in $ROOT/manifest.json}"

@@ -24,13 +24,18 @@ from laglitsynth.io import (
     read_jsonl,
     write_meta,
 )
-from laglitsynth.manifest import record_stage, resolve_input, resolve_run_id
+from laglitsynth.layout import (
+    SCREENING_SUBDIR,
+    deduplicated_path,
+    require_input,
+    warn_existing_run_dir,
+)
+from laglitsynth.manifest import resolve_run_id
 from laglitsynth.models import LlmMeta, RunMeta
 from laglitsynth.ollama import preflight
 from laglitsynth.prompts import load_system_prompt
 from laglitsynth.screening_abstracts.models import TOOL_NAME, ScreeningMeta, ScreeningVerdict
 
-STAGE_SUBDIR = "screening-abstracts"
 DEFAULT_SCREENING_CRITERIA = Path(
     "examples/screening-criteria/lagrangian-oceanography.yaml"
 )
@@ -210,10 +215,7 @@ def build_subparser(
         type=Path,
         nargs="?",
         default=None,
-        help=(
-            "Input JSONL file path. Falls back to the manifest's "
-            "catalogue-dedup output when omitted."
-        ),
+        help="Input JSONL file path (default: <data-dir>/catalogue-dedup/deduplicated.jsonl).",
     )
     parser.add_argument(
         "--screening-criteria",
@@ -235,7 +237,7 @@ def build_subparser(
     parser.add_argument(
         "--run-id",
         default=None,
-        help="Run identifier; default = generate_run_id() (<iso>_<12hex>).",
+        help="Run identifier (default: the run_id in <data-dir>/manifest.json).",
     )
     parser.add_argument(
         "--model", default="gemma3:4b", help="Ollama model name (default: gemma3:4b)"
@@ -280,14 +282,18 @@ def build_subparser(
 def run(args: argparse.Namespace) -> None:
     data_dir: Path = Path(args.data_dir)
     args.run_id = resolve_run_id(data_dir, args.run_id)
-    args.input = resolve_input(
-        data_dir, args.input, upstream_stage="catalogue-dedup", flag_name="input"
+    args.input = require_input(
+        args.input if args.input is not None else deduplicated_path(data_dir),
+        flag="the input path",
+        upstream="catalogue-dedup",
     )
 
     preflight(base_url=args.base_url, model=args.model)
-    output_dir: Path = data_dir / STAGE_SUBDIR / args.run_id
+    output_dir: Path = data_dir / SCREENING_SUBDIR / args.run_id
     verdicts_path = output_dir / "verdicts.jsonl"
     meta_path = output_dir / "screening-meta.json"
+    if not args.dry_run:
+        warn_existing_run_dir(output_dir, "verdicts.jsonl")
     threshold: float = args.screening_threshold
 
     criteria_spec = resolve_yaml_arg(args.screening_criteria)
@@ -420,12 +426,5 @@ def run(args: argparse.Namespace) -> None:
                 parse_failures=llm_parse_failure_count,
                 timeouts=llm_timeout_count,
             ),
-        )
-        record_stage(
-            data_dir,
-            stage="screening-abstracts",
-            inputs={"catalogue": args.input},
-            output=verdicts_path,
-            meta_path=meta_path,
         )
         print(f"Run dir: {output_dir}", file=sys.stderr)

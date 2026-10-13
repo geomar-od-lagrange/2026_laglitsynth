@@ -74,16 +74,16 @@ data/catalogue-dedup/
 
 ## CLI interface
 
-`--input` accepts one or more paths or glob patterns. Multiple files are
-concatenated and deduplicated in a single pass.
+With no flags the stage reads every `<data-dir>/catalogue-fetch/*.jsonl` and
+writes to `<data-dir>/catalogue-dedup/` (`--data-dir` defaults to `data/`):
 
 ```
-laglitsynth catalogue-dedup \
-    --input "data/catalogue-fetch/*.jsonl" \
-    --output-dir data/catalogue-dedup/
+laglitsynth catalogue-dedup
 ```
 
-Multiple explicit paths also work:
+`--input` overrides the glob with one or more paths or patterns; multiple
+files are concatenated and deduplicated in a single pass. `--output-dir`
+overrides the output location.
 
 ```
 laglitsynth catalogue-dedup \
@@ -92,11 +92,8 @@ laglitsynth catalogue-dedup \
     --output-dir data/catalogue-dedup/
 ```
 
-`--data-dir` (default `data/`) names the review whose `manifest.json` the
-stage records its entry in. It is separate from `--output-dir`, so a run that
-writes outside the default layout must pass both, and they must name the same
-review — the runner passes `--data-dir "$ROOT"` alongside its `--output-dir`
-for exactly this reason. See [run-manifest.md](run-manifest.md).
+When nothing matches the input, the stage exits naming `catalogue-fetch` as
+the stage to run first. See [run-manifest.md](run-manifest.md) for the layout.
 
 ## What is deferred
 

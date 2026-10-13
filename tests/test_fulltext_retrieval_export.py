@@ -3,48 +3,30 @@
 from __future__ import annotations
 
 import csv
-from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from laglitsynth.catalogue_fetch.models import Location, Source, Work
-from laglitsynth.fulltext_retrieval.export import PDF_MANIFEST_FILENAME, run, write_export
+from laglitsynth.fulltext_retrieval.export import run, write_export
 from laglitsynth.fulltext_retrieval.models import PdfProvenanceRecord, PdfSource
 from laglitsynth.fulltext_retrieval.store import write_provenance
-from laglitsynth.io import write_meta
-from laglitsynth.manifest import RunManifest, StageEntry, load_manifest
-from laglitsynth.models import RunMeta
+from laglitsynth.layout import (
+    PDF_MANIFEST_FILENAME,
+    deduplicated_path,
+    export_dir,
+    screening_verdicts_path,
+)
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
-from conftest import _make_authorship, _make_work, _write_works_jsonl
-
-
-def _seed_manifest(data_dir: Path, stages: list[StageEntry]) -> None:
-    data_dir.mkdir(parents=True, exist_ok=True)
-    write_meta(
-        data_dir / "manifest.json",
-        RunManifest(
-            run=RunMeta(
-                tool="laglitsynth.manifest",
-                run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
-                validation_skipped=0,
-            ),
-            run_id="2026-01-01T00-00-00_abcdef123456",
-            queries=["test query"],
-            data_dir=str(data_dir),
-            stages=stages,
-        ),
-    )
-
-
-def _stage_entry(stage: str, output: str) -> StageEntry:
-    return StageEntry(
-        stage=stage,
-        run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
-        inputs={},
-        output=output,
-        meta_path=None,
-    )
+from conftest import (
+    TEST_RUN_ID,
+    _make_authorship,
+    _make_work,
+    _write_manifest,
+    _write_works_jsonl,
+)
 
 
 def _write_verdicts_jsonl(path: Path, verdicts: list[ScreeningVerdict]) -> None:
@@ -215,9 +197,28 @@ class TestReadme:
 
         readme = (tmp_path / "README.md").read_text(encoding="utf-8")
         assert "3 works" in readme
-        # Names the two return shapes the importer accepts.
-        assert "<stem>.pdf" in readme
-        assert "DOI" in readme
+        assert "(1 with a DOI, 2 without)" in readme
+        # The no-DOI works are pointed at their own list.
+        assert "no-doi.csv" in readme
+        assert "2 works with no DOI" in readme
+        # The return instructions: no renaming, optional filename,doi sidecar.
+        assert "send it back as it is" in readme
+        assert "`filename`" in readme
+        assert "`doi`" in readme
+
+    def test_omits_no_doi_mentions_when_every_work_has_a_doi(
+        self, tmp_path: Path
+    ) -> None:
+        works = [
+            _work_with_journal("https://openalex.org/W1", doi="10.1/a"),
+            _work_with_journal("https://openalex.org/W2", doi="10.1/b"),
+        ]
+        write_export(works, tmp_path)
+
+        readme = (tmp_path / "README.md").read_text(encoding="utf-8")
+        assert "2 works still need a PDF." in readme
+        assert "without)" not in readme
+        assert "no-doi.csv" not in readme
 
 
 class TestRun:
@@ -270,75 +271,62 @@ class TestRun:
         args = MagicMock()
         args.catalogue = catalogue_path
         args.screening_verdicts = verdicts_path
+        args.run_id = None
         args.screening_threshold = 50.0
         args.data_dir = data_dir
         args.export_dir = None
 
         run(args)
 
-        export_dir = data_dir / "pdfs" / "export"
-        manifest = _read_manifest(export_dir / "pdf-manifest.csv")
+        manifest = _read_manifest(export_dir(data_dir) / PDF_MANIFEST_FILENAME)
         ids = {r["work_id"] for r in manifest}
         # Only W1: W2 has a PDF, W3 is below threshold.
         assert ids == {"https://openalex.org/W1"}
 
 
-class TestManifestWiring:
-    def _seed_inputs_and_manifest(self, data_dir: Path) -> list[Work]:
+class TestConventionalPaths:
+    def _layout(self, data_dir: Path, run_id: str = TEST_RUN_ID) -> list[Work]:
         works = [
             _work_with_journal("https://openalex.org/W1", doi="10.1/a"),
             _work_with_journal("https://openalex.org/W2", doi=None),
         ]
-        catalogue_path = data_dir / "catalogue-dedup" / "deduplicated.jsonl"
+        catalogue_path = deduplicated_path(data_dir)
         catalogue_path.parent.mkdir(parents=True, exist_ok=True)
         _write_works_jsonl(catalogue_path, works)
-
-        verdicts_path = data_dir / "screening-abstracts" / "run1" / "verdicts.jsonl"
+        verdicts_path = screening_verdicts_path(data_dir, run_id)
         verdicts_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(verdicts_path, "w") as f:
-            for w in works:
-                f.write(
-                    ScreeningVerdict(work_id=w.id, relevance_score=80).model_dump_json()
-                    + "\n"
-                )
-
-        _seed_manifest(
-            data_dir,
-            [
-                _stage_entry("catalogue-dedup", str(catalogue_path)),
-                _stage_entry("screening-abstracts", str(verdicts_path)),
-            ],
+        _write_verdicts_jsonl(
+            verdicts_path,
+            [ScreeningVerdict(work_id=w.id, relevance_score=80) for w in works],
         )
         return works
+
+    def _args(self, data_dir: Path) -> MagicMock:
+        args = MagicMock()
+        args.catalogue = None
+        args.screening_verdicts = None
+        args.run_id = None
+        args.screening_threshold = 50.0
+        args.data_dir = data_dir
+        args.export_dir = None
+        return args
 
     def test_data_dir_only_matches_fully_flagged_invocation(
         self, tmp_path: Path
     ) -> None:
         data_dir = tmp_path / "data"
-        self._seed_inputs_and_manifest(data_dir)
-        catalogue_path = data_dir / "catalogue-dedup" / "deduplicated.jsonl"
-        verdicts_path = data_dir / "screening-abstracts" / "run1" / "verdicts.jsonl"
+        self._layout(data_dir)
+        _write_manifest(data_dir)
 
-        # Fully-flagged invocation, writing to its own bundle dir.
-        flagged_args = MagicMock()
-        flagged_args.catalogue = catalogue_path
-        flagged_args.screening_verdicts = verdicts_path
-        flagged_args.screening_threshold = 50.0
-        flagged_args.data_dir = data_dir
+        flagged_args = self._args(data_dir)
+        flagged_args.catalogue = deduplicated_path(data_dir)
+        flagged_args.screening_verdicts = screening_verdicts_path(data_dir, TEST_RUN_ID)
         flagged_args.export_dir = tmp_path / "flagged-export"
         run(flagged_args)
 
-        # --data-dir-only invocation: catalogue/verdicts resolved from the
-        # manifest, export dir at the default location.
-        bare_args = MagicMock()
-        bare_args.catalogue = None
-        bare_args.screening_verdicts = None
-        bare_args.screening_threshold = 50.0
-        bare_args.data_dir = data_dir
-        bare_args.export_dir = None
-        run(bare_args)
+        run(self._args(data_dir))
 
-        default_export_dir = data_dir / "pdfs" / "export"
+        default_export_dir = export_dir(data_dir)
         for filename in (
             "dois.txt",
             "missing.ris",
@@ -350,39 +338,42 @@ class TestManifestWiring:
                 default_export_dir / filename
             ).read_text()
 
-    def test_appends_entry_with_bundle_dir_as_output(self, tmp_path: Path) -> None:
+    def test_explicit_flag_wins(self, tmp_path: Path) -> None:
         data_dir = tmp_path / "data"
-        self._seed_inputs_and_manifest(data_dir)
+        self._layout(data_dir)
+        _write_manifest(data_dir)
 
-        args = MagicMock()
-        args.catalogue = None
-        args.screening_verdicts = None
-        args.screening_threshold = 50.0
-        args.data_dir = data_dir
-        args.export_dir = None
+        other = _work_with_journal("https://openalex.org/W9", doi="10.1/z")
+        explicit_catalogue = tmp_path / "explicit-catalogue.jsonl"
+        _write_works_jsonl(explicit_catalogue, [other])
+        explicit_verdicts = tmp_path / "explicit-verdicts.jsonl"
+        _write_verdicts_jsonl(
+            explicit_verdicts,
+            [ScreeningVerdict(work_id=other.id, relevance_score=80)],
+        )
+
+        args = self._args(data_dir)
+        args.catalogue = explicit_catalogue
+        args.screening_verdicts = explicit_verdicts
         run(args)
 
-        manifest = load_manifest(data_dir)
-        assert manifest is not None
-        entry = manifest.stages[-1]
-        assert entry.stage == "fulltext-retrieval-export"
-        assert entry.output == str(data_dir / "pdfs" / "export")
-        assert entry.meta_path is None
+        rows = _read_manifest(export_dir(data_dir) / PDF_MANIFEST_FILENAME)
+        assert {r["work_id"] for r in rows} == {other.id}
 
-    def test_no_manifest_and_omitted_catalogue_names_the_flag(
-        self, tmp_path: Path
-    ) -> None:
+    def test_missing_catalogue_names_upstream_and_flag(self, tmp_path: Path) -> None:
         data_dir = tmp_path / "data"
-        args = MagicMock()
-        args.catalogue = None
-        args.screening_verdicts = None
-        args.screening_threshold = 50.0
-        args.data_dir = data_dir
-        args.export_dir = None
+        _write_manifest(data_dir)
 
-        try:
-            run(args)
-        except SystemExit as exc:
-            assert "--catalogue" in str(exc)
-        else:
-            raise AssertionError("expected SystemExit without a manifest")
+        with pytest.raises(SystemExit) as exc_info:
+            run(self._args(data_dir))
+        msg = str(exc_info.value)
+        assert "run catalogue-dedup first" in msg
+        assert "--catalogue" in msg
+
+    def test_no_manifest_and_no_run_id_exits(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "data"
+        self._layout(data_dir)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run(self._args(data_dir))
+        assert "--run-id" in str(exc_info.value)
