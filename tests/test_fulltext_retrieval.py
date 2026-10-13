@@ -21,9 +21,10 @@ from laglitsynth.fulltext_retrieval.retrieve import (
 )
 from laglitsynth.fulltext_retrieval.store import load_provenance, store_pdf_path
 from laglitsynth.ids import work_id_to_filename
+from laglitsynth.layout import deduplicated_path, screening_verdicts_path
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
-from conftest import _make_work, _write_works_jsonl
+from conftest import TEST_RUN_ID, _make_work, _write_manifest, _write_works_jsonl
 
 
 def _write_verdicts_jsonl(path: Path, verdicts: list[ScreeningVerdict]) -> None:
@@ -60,6 +61,7 @@ def _make_passthrough_args(
     args = MagicMock()
     args.catalogue = catalogue_path
     args.screening_verdicts = verdicts_path
+    args.run_id = None
     args.screening_threshold = threshold
     args.data_dir = tmp_path / data_subdir
     args.email = email
@@ -741,3 +743,108 @@ class TestEmailDotenvFallback:
 
         assert "UNPAYWALL_EMAIL" in str(exc_info.value)
         assert ".env" in str(exc_info.value)
+
+
+class TestConventionalPaths:
+    def _layout(self, data_dir: Path, run_id: str = TEST_RUN_ID) -> Work:
+        work = _make_work("https://openalex.org/W1", doi=None)
+        catalogue_path = deduplicated_path(data_dir)
+        catalogue_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_works_jsonl(catalogue_path, [work])
+        verdicts_path = screening_verdicts_path(data_dir, run_id)
+        verdicts_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_verdicts_jsonl(
+            verdicts_path, [ScreeningVerdict(work_id=work.id, relevance_score=80)]
+        )
+        return work
+
+    def _args(self, data_dir: Path) -> MagicMock:
+        args = MagicMock()
+        args.catalogue = None
+        args.screening_verdicts = None
+        args.run_id = None
+        args.screening_threshold = 50.0
+        args.data_dir = data_dir
+        args.email = "test@example.com"
+        args.refetch = False
+        args.dry_run = False
+        return args
+
+    def _run(self, args: MagicMock) -> None:
+        client_mock = MagicMock(spec=httpx.Client)
+        with patch(
+            "laglitsynth.fulltext_retrieval.retrieve.httpx.Client",
+            return_value=client_mock,
+        ):
+            run(args)
+
+    def test_omitted_flags_resolve_to_conventional_paths(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "data"
+        work = self._layout(data_dir)
+        _write_manifest(data_dir)
+
+        self._run(self._args(data_dir))
+
+        assert load_provenance(data_dir)[work.id].source == PdfSource.missing
+
+    def test_explicit_flag_wins(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "data"
+        self._layout(data_dir)
+        _write_manifest(data_dir)
+
+        other = _make_work("https://openalex.org/W2", doi=None)
+        explicit_catalogue = tmp_path / "explicit-catalogue.jsonl"
+        _write_works_jsonl(explicit_catalogue, [other])
+        explicit_verdicts = tmp_path / "explicit-verdicts.jsonl"
+        _write_verdicts_jsonl(
+            explicit_verdicts,
+            [ScreeningVerdict(work_id=other.id, relevance_score=80)],
+        )
+
+        args = self._args(data_dir)
+        args.catalogue = explicit_catalogue
+        args.screening_verdicts = explicit_verdicts
+        self._run(args)
+
+        assert set(load_provenance(data_dir)) == {other.id}
+
+    def test_run_id_flag_picks_the_verdicts_leaf(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "data"
+        work = self._layout(data_dir, run_id="other-run")
+        _write_manifest(data_dir)
+
+        args = self._args(data_dir)
+        args.run_id = "other-run"
+        self._run(args)
+
+        assert work.id in load_provenance(data_dir)
+
+    def test_missing_catalogue_names_upstream_and_flag(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "data"
+        _write_manifest(data_dir)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run(self._args(data_dir))
+        msg = str(exc_info.value)
+        assert "run catalogue-dedup first" in msg
+        assert "--catalogue" in msg
+
+    def test_missing_verdicts_names_upstream_and_flag(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "data"
+        self._layout(data_dir)
+        screening_verdicts_path(data_dir, TEST_RUN_ID).unlink()
+        _write_manifest(data_dir)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run(self._args(data_dir))
+        msg = str(exc_info.value)
+        assert "run screening-abstracts first" in msg
+        assert "--screening-verdicts" in msg
+
+    def test_no_manifest_and_no_run_id_exits(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "data"
+        self._layout(data_dir)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run(self._args(data_dir))
+        assert "--run-id" in str(exc_info.value)

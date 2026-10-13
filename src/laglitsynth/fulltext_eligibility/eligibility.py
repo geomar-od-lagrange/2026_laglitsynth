@@ -33,20 +33,25 @@ from laglitsynth.fulltext_eligibility.prompts import (
     render_fulltext,
 )
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
-from laglitsynth.ids import generate_run_id
 from laglitsynth.io import (
     JsonlReadStats,
     append_jsonl,
     read_jsonl,
     write_meta,
 )
+from laglitsynth.layout import (
+    ELIGIBILITY_SUBDIR,
+    extractions_path,
+    require_input,
+    resolve_screening_inputs,
+)
+from laglitsynth.manifest import resolve_run_id
 from laglitsynth.models import LlmMeta, RunMeta
 from laglitsynth.ollama import preflight
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
 logger = logging.getLogger(__name__)
 
-STAGE_SUBDIR = "fulltext-eligibility"
 DEFAULT_ELIGIBILITY_CRITERIA = Path(
     "examples/eligibility-criteria/lagrangian-oceanography.yaml"
 )
@@ -244,14 +249,14 @@ def build_subparser(
     parser.add_argument(
         "--catalogue",
         type=Path,
-        required=True,
-        help="Deduplicated catalogue JSONL (data/catalogue-dedup/deduplicated.jsonl)",
+        default=None,
+        help="Deduplicated catalogue JSONL (default: <data-dir>/catalogue-dedup/deduplicated.jsonl).",
     )
     parser.add_argument(
         "--screening-verdicts",
         type=Path,
-        required=True,
-        help="Stage 3 verdicts JSONL (data/screening-abstracts/<run-id>/verdicts.jsonl)",
+        default=None,
+        help="Stage 3 verdicts JSONL (default: <data-dir>/screening-abstracts/<run-id>/verdicts.jsonl).",
     )
     parser.add_argument(
         "--screening-threshold",
@@ -262,8 +267,8 @@ def build_subparser(
     parser.add_argument(
         "--extractions",
         type=Path,
-        required=True,
-        help="Extraction JSONL (data/fulltext-extraction/extraction.jsonl)",
+        default=None,
+        help="Extraction JSONL (default: <data-dir>/fulltext-extraction/extraction.jsonl).",
     )
     parser.add_argument(
         "--extraction-output-dir",
@@ -283,7 +288,10 @@ def build_subparser(
     parser.add_argument(
         "--run-id",
         default=None,
-        help="Run identifier; default = generate_run_id() (<iso>_<12hex>).",
+        help=(
+            "Run identifier, shared with the screening run whose verdicts are "
+            "read (default: the run_id in <data-dir>/manifest.json)."
+        ),
     )
     parser.add_argument(
         "--eligibility-criteria",
@@ -347,11 +355,19 @@ def build_subparser(
 
 
 def run(args: argparse.Namespace) -> None:
-    preflight(base_url=args.base_url, model=args.model)
+    data_dir: Path = Path(args.data_dir)
+    args.run_id = resolve_run_id(data_dir, args.run_id)
+    args.catalogue, args.screening_verdicts = resolve_screening_inputs(
+        data_dir, args.catalogue, args.screening_verdicts, args.run_id
+    )
+    args.extractions = require_input(
+        args.extractions if args.extractions is not None else extractions_path(data_dir),
+        flag="--extractions",
+        upstream="fulltext-extraction",
+    )
 
-    if args.run_id is None:
-        args.run_id = generate_run_id()
-    output_dir: Path = Path(args.data_dir) / STAGE_SUBDIR / args.run_id
+    preflight(base_url=args.base_url, model=args.model)
+    output_dir: Path = data_dir / ELIGIBILITY_SUBDIR / args.run_id
     verdicts_path = output_dir / "verdicts.jsonl"
     meta_path = output_dir / "eligibility-meta.json"
 

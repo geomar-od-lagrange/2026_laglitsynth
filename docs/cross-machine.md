@@ -154,18 +154,17 @@ guard against exactly this — a single writer (A) means
 collaborators hand back folders of PDFs that A integrates serially, not a
 rewritten store.
 
-## Caveat: run-ids are coordinated by hand
+## The run-id travels in the manifest
 
-Stages 3, 7, and 8 write under a `<run-id>/` leaf, and a coherent run
-needs the **same** run-id across all three (and across machines: if NESH
-runs eligibility and the laptop later runs extraction, both pass the same
-`--run-id`). Today the only way to share that run-id is to type the same
-string on both machines — generate it once with `laglitsynth
-generate-run-id`, record it, and pass `--run-id "$RUN_ID"` everywhere, as
-the [end-to-end sequence](interfaces.md#end-to-end-sequence) shows. There
-is no manifest that carries the run-id with the data, so the run-id lives
-in operator memory and shell history rather than in `data/`. Until a run
-manifest lands (the top follow-up candidate in
-[running-the-pipeline.md](explorations/running-the-pipeline.md)),
-cross-machine run-id agreement is a manual discipline: write the run-id
-down alongside the project, not just in the shell that generated it.
+Stages 3, 7, and 8 write under a `<run-id>/` leaf, and a coherent run needs
+the same run-id across all three, including across machines: if NESH runs
+eligibility and the laptop later runs extraction, both must use the same one.
+`data/manifest.json` carries it. `laglitsynth manifest-init` mints the run-id
+once, and every run-id-aware stage adopts it when `--run-id` is omitted, so
+the string travels with `data/` under rsync instead of living in operator
+memory and shell history. An explicit `--run-id` still wins where a stage
+needs to target a different leaf. See [run-manifest.md](run-manifest.md).
+
+The manifest is written once and never rewritten, so it is the one file under
+`data/` with no sync direction to get wrong: copy it with the rest of the
+tree, in either direction.

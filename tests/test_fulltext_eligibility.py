@@ -13,6 +13,7 @@ from openai import APIConnectionError, APITimeoutError
 
 import hashlib
 
+from laglitsynth import layout
 from laglitsynth.fulltext_eligibility.eligibility import (
     _active_works,
     assess_works,
@@ -24,9 +25,11 @@ from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
 from conftest import (
     TEI_NS,
+    TEST_RUN_ID,
     _make_work,
     _mock_openai_response,
     _write_extractions_jsonl,
+    _write_manifest,
     _write_tei,
     _write_works_jsonl,
 )
@@ -1188,3 +1191,113 @@ def test_concurrency_one_uses_sequential_path(tmp_path: Path) -> None:
         run(args)
 
     mock_tpe.assert_not_called()
+
+
+# --- run() conventional input paths ---
+
+
+class TestConventionalPaths:
+    def _layout(self, data_dir: Path, run_id: str = TEST_RUN_ID) -> None:
+        catalogue = layout.deduplicated_path(data_dir)
+        catalogue.parent.mkdir(parents=True, exist_ok=True)
+        _write_works_jsonl(catalogue, [_make_work("W1", abstract="about oceans")])
+        verdicts_path = layout.screening_verdicts_path(data_dir, run_id)
+        verdicts_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_verdicts_jsonl(
+            verdicts_path, [ScreeningVerdict(work_id="W1", relevance_score=80)]
+        )
+        extractions = layout.extractions_path(data_dir)
+        extractions.parent.mkdir(parents=True, exist_ok=True)
+        _write_full_text_for(extractions, extractions.parent, ["W1"])
+
+    def _bare_args(self, data_dir: Path) -> argparse.Namespace:
+        args = _make_run_args(
+            data_dir,
+            catalogue=Path("unused"),
+            screening_verdicts=Path("unused"),
+            extractions=Path("unused"),
+        )
+        args.catalogue = None
+        args.screening_verdicts = None
+        args.extractions = None
+        args.extraction_output_dir = None
+        args.run_id = None
+        return args
+
+    def _run(self, args: argparse.Namespace) -> None:
+        with (
+            patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
+            patch(
+                "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
+                side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
+            ),
+            patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
+        ):
+            from laglitsynth.fulltext_eligibility.eligibility import run
+
+            run(args)
+
+    def test_omitted_flags_resolve_to_conventional_paths(self, tmp_path: Path) -> None:
+        self._layout(tmp_path)
+        _write_manifest(tmp_path)
+
+        self._run(self._bare_args(tmp_path))
+
+        out_dir = tmp_path / layout.ELIGIBILITY_SUBDIR / TEST_RUN_ID
+        meta = json.loads((out_dir / "eligibility-meta.json").read_text())
+        assert meta["input_catalogue"] == str(layout.deduplicated_path(tmp_path))
+        assert meta["input_screening_verdicts"] == str(
+            layout.screening_verdicts_path(tmp_path, TEST_RUN_ID)
+        )
+        assert meta["input_extractions"] == str(layout.extractions_path(tmp_path))
+        assert meta["input_count"] == 1
+
+    def test_explicit_flags_win(self, tmp_path: Path) -> None:
+        self._layout(tmp_path)
+        _write_manifest(tmp_path, run_id="from-manifest")
+
+        explicit_catalogue = tmp_path / "explicit-catalogue.jsonl"
+        _write_works_jsonl(explicit_catalogue, [_make_work("W1", abstract="abs")])
+        explicit_verdicts = tmp_path / "explicit-verdicts.jsonl"
+        _write_verdicts_jsonl(
+            explicit_verdicts, [ScreeningVerdict(work_id="W1", relevance_score=80)]
+        )
+        args = self._bare_args(tmp_path)
+        args.catalogue = explicit_catalogue
+        args.screening_verdicts = explicit_verdicts
+        args.run_id = "explicit-run-id"
+        self._run(args)
+
+        out_dir = tmp_path / layout.ELIGIBILITY_SUBDIR / "explicit-run-id"
+        assert not (tmp_path / layout.ELIGIBILITY_SUBDIR / "from-manifest").exists()
+        meta = json.loads((out_dir / "eligibility-meta.json").read_text())
+        assert meta["input_catalogue"] == str(explicit_catalogue)
+        assert meta["input_screening_verdicts"] == str(explicit_verdicts)
+
+    def test_missing_extractions_names_upstream_and_flag(self, tmp_path: Path) -> None:
+        self._layout(tmp_path)
+        layout.extractions_path(tmp_path).unlink()
+        _write_manifest(tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            self._run(self._bare_args(tmp_path))
+        msg = str(exc_info.value)
+        assert "run fulltext-extraction first" in msg
+        assert "--extractions" in msg
+
+    def test_missing_catalogue_names_upstream_and_flag(self, tmp_path: Path) -> None:
+        _write_manifest(tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            self._run(self._bare_args(tmp_path))
+        msg = str(exc_info.value)
+        assert "run catalogue-dedup first" in msg
+        assert "--catalogue" in msg
+
+    def test_no_manifest_and_no_run_id_exits(self, tmp_path: Path) -> None:
+        self._layout(tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            self._run(self._bare_args(tmp_path))
+        assert "--run-id" in str(exc_info.value)
+        assert not (tmp_path / layout.ELIGIBILITY_SUBDIR).exists()

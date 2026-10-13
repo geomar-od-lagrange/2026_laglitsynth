@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from laglitsynth.dotenv import load_env_var
 from laglitsynth.io import JsonlReadStats, write_jsonl, write_meta
 from laglitsynth.catalogue_fetch.models import TOOL_NAME, FetchMeta, Work
+from laglitsynth.layout import CATALOGUE_FETCH_SUBDIR
 from laglitsynth.models import RunMeta
 
 logger = logging.getLogger(__name__)
@@ -61,11 +62,11 @@ def _slugify(query: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", query.lower()).strip("_")
 
 
-def _default_output_path(query: str) -> Path:
+def _default_output_path(data_dir: Path, query: str) -> Path:
     """Generate default output path with timestamped filename."""
     slug = _slugify(query)
     ts = datetime.now(UTC).isoformat(timespec="microseconds").replace(":", "-")
-    return Path("data/catalogue-fetch") / f"{slug}_{ts}.jsonl"
+    return data_dir / CATALOGUE_FETCH_SUBDIR / f"{slug}_{ts}.jsonl"
 
 
 def search_openalex(
@@ -137,7 +138,18 @@ def build_subparser(
         help="Fetch publications from OpenAlex and save as JSONL.",
     )
     parser.add_argument("query", help="Search query string")
-    parser.add_argument("-o", "--output", type=Path, help="Output JSONL path")
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        help="Output JSONL path (default: <data-dir>/catalogue-fetch/<slug>_<timestamp>.jsonl)",
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path("data"),
+        help="Bucket root for stage outputs (default: data/)",
+    )
     parser.add_argument(
         "--from-year", type=int, help="Filter publications from this year onward"
     )
@@ -178,7 +190,7 @@ def run(args: argparse.Namespace) -> None:
 
     pyalex.config.api_key = api_key
 
-    output = args.output or _default_output_path(args.query)
+    output = args.output or _default_output_path(args.data_dir, args.query)
     meta_path = output.with_suffix(".meta.json")
 
     print(f"Output: {output}", file=sys.stderr)

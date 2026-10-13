@@ -144,20 +144,37 @@ non-`missing` provenance record, and writes a handoff bundle into
 - `missing.ris` — one RIS record per missing work (title, authors, year,
   journal, DOI), for import into any reference manager.
 - `pdf-manifest.csv` — the round-trip key, columns `work_id`, `stem`, `doi`,
-  `expected_filename` (`<stem>.pdf`). Import reads this to match returned
-  PDFs back to works; it is written by us, so matching never depends on what
-  a collaborator's tool names a file.
+  `title`, `year`, `expected_filename` (`<stem>.pdf`). Import reads
+  `work_id`, `stem`, and `doi` to match returned PDFs back to works; it is
+  written by us, so matching never depends on what a collaborator's tool
+  names a file. `title` and `year` are there so a person can read the list.
+- `no-doi.csv` — the works with no DOI, with `work_id`, `stem`, `title`,
+  `year`, and `expected_filename`. These are the ones a collaborator has to
+  search for by title. Always written, header row included, so its absence
+  never has to be interpreted.
+- `README.md` — what the bundle is, what each file is for, and what to send
+  back: the PDFs as downloaded, in one folder, no renaming. It travels with
+  the bundle, because the bundle travels and the repo does not.
 
-Works without a DOI appear in `pdf-manifest.csv` and `missing.ris` (DOI
-empty) but not in `dois.txt` — there is no link to resolve.
+Works without a DOI appear in `pdf-manifest.csv`, `no-doi.csv`, and
+`missing.ris` (DOI empty) but not in `dois.txt` — there is no link to
+resolve.
+
+The runner exports the gap when `EXPORT_GAP=1`, straight after stage 5. With
+`STOP_AFTER_STAGE=5 EXPORT_GAP=1`, one invocation of
+[run-pipeline.sh](../scripts/run-pipeline.sh) fetches the catalogue, screens
+it, takes what open access gives, and writes the bundle for everything still
+missing. `EXPORT_GAP` is an environment knob only: the export rewrites
+`pdf-manifest.csv`, which a collaborator may be holding, so it is a one-shot
+action rather than a property of the review config.
 
 ### `fulltext-retrieval-import`
 
 Ingests a returned folder of PDFs into `data/pdfs/`. Takes `--import-dir`
-(the folder a collaborator shipped back), `--manifest` (the
-`pdf-manifest.csv` from the matching export), and `--source`
-(`zotero-import` | `manual`). For each PDF it resolves a target stem, never
-guessed, in this order:
+(the folder a collaborator shipped back) and `--source`
+(`zotero-import` | `manual`); `--pdf-manifest` defaults to the
+`pdf-manifest.csv` of the last export under `--data-dir`. For each PDF it
+resolves a target stem, never guessed, in this order:
 
 1. an embedded DOI in the PDF metadata or first-page text that appears in the
    manifest's DOI map (Zotero's "Export Files" names attachments by item
@@ -174,13 +191,14 @@ wins) unless `--overwrite` is passed. Matched, new PDFs are copied in and
 their provenance is upserted with the given `--source`. A PDF that resolves
 to no manifest stem, or is not a real PDF, is reported and skipped. Import
 prints a summary — matched and copied, skipped, and how many manifest works
-are still missing after this import.
+are still missing after this import. The unmatched residual is the
+operator's to resolve, by renaming those files to their `expected_filename`
+and importing again; the collaborator is never asked to name anything.
 
-A deferred enhancement would let contributors ignore filenames and sidecars
-entirely, matching returned PDFs against the closed manifest by broadened
-DOI extraction (XMP, link annotations) and a title fallback —
+A title-matching fallback for PDFs that embed no DOI is the open follow-up —
 [contributor-pdf-matching.md](explorations/contributor-pdf-matching.md)
-captures the design and why its data-dependent half waits for real returns.
+records the measurement behind the current matching and what the fallback
+needs.
 
 ## Collaboration model
 

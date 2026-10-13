@@ -13,9 +13,11 @@ Resolved output dir is `<data-dir>/<stage-subdir>/<run-id>/`. `--data-dir`
 (default: `data/`) is the bucket root, swapped wholesale to repoint a
 sweep at a sibling tree. `<stage-subdir>` is hardcoded per stage:
 `screening-abstracts`, `fulltext-eligibility`, `extraction-codebook`.
-`--run-id` (default: a generated `<iso-1s>_<12hex>` in UTC) names the
-leaf — the ISO timestamp is human-readable and the 12-hex suffix
-removes concurrent-job collision risk on NESH or local sweeps. PDFs
+`--run-id` (default: the `run_id` in `<data-dir>/manifest.json`, see
+[run-manifest.md](run-manifest.md)) names the leaf; a minted id is a
+`<iso-1s>_<12hex>` in UTC — the ISO timestamp is human-readable and the
+12-hex suffix removes concurrent-job collision risk on NESH or local
+sweeps. PDFs
 and TEIs (under `<data-dir>/fulltext-extraction/tei/` and so on) are
 not run-namespaced; they are a shared input cache populated
 incrementally via the existing `--skip-existing` paths.
@@ -129,20 +131,15 @@ when neither the specific env var nor the config pins them. See
 ## Quick recipes
 
 ```bash
-# fresh run with defaults (auto run-id, default codebook YAML, etc.)
-laglitsynth extraction-codebook \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    --eligibility-verdicts data/fulltext-eligibility/<run-id>/verdicts.jsonl \
-    --extractions data/fulltext-extraction/extraction.jsonl
+# run with defaults: inputs at their conventional paths under data/,
+# run-id from data/manifest.json, default codebook YAML
+laglitsynth extraction-codebook
 
-# pin the run-id for reproducible directory placement
-laglitsynth extraction-codebook ... --run-id 2026-05-03T14-30-00_abc123def456
+# write under a run-id other than the manifest's
+laglitsynth extraction-codebook --run-id 2026-05-03T14-30-00_abc123def456
 
-# rerun a saved snapshot from its config (fresh run-id; same config)
-laglitsynth extraction-codebook --config data/extraction-codebook/<run-id>/config.yaml \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    --eligibility-verdicts data/fulltext-eligibility/<run-id>/verdicts.jsonl \
-    --extractions data/fulltext-extraction/extraction.jsonl
+# rerun a saved snapshot from its config
+laglitsynth extraction-codebook --config data/extraction-codebook/<run-id>/config.yaml
 
 # alternative codebook
 laglitsynth extraction-codebook ... --codebook examples/codebooks/my-other-domain.yaml

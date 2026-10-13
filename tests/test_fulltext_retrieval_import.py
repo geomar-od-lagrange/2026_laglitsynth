@@ -7,14 +7,16 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from pypdf import PdfWriter
 
-from laglitsynth.fulltext_retrieval.import_ import import_pdfs, run
+from laglitsynth.fulltext_retrieval.import_ import import_pdfs, read_manifest, run
 from laglitsynth.fulltext_retrieval.models import PdfSource
 from laglitsynth.fulltext_retrieval.store import load_provenance, store_pdf_path
+from laglitsynth.layout import pdf_manifest_path
 
 
-def _write_manifest(
+def _write_pdf_manifest(
     path: Path, rows: list[tuple[str, str, str]]
 ) -> None:
     """rows: (work_id, stem, doi)."""
@@ -37,12 +39,41 @@ def _make_pdf(path: Path, *, doi_in_metadata: str | None = None) -> None:
         writer.write(f)
 
 
+class TestReadManifest:
+    def test_extra_export_columns_round_trip(self, tmp_path: Path) -> None:
+        # The export writes title/year/expected_filename for the collaborator;
+        # read_manifest ignores them and keeps work_id/stem/doi.
+        manifest = tmp_path / "pdf-manifest.csv"
+        with open(manifest, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(
+                ["work_id", "stem", "doi", "title", "year", "expected_filename"]
+            )
+            writer.writerow(
+                [
+                    "https://openalex.org/W1",
+                    "W1",
+                    "10.1/a",
+                    "A Great Paper",
+                    "2019",
+                    "W1.pdf",
+                ]
+            )
+            writer.writerow(["https://openalex.org/W2", "W2", "", "", "", "W2.pdf"])
+
+        entries = read_manifest(manifest)
+        assert [(e.work_id, e.stem, e.doi) for e in entries] == [
+            ("https://openalex.org/W1", "W1", "10.1/a"),
+            ("https://openalex.org/W2", "W2", None),
+        ]
+
+
 class TestImportByDoi:
     def test_embedded_doi_match_zotero(self, tmp_path: Path) -> None:
         import_dir = tmp_path / "incoming"
         data_dir = tmp_path / "data"
         manifest = tmp_path / "pdf-manifest.csv"
-        _write_manifest(
+        _write_pdf_manifest(
             manifest, [("https://openalex.org/W1", "W1", "10.1234/abc")]
         )
         # Zotero-named file (item title), DOI only resolvable via embedded metadata.
@@ -69,7 +100,7 @@ class TestImportByDoi:
         import_dir = tmp_path / "incoming"
         data_dir = tmp_path / "data"
         manifest = tmp_path / "pdf-manifest.csv"
-        _write_manifest(
+        _write_pdf_manifest(
             manifest, [("https://openalex.org/W1", "W1", "10.1234/abc")]
         )
         _make_pdf(import_dir / "Some Paper Title.pdf")  # no embedded DOI metadata
@@ -103,7 +134,7 @@ class TestImportByFilenameStem:
         import_dir = tmp_path / "incoming"
         data_dir = tmp_path / "data"
         manifest = tmp_path / "pdf-manifest.csv"
-        _write_manifest(manifest, [("https://openalex.org/W2", "W2", "")])
+        _write_pdf_manifest(manifest, [("https://openalex.org/W2", "W2", "")])
         _make_pdf(import_dir / "W2.pdf")  # named by stem, no DOI
 
         summary, still_missing = import_pdfs(
@@ -120,7 +151,7 @@ class TestImportSidecar:
         import_dir = tmp_path / "incoming"
         data_dir = tmp_path / "data"
         manifest = tmp_path / "pdf-manifest.csv"
-        _write_manifest(
+        _write_pdf_manifest(
             manifest, [("https://openalex.org/W3", "W3", "10.9/zzz")]
         )
         # File named neither by stem nor with an embedded DOI; sidecar maps it.
@@ -141,7 +172,7 @@ class TestImportSkips:
         import_dir = tmp_path / "incoming"
         data_dir = tmp_path / "data"
         manifest = tmp_path / "pdf-manifest.csv"
-        _write_manifest(manifest, [("https://openalex.org/W1", "W1", "10.1/a")])
+        _write_pdf_manifest(manifest, [("https://openalex.org/W1", "W1", "10.1/a")])
         import_dir.mkdir()
         # Not a PDF (wrong magic bytes) but .pdf extension.
         (import_dir / "fake.pdf").write_bytes(b"<html>nope</html>")
@@ -163,7 +194,7 @@ class TestImportDedup:
         import_dir = tmp_path / "incoming"
         data_dir = tmp_path / "data"
         manifest = tmp_path / "pdf-manifest.csv"
-        _write_manifest(manifest, [("https://openalex.org/W2", "W2", "")])
+        _write_pdf_manifest(manifest, [("https://openalex.org/W2", "W2", "")])
         _make_pdf(import_dir / "W2.pdf")
 
         import_pdfs(import_dir, manifest, data_dir, PdfSource.manual, overwrite=False)
@@ -177,7 +208,7 @@ class TestImportDedup:
         import_dir = tmp_path / "incoming"
         data_dir = tmp_path / "data"
         manifest = tmp_path / "pdf-manifest.csv"
-        _write_manifest(manifest, [("https://openalex.org/W2", "W2", "")])
+        _write_pdf_manifest(manifest, [("https://openalex.org/W2", "W2", "")])
         _make_pdf(import_dir / "W2.pdf")
         import_pdfs(import_dir, manifest, data_dir, PdfSource.manual, overwrite=False)
 
@@ -200,7 +231,7 @@ class TestImportDedup:
         import_dir = tmp_path / "incoming"
         data_dir = tmp_path / "data"
         manifest = tmp_path / "pdf-manifest.csv"
-        _write_manifest(manifest, [("https://openalex.org/W2", "W2", "")])
+        _write_pdf_manifest(manifest, [("https://openalex.org/W2", "W2", "")])
         _make_pdf(import_dir / "W2.pdf")
         import_pdfs(import_dir, manifest, data_dir, PdfSource.manual, overwrite=False)
         first_sha = load_provenance(data_dir)["https://openalex.org/W2"].content_sha256
@@ -221,12 +252,12 @@ class TestImportRun:
         import_dir = tmp_path / "incoming"
         data_dir = tmp_path / "data"
         manifest = tmp_path / "pdf-manifest.csv"
-        _write_manifest(manifest, [("https://openalex.org/W1", "W1", "")])
+        _write_pdf_manifest(manifest, [("https://openalex.org/W1", "W1", "")])
         _make_pdf(import_dir / "W1.pdf")
 
         args = MagicMock()
         args.import_dir = import_dir
-        args.manifest = manifest
+        args.pdf_manifest = manifest
         args.data_dir = data_dir
         args.source = "manual"
         args.overwrite = False
@@ -237,3 +268,54 @@ class TestImportRun:
             load_provenance(data_dir)["https://openalex.org/W1"].source
             == PdfSource.manual
         )
+
+
+class TestConventionalPaths:
+    def _args(self, tmp_path: Path, data_dir: Path) -> MagicMock:
+        args = MagicMock()
+        args.import_dir = tmp_path / "incoming"
+        args.pdf_manifest = None
+        args.data_dir = data_dir
+        args.source = "manual"
+        args.overwrite = False
+        return args
+
+    def test_omitted_flag_resolves_to_conventional_path(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "data"
+        _write_pdf_manifest(
+            pdf_manifest_path(data_dir), [("https://openalex.org/W1", "W1", "")]
+        )
+        _make_pdf(tmp_path / "incoming" / "W1.pdf")
+
+        run(self._args(tmp_path, data_dir))
+
+        assert store_pdf_path(data_dir, "W1").exists()
+        assert (
+            load_provenance(data_dir)["https://openalex.org/W1"].source
+            == PdfSource.manual
+        )
+
+    def test_explicit_flag_wins(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "data"
+        _write_pdf_manifest(
+            pdf_manifest_path(data_dir),
+            [("https://openalex.org/W-wrong", "W-wrong", "")],
+        )
+        explicit = tmp_path / "explicit-manifest.csv"
+        _write_pdf_manifest(explicit, [("https://openalex.org/W1", "W1", "")])
+        _make_pdf(tmp_path / "incoming" / "W1.pdf")
+
+        args = self._args(tmp_path, data_dir)
+        args.pdf_manifest = explicit
+        run(args)
+
+        assert set(load_provenance(data_dir)) == {"https://openalex.org/W1"}
+
+    def test_missing_pdf_manifest_names_upstream_and_flag(
+        self, tmp_path: Path
+    ) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            run(self._args(tmp_path, tmp_path / "data"))
+        msg = str(exc_info.value)
+        assert "run fulltext-retrieval-export first" in msg
+        assert "--pdf-manifest" in msg

@@ -39,6 +39,7 @@ from laglitsynth.fulltext_retrieval.store import (
 )
 from laglitsynth.ids import work_id_to_filename
 from laglitsynth.io import JsonlReadStats, read_jsonl, write_meta
+from laglitsynth.layout import resolve_screening_inputs
 from laglitsynth.models import RunMeta
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
@@ -280,14 +281,22 @@ def build_subparser(
     parser.add_argument(
         "--catalogue",
         type=Path,
-        required=True,
-        help="Deduplicated catalogue JSONL (data/catalogue-dedup/deduplicated.jsonl)",
+        default=None,
+        help="Deduplicated catalogue JSONL (default: <data-dir>/catalogue-dedup/deduplicated.jsonl).",
     )
     parser.add_argument(
         "--screening-verdicts",
         type=Path,
-        required=True,
-        help="Stage 3 verdicts JSONL (data/screening-abstracts/<run-id>/verdicts.jsonl)",
+        default=None,
+        help="Stage 3 verdicts JSONL (default: <data-dir>/screening-abstracts/<run-id>/verdicts.jsonl).",
+    )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help=(
+            "Screening run to read verdicts from (default: the run_id in "
+            "<data-dir>/manifest.json). Unused when --screening-verdicts is given."
+        ),
     )
     parser.add_argument(
         "--screening-threshold",
@@ -344,6 +353,10 @@ def run(args: argparse.Namespace) -> None:
     data_dir: Path = args.data_dir
     data_dir.mkdir(parents=True, exist_ok=True)
 
+    catalogue, screening_verdicts = resolve_screening_inputs(
+        data_dir, args.catalogue, args.screening_verdicts, args.run_id
+    )
+
     stats = JsonlReadStats()
 
     # Load the whole provenance store keyed by work_id (single-writer,
@@ -369,8 +382,8 @@ def run(args: argparse.Namespace) -> None:
 
     works = list(
         _active_works(
-            args.catalogue,
-            args.screening_verdicts,
+            catalogue,
+            screening_verdicts,
             args.screening_threshold,
             stats,
         )
@@ -449,8 +462,9 @@ def run(args: argparse.Namespace) -> None:
         run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
         validation_skipped=stats.skipped,
     )
+    meta_path = data_dir / "fulltext-retrieval" / "retrieval-meta.json"
     write_meta(
-        data_dir / "fulltext-retrieval" / "retrieval-meta.json",
+        meta_path,
         RetrievalMeta(
             run=run_meta,
             total_works=total,

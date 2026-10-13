@@ -33,10 +33,10 @@ laglitsynth screening-abstracts input.jsonl --screening-threshold 70
 # bucket root override (e.g. for sweeps writing into a sibling tree)
 laglitsynth screening-abstracts input.jsonl --data-dir runs/sweep-A
 
-# pin the run-id (otherwise a fresh <iso>_<12hex> is generated)
+# keep an earlier run: write under a run-id other than the manifest's
 laglitsynth screening-abstracts input.jsonl --run-id 2026-05-03T14-30-00_abc123def456
 
-# rerun with the configuration of a prior run (fresh run-id)
+# rerun with the configuration of a prior run
 laglitsynth screening-abstracts input.jsonl --config data/screening-abstracts/<run-id>/config.yaml
 
 # prompt tuning: process first 20 works, print verdicts, don't write output
@@ -47,10 +47,10 @@ laglitsynth screening-abstracts input.jsonl --dry-run --max-records 20
 
 | Argument | Description |
 |---|---|
-| `INPUT` (positional) | Input JSONL file path (required). |
+| `INPUT` (positional) | Input JSONL file path (default: `<data-dir>/catalogue-dedup/deduplicated.jsonl`). |
 | `--screening-criteria` | Screening-criteria YAML carrying a `system_prompt` field (default: [`examples/screening-criteria/lagrangian-oceanography.yaml`](../examples/screening-criteria/lagrangian-oceanography.yaml)). |
 | `--data-dir` | Bucket root for stage outputs (default: `data/`). |
-| `--run-id` | Run identifier (default: generated `<iso>_<12hex>`). |
+| `--run-id` | Run identifier. The flag wins; otherwise the `run_id` in `<data-dir>/manifest.json`; otherwise the stage exits. A re-run under the same run-id rewrites that run's `verdicts.jsonl` and says so on stderr — pass `--run-id` to keep an earlier run. See [run-manifest.md](run-manifest.md). |
 | `--config` | YAML config file whose values seed argparse defaults; explicit CLI flags override. |
 | `--model` | Ollama model name (default: `gemma3:4b`). |
 | `--screening-threshold` | Relevance score cutoff, 0--100 as a `float` (default: `50.0`). |

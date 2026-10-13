@@ -41,6 +41,7 @@ from laglitsynth.fulltext_retrieval.store import (
     store_pdf_path,
     upsert_provenance,
 )
+from laglitsynth.layout import pdf_manifest_path, require_input
 
 # DOI syntax per Crossref's recommended regex (case-insensitive).
 _DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:a-z0-9]+", re.IGNORECASE)
@@ -78,16 +79,15 @@ def read_manifest(path: Path) -> list[ManifestEntry]:
     """Parse ``pdf-manifest.csv`` into ``ManifestEntry`` rows."""
     entries: list[ManifestEntry] = []
     with open(path, newline="", encoding="utf-8") as f:
-        # The export also writes an ``expected_filename`` column; it is an
-        # advisory round-trip hint for the collaborator (written, never read
-        # back here), so only work_id/stem/doi are pulled into the entry.
+        # The export also writes ``title``, ``year``, and ``expected_filename``
+        # columns for the collaborator's eyes; import matches on DOI and stem
+        # only, so they are not pulled into the entry.
         for row in csv.DictReader(f):
-            doi = row.get("doi") or None
             entries.append(
                 ManifestEntry(
                     work_id=row["work_id"],
                     stem=row["stem"],
-                    doi=doi if doi else None,
+                    doi=row.get("doi") or None,
                 )
             )
     return entries
@@ -278,10 +278,13 @@ def build_subparser(
         help="Folder of PDFs a collaborator shipped back.",
     )
     parser.add_argument(
-        "--manifest",
+        "--pdf-manifest",
         type=Path,
-        required=True,
-        help="pdf-manifest.csv from the matching export.",
+        default=None,
+        help=(
+            "pdf-manifest.csv from the matching export "
+            "(default: <data-dir>/pdfs/export/pdf-manifest.csv)."
+        ),
     )
     parser.add_argument(
         "--data-dir",
@@ -305,11 +308,19 @@ def build_subparser(
 
 
 def run(args: argparse.Namespace) -> None:
+    data_dir: Path = args.data_dir
     source = _IMPORT_SOURCES[args.source]
+    manifest_path = require_input(
+        args.pdf_manifest
+        if args.pdf_manifest is not None
+        else pdf_manifest_path(data_dir),
+        flag="--pdf-manifest",
+        upstream="fulltext-retrieval-export",
+    )
     summary, still_missing = import_pdfs(
         args.import_dir,
-        args.manifest,
-        args.data_dir,
+        manifest_path,
+        data_dir,
         source,
         overwrite=args.overwrite,
     )

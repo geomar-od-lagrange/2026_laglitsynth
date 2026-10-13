@@ -202,8 +202,9 @@ consumed by downstream stages (eligibility, data extraction).
 
 ```
 laglitsynth fulltext-extraction \
-    --pdf-dir data/pdfs/ \
-    --output-dir data/fulltext-extraction/ \
+    [--pdf-dir data/pdfs/] \
+    [--output-dir data/fulltext-extraction/] \
+    [--data-dir data/] \
     [--grobid-url http://localhost:8070] \
     [--timeout 120] \
     [--skip-existing] \
@@ -212,10 +213,12 @@ laglitsynth fulltext-extraction \
 
 ### Arguments
 
-- `--pdf-dir`: directory containing retrieved PDFs (the PDF store, e.g.
-  `data/pdfs/`).
+- `--pdf-dir`: directory containing retrieved PDFs. Defaults to the PDF
+  store `<data-dir>/pdfs/`; exits naming `fulltext-retrieval` when absent.
 - `--output-dir`: where to write extraction records, metadata, and TEI
-  files.
+  files. Defaults to `<data-dir>/fulltext-extraction/`.
+- `--data-dir`: bucket root the two defaults above hang off (default:
+  `data/`).
 - `--grobid-url`: GROBID API endpoint. Optional; defaults to
   `http://localhost:8070`.
 - `--timeout`: per-paper GROBID timeout in seconds. Optional; defaults to
@@ -254,11 +257,7 @@ If GROBID goes down mid-corpus, restart the container and re-run with
 
 ```bash
 docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0  # restart GROBID
-laglitsynth fulltext-extraction \
-    --pdf-dir data/pdfs/ \
-    --output-dir data/fulltext-extraction/ \
-    --grobid-url http://localhost:8070 \
-    --skip-existing
+laglitsynth fulltext-extraction --skip-existing
 ```
 
 Already-extracted PDFs (those with an `ExtractedDocument` record in

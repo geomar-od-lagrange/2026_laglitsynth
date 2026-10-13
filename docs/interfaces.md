@@ -50,6 +50,14 @@ on real data. Stages 3, 5, and 7 all take `--screening-threshold` as a
 
 ## Artifact map
 
+Every path below is where a stage reads or writes by default; each can be
+passed explicitly to override. The run-id leaf comes from
+`data/manifest.json` — see [run-manifest.md](run-manifest.md).
+
+| Path | Model | Description |
+|---|---|---|
+| `data/manifest.json` | [`RunManifest`](../src/laglitsynth/manifest.py) | The review's queries and shared run-id; written once by `manifest-init` |
+
 ### Stage 1 — catalogue-fetch *(exists)*
 
 | Path | Model | Description |
@@ -189,15 +197,24 @@ so downstream stages apply them at read time.
 
 ### Existing subcommands
 
+Input and output paths are shown where they default under `--data-dir`
+(itself defaulting to `data/`); every one can be overridden with the flag
+named. `--run-id` on stages 3, 5, 7, 8 defaults to the `run_id` in
+`<data-dir>/manifest.json` — see [run-manifest.md](run-manifest.md).
+
 ```sh
+# Review setup — once per data dir
+laglitsynth manifest-init QUERY [QUERY ...] [--data-dir DIR]
+
 # Stage 1 — catalogue-fetch
 laglitsynth catalogue-fetch QUERY --api-key KEY \
-    [-o OUTPUT] [--from-year YEAR] [--to-year YEAR] [--max-records N]
+    [-o data/catalogue-fetch/<slug>_<timestamp>.jsonl] \
+    [--from-year YEAR] [--to-year YEAR] [--max-records N]
 
 # Stage 2 — catalogue-dedup
 laglitsynth catalogue-dedup \
-    --input "data/catalogue-fetch/*.jsonl" \
-    --output-dir data/catalogue-dedup/
+    [--input "data/catalogue-fetch/*.jsonl"] \
+    [--output-dir data/catalogue-dedup/]
 
 # Stage 2b — abstract-lookup
 laglitsynth abstract-lookup \
@@ -207,7 +224,7 @@ laglitsynth abstract-lookup \
     [--api-key KEY] [--skip-existing]
 
 # Stage 3 — screening-abstracts
-laglitsynth screening-abstracts INPUT \
+laglitsynth screening-abstracts [data/catalogue-dedup/deduplicated.jsonl] \
     [--screening-criteria FILE] \
     [--data-dir DIR] [--run-id ID] [--config FILE] \
     [--model MODEL] [--screening-threshold FLOAT] \
@@ -221,44 +238,39 @@ laglitsynth screening-abstracts-export \
 
 # Stage 5 — fulltext-retrieval (automatic OA + Unpaywall into data/pdfs/)
 laglitsynth fulltext-retrieval \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    --screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
-    --screening-threshold 50 \
-    --data-dir data/ \
+    [--catalogue data/catalogue-dedup/deduplicated.jsonl] \
+    [--screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl] \
+    [--run-id ID] [--screening-threshold 50] [--data-dir DIR] \
     --email EMAIL \
     [--refetch] [--dry-run]
 
 # Stage 5 — fulltext-retrieval-export (handoff bundle for a collaborator)
 laglitsynth fulltext-retrieval-export \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    --screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
-    --screening-threshold 50 \
-    --data-dir data/ \
+    [--catalogue data/catalogue-dedup/deduplicated.jsonl] \
+    [--screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl] \
+    [--run-id ID] [--screening-threshold 50] [--data-dir DIR] \
     [--export-dir data/pdfs/export/]
 
 # Stage 5 — fulltext-retrieval-import (ingest a returned PDF folder)
 laglitsynth fulltext-retrieval-import \
     --import-dir PATH \
-    --manifest data/pdfs/export/pdf-manifest.csv \
-    --data-dir data/ \
     --source zotero-import|manual \
-    [--overwrite]
+    [--pdf-manifest data/pdfs/export/pdf-manifest.csv] \
+    [--data-dir DIR] [--overwrite]
 
 # Stage 6 — fulltext-extraction
 laglitsynth fulltext-extraction \
-    --pdf-dir data/pdfs/ \
-    --output-dir data/fulltext-extraction/ \
-    --grobid-url URL \
-    [--skip-existing]
+    [--pdf-dir data/pdfs/] \
+    [--output-dir data/fulltext-extraction/] \
+    [--data-dir DIR] [--grobid-url URL] [--skip-existing]
 
 # Stage 7 — fulltext-eligibility
 laglitsynth fulltext-eligibility \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    --screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
-    --screening-threshold 50 \
-    --extractions data/fulltext-extraction/extraction.jsonl \
+    [--catalogue data/catalogue-dedup/deduplicated.jsonl] \
+    [--screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl] \
+    [--extractions data/fulltext-extraction/extraction.jsonl] \
     [--extraction-output-dir data/fulltext-extraction/] \
-    [--data-dir DIR] [--run-id ID] \
+    [--screening-threshold 50] [--data-dir DIR] [--run-id ID] \
     [--eligibility-criteria FILE] [--config FILE] \
     [--skip-existing] [--max-records N] [--dry-run] \
     [--model MODEL] [--base-url URL] \
@@ -272,9 +284,9 @@ laglitsynth fulltext-eligibility-export \
 
 # Stage 8 — extraction-codebook
 laglitsynth extraction-codebook \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    --eligibility-verdicts data/fulltext-eligibility/<run-id>/verdicts.jsonl \
-    --extractions data/fulltext-extraction/extraction.jsonl \
+    [--catalogue data/catalogue-dedup/deduplicated.jsonl] \
+    [--eligibility-verdicts data/fulltext-eligibility/<run-id>/verdicts.jsonl] \
+    [--extractions data/fulltext-extraction/extraction.jsonl] \
     [--extraction-output-dir data/fulltext-extraction/] \
     [--data-dir DIR] [--run-id ID] \
     [--codebook FILE] [--config FILE] \
@@ -298,10 +310,9 @@ in-flight LLM requests and `--num-ctx` (default `32768`) sets the
 Ollama context-window hint passed via `extra_body`. See
 [llm-concurrency.md](llm-concurrency.md) and [bake-model.md](bake-model.md).
 
-Stages 1 and 3 use positional arguments. All other subcommands use
-`--input` / `--output-dir` keyword flags. Stages 1 and 3 should be
-harmonized to keyword flags when updated. No backwards compatibility
-constraints ([AGENTS.md](../AGENTS.md)).
+Stages 1 and 3 use positional arguments; the rest use keyword flags.
+Stages 1 and 3 should be harmonized to keyword flags when updated. No
+backwards compatibility constraints ([AGENTS.md](../AGENTS.md)).
 
 ### Configuration: flags first, `.env` fallback for credentials
 
@@ -345,75 +356,45 @@ laglitsynth synthesis-narrative \
 A complete pipeline run with manual steps noted.
 
 ```sh
-# 1. Catalogue fetch (repeat for different keyword sets)
-laglitsynth catalogue-fetch "lagrangian particle tracking" \
-    --api-key "$OPENALEX_API_KEY" \
-    -o data/catalogue-fetch/search_a.jsonl
-laglitsynth catalogue-fetch "ocean tracer simulation" \
-    --api-key "$OPENALEX_API_KEY" \
-    -o data/catalogue-fetch/search_b.jsonl
+# 0. Initialise the review: mints the run-id every later stage reads
+laglitsynth manifest-init "lagrangian particle tracking" "ocean tracer simulation"
 
-# 2. Catalogue dedup (--input accepts multiple paths or globs)
-laglitsynth catalogue-dedup \
-    --input "data/catalogue-fetch/*.jsonl" \
-    --output-dir data/catalogue-dedup/
+# 1. Catalogue fetch (repeat for different keyword sets; each lands as its
+#    own timestamped file under data/catalogue-fetch/)
+laglitsynth catalogue-fetch "lagrangian particle tracking" --api-key "$OPENALEX_API_KEY"
+laglitsynth catalogue-fetch "ocean tracer simulation" --api-key "$OPENALEX_API_KEY"
+
+# 2. Catalogue dedup (reads data/catalogue-fetch/*.jsonl)
+laglitsynth catalogue-dedup
 
 # 3. Screening abstracts (writes to data/screening-abstracts/<run-id>/)
-# Note the run-id printed at the end — you need it for stages 5, 7, 8.
 # The relevance criterion lives in the screening-criteria YAML's
 # system_prompt field (default: the Lagrangian-oceanography example).
-RUN_ID="$(laglitsynth generate-run-id)"
 laglitsynth screening-abstracts \
-    data/catalogue-dedup/deduplicated.jsonl \
-    --screening-criteria examples/screening-criteria/lagrangian-oceanography.yaml \
-    --run-id "$RUN_ID"
+    --screening-criteria examples/screening-criteria/lagrangian-oceanography.yaml
 
 # 5. Fulltext retrieval (inline-joins catalogue + stage 3 verdicts).
 #    Sticky by default: re-runs skip works that already have a PDF and
 #    attempt only missing/unseen ones.
-laglitsynth fulltext-retrieval \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    --screening-verdicts "data/screening-abstracts/$RUN_ID/verdicts.jsonl" \
-    --screening-threshold 50 \
-    --data-dir data/ \
-    --email user@example.com
+laglitsynth fulltext-retrieval --email user@example.com
 
 # Diversify the still-missing margin via collaborators with library access:
 # export the gap, hand the bundle to a collaborator, import what they return.
-laglitsynth fulltext-retrieval-export \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    --screening-verdicts "data/screening-abstracts/$RUN_ID/verdicts.jsonl" \
-    --screening-threshold 50 \
-    --data-dir data/
+laglitsynth fulltext-retrieval-export
 # ... collaborator resolves data/pdfs/export/dois.txt through their own access ...
 laglitsynth fulltext-retrieval-import \
     --import-dir ~/Downloads/returned-pdfs/ \
-    --manifest data/pdfs/export/pdf-manifest.csv \
-    --data-dir data/ \
     --source zotero-import
 
 # 6. Fulltext extraction
 # Manual: start GROBID container first
-laglitsynth fulltext-extraction \
-    --pdf-dir data/pdfs/ \
-    --output-dir data/fulltext-extraction/ \
-    --grobid-url http://localhost:8070
+laglitsynth fulltext-extraction --grobid-url http://localhost:8070
 
 # 7. Fulltext eligibility (writes to data/fulltext-eligibility/<run-id>/)
-laglitsynth fulltext-eligibility \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    --screening-verdicts "data/screening-abstracts/$RUN_ID/verdicts.jsonl" \
-    --screening-threshold 50 \
-    --extractions data/fulltext-extraction/extraction.jsonl \
-    --run-id "$RUN_ID"
+laglitsynth fulltext-eligibility
 
 # 8. Extraction codebook (writes to data/extraction-codebook/<run-id>/)
-laglitsynth extraction-codebook \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    --eligibility-verdicts "data/fulltext-eligibility/$RUN_ID/verdicts.jsonl" \
-    --extractions data/fulltext-extraction/extraction.jsonl \
-    --run-id "$RUN_ID"
-
+laglitsynth extraction-codebook
 ```
 
 #### STOP HERE — stages 9–12 are not yet implemented

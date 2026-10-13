@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from laglitsynth.catalogue_dedup.dedup import (
     _normalise_title,
     deduplicate,
@@ -116,6 +118,7 @@ def test_dropped_jsonl_records_rule(tmp_path: Path) -> None:
     args = MagicMock()
     args.input = [str(tmp_path / "input.jsonl")]
     args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
     run(args)
 
     dropped_lines = (tmp_path / "out" / "dropped.jsonl").read_text().strip().splitlines()
@@ -137,6 +140,7 @@ def test_multi_input_glob(tmp_path: Path) -> None:
     args = MagicMock()
     args.input = [str(tmp_path / "fetch_*.jsonl")]
     args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
     run(args)
 
     dedup_lines = (tmp_path / "out" / "deduplicated.jsonl").read_text().strip().splitlines()
@@ -160,6 +164,7 @@ def test_multi_input_glob_deduplicates_across_files(tmp_path: Path) -> None:
     args = MagicMock()
     args.input = [str(tmp_path / "file_a.jsonl"), str(tmp_path / "file_b.jsonl")]
     args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
     run(args)
 
     dedup_lines = (tmp_path / "out" / "deduplicated.jsonl").read_text().strip().splitlines()
@@ -188,6 +193,7 @@ def test_works_without_doi_use_title_author_year(tmp_path: Path) -> None:
     args = MagicMock()
     args.input = [str(tmp_path / "input.jsonl")]
     args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
     run(args)
 
     dedup_lines = (tmp_path / "out" / "deduplicated.jsonl").read_text().strip().splitlines()
@@ -216,6 +222,7 @@ def test_no_duplicates_passes_through_unchanged(tmp_path: Path) -> None:
     args = MagicMock()
     args.input = [str(tmp_path / "input.jsonl")]
     args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
     run(args)
 
     dedup_lines = (tmp_path / "out" / "deduplicated.jsonl").read_text().strip().splitlines()
@@ -296,6 +303,7 @@ def test_meta_correctness(tmp_path: Path) -> None:
     args = MagicMock()
     args.input = [str(tmp_path / "input.jsonl")]
     args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
     run(args)
 
     meta_data = json.loads((tmp_path / "out" / "dedup-meta.json").read_text())
@@ -317,6 +325,7 @@ def test_validation_skipped_counted(tmp_path: Path) -> None:
     args = MagicMock()
     args.input = [str(tmp_path / "input.jsonl")]
     args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
     run(args)
 
     meta_data = json.loads((tmp_path / "out" / "dedup-meta.json").read_text())
@@ -331,6 +340,7 @@ def test_empty_input(tmp_path: Path) -> None:
     args = MagicMock()
     args.input = [str(tmp_path / "input.jsonl")]
     args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
     run(args)
 
     dedup_lines = (tmp_path / "out" / "deduplicated.jsonl").read_text().strip()
@@ -517,3 +527,72 @@ def test_unicode_dashes_enable_title_dedup() -> None:
     assert len(survivors) == 1
     assert len(dropped) == 1
     assert dropped[0].rule == "title_author_year"
+
+
+# ---------------------------------------------------------------------------
+# Conventional paths under --data-dir
+# ---------------------------------------------------------------------------
+
+
+def test_omitted_input_reads_catalogue_fetch_jsonl_under_data_dir(
+    tmp_path: Path,
+) -> None:
+    """--input omitted -> every <data-dir>/catalogue-fetch/*.jsonl is read."""
+    fetch_dir = tmp_path / "catalogue-fetch"
+    fetch_dir.mkdir()
+    _write_works_jsonl(fetch_dir / "a.jsonl", [_make_work("https://openalex.org/W1")])
+    _write_works_jsonl(fetch_dir / "b.jsonl", [_make_work("https://openalex.org/W2")])
+
+    args = MagicMock()
+    args.input = None
+    args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
+    run(args)
+
+    dedup_lines = (tmp_path / "out" / "deduplicated.jsonl").read_text().strip().splitlines()
+    assert len(dedup_lines) == 2
+
+
+def test_omitted_output_dir_writes_to_catalogue_dedup_under_data_dir(
+    tmp_path: Path,
+) -> None:
+    """--output-dir omitted -> outputs land in <data-dir>/catalogue-dedup/."""
+    _write_works_jsonl(tmp_path / "input.jsonl", [_make_work("https://openalex.org/W1")])
+
+    args = MagicMock()
+    args.input = [str(tmp_path / "input.jsonl")]
+    args.output_dir = None
+    args.data_dir = tmp_path
+    run(args)
+
+    out = tmp_path / "catalogue-dedup"
+    assert (out / "deduplicated.jsonl").exists()
+    assert (out / "dropped.jsonl").exists()
+    assert (out / "dedup-meta.json").exists()
+
+
+def test_no_matching_input_exits_naming_upstream_and_flag(tmp_path: Path) -> None:
+    """--input omitted and no catalogue-fetch output -> SystemExit, no output."""
+    args = MagicMock()
+    args.input = None
+    args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
+
+    with pytest.raises(SystemExit, match="catalogue-fetch") as exc_info:
+        run(args)
+
+    assert "--input" in str(exc_info.value)
+    assert not (tmp_path / "out").exists()
+
+
+def test_does_not_write_a_manifest(tmp_path: Path) -> None:
+    """dedup has no manifest involvement: none is created."""
+    _write_works_jsonl(tmp_path / "input.jsonl", [_make_work("https://openalex.org/W1")])
+
+    args = MagicMock()
+    args.input = [str(tmp_path / "input.jsonl")]
+    args.output_dir = tmp_path / "out"
+    args.data_dir = tmp_path
+    run(args)
+
+    assert not (tmp_path / "manifest.json").exists()
