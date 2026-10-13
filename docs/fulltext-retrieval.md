@@ -176,9 +176,18 @@ Ingests a returned folder of PDFs into `data/pdfs/`. Takes `--import-dir`
 `pdf-manifest.csv` of the last export under `--data-dir`. For each PDF it
 resolves a target stem, never guessed, in this order:
 
-1. an embedded DOI in the PDF metadata or first-page text that appears in the
-   manifest's DOI map (Zotero's "Export Files" names attachments by item
-   title, so filenames cannot be assumed to carry the DOI);
+1. a self-identifying DOI that appears in the manifest's DOI map, gathered
+   from the Info dictionary, XMP metadata, link annotations on the first two
+   pages, and first-page text. Every candidate is collected and the first
+   metadata candidate present in the manifest wins, because a publisher's
+   Info dictionary often carries the journal's DOI rather than the article's.
+   First-page text is accepted only when it names exactly one manifest work:
+   a correction notice or a cited companion paper puts two on page 1, and
+   import reports that and skips rather than guess. Candidates never come
+   from the reference list: in a topically clustered corpus a bibliography is
+   likely to cite other works in the same manifest. (Zotero's "Export Files"
+   names attachments by item title, so filenames cannot be assumed to carry
+   the DOI.)
 2. a filename whose stem matches the manifest directly (the plain-folder-drop
    case, where the collaborator was asked to name files `<stem>.pdf`);
 3. a sidecar `*.csv`/`*.json` the collaborator returned that maps their

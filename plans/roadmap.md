@@ -193,6 +193,15 @@ Update this file when a plan is written, implemented, or archived.
   the collaborator to send PDFs back as downloaded, unrenamed. `EXPORT_GAP=1`
   runs the export from the runner after stage 5.
 
+- [Import matching tiers](done/import-matching-tiers.md) — import gathers
+  every self-identifying DOI (Info dictionary, XMP, link annotations,
+  first-page text) and keeps the first metadata hit present in
+  `pdf-manifest.csv`; page text counts only when it names one work. The DOI
+  pattern accepts the angle brackets in AMS DOIs. Measured on real publisher
+  PDFs in
+  [contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md);
+  the residual that embeds no DOI is the title-matching question.
+
 ## In flight
 
 - [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate is now planned as the [run manifest](done/run-manifest.md).
