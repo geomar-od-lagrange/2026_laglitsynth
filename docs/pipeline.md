@@ -241,67 +241,53 @@ to make the scholarly accountability step visible.
 
 ## Pipeline flowchart
 
+Rounded yellow nodes are human steps, blue nodes run a local LLM, grey
+cylinders are data on disk. Dashed nodes are designed but not implemented.
+Of the human steps, only the PDF handoff loop writes back into the data;
+the XLSX review workbooks are read-only surfaces until stage 9 exists.
+
 ```mermaid
-graph TD
-    KW[(search strategy)]
-    OA[(OpenAlex API)]
-    RCAT[(retrieved catalogue)]
-    DCAT[(deduplicated catalogue)]
-    ABS[(abstract sidecar)]
-    SVERD[(screening verdicts)]
-    EVERD[(eligibility verdicts)]
-    PDFS[(PDFs on disk)]
-    FTC[(full-text corpus)]
-    EXT[(extraction records)]
-    EXTV[(validated extraction records)]
-    STAT[(statistics.json)]
-    TAX[(rationale-taxonomy.json)]
-    SYN[(synthesis-draft.md)]
+flowchart TD
+    classDef human fill:#fde68a,stroke:#b45309,color:#000
+    classDef llm fill:#dbeafe,stroke:#1d4ed8,color:#000
+    classDef store fill:#f3f4f6,stroke:#6b7280,color:#000
+    classDef planned stroke-dasharray: 5 5,color:#555
 
-    FETCH[catalogue-fetch]
-    DEDUP[catalogue-dedup]
-    ALOOKUP[abstract-lookup]
-    SCREEN[screening-abstracts]
-    RETRIEVE[fulltext-retrieval]
-    GROBID[fulltext-extraction]
-    ELIG[fulltext-eligibility]
-    EXTRACT[extraction-codebook]
-    ADJUD2[extraction-adjudication]
-    QSYNTH[synthesis-quantitative]
-    TSYNTH[synthesis-thematic]
-    NARR[synthesis-narrative]
+    H0([Reviewer: review config<br/>queries, criteria, codebook]):::human
+    H0 --> INIT[manifest-init]
+    INIT --> FETCH
+    OA[(OpenAlex)]:::store --> FETCH
 
-    KW --> FETCH
-    OA --> FETCH
-    FETCH --> RCAT
-    RCAT --> DEDUP
-    DEDUP --> DCAT
-    DCAT --> ALOOKUP
-    ALOOKUP --> ABS
-    ABS --> SCREEN
-    DCAT --> SCREEN
-    SCREEN --> SVERD
-    DCAT --> RETRIEVE
-    SVERD --> RETRIEVE
-    RETRIEVE --> PDFS
-    PDFS --> GROBID
-    GROBID --> FTC
-    DCAT --> ELIG
-    SVERD --> ELIG
-    FTC --> ELIG
-    ELIG --> EVERD
-    DCAT --> EXTRACT
-    EVERD --> EXTRACT
-    FTC --> EXTRACT
-    EXTRACT --> EXT
-    EXT --> ADJUD2
-    FTC --> ADJUD2
-    ADJUD2 --> EXTV
-    EXTV --> QSYNTH
-    EXTV --> TSYNTH
-    QSYNTH --> STAT
-    TSYNTH --> TAX
-    STAT --> NARR
-    TAX --> NARR
-    NARR --> SYN
+    FETCH[1 catalogue-fetch<br/>one run per query]
+    FETCH --> DEDUP[2 catalogue-dedup<br/>id / DOI / title+year]
+    DEDUP --> ALOOK[2b abstract-lookup<br/>S2 → OpenAlex → Crossref]
+    ALOOK --> SCREEN[3 screening-abstracts]:::llm
+    SCREEN --> SX[screening-abstracts-export<br/>XLSX sample]
+    SX --> H3([Reviewer: inspect scores<br/>flag, don't filter]):::human
+
+    SCREEN -->|score ≥ threshold| RETR[5 fulltext-retrieval<br/>OA links → Unpaywall]
+    RETR --> PDFS[(data/pdfs/<br/>provenance.jsonl)]:::store
+    RETR -->|still missing| EXPORT[fulltext-retrieval-export<br/>dois.txt · missing.ris<br/>no-doi.csv · pdf-manifest.csv]
+    EXPORT --> H5([Collaborators: fetch PDFs<br/>through institutional access,<br/>return the folder as is]):::human
+    H5 --> IMPORT[fulltext-retrieval-import<br/>match by embedded DOI]
+    IMPORT --> PDFS
+    IMPORT -->|unmatched residual| TM[title-based matching]:::planned
+    TM -.-> IMPORT
+
+    PDFS --> GROBID[6 fulltext-extraction<br/>GROBID]
+    GROBID --> ELIG[7 fulltext-eligibility]:::llm
+    ELIG --> EX[fulltext-eligibility-export<br/>XLSX sample]
+    EX --> H7([Reviewer: check<br/>inclusion verdicts]):::human
+
+    ELIG -->|eligible| CODE[8 extraction-codebook]:::llm
+    CODE --> CX[extraction-codebook-export<br/>XLSX sample]
+    CX --> H8([Reviewer: verify values<br/>against context excerpts]):::human
+
+    H8 -.-> ADJ[9 extraction-adjudication<br/>record corrections]:::planned
+    ADJ -.-> QS[10 synthesis-quantitative]:::planned
+    ADJ -.-> TS[11 synthesis-thematic]:::planned
+    TS -.-> H11([Reviewer: assign<br/>taxonomy labels]):::human
+    QS -.-> NARR[12 synthesis-narrative]:::planned
+    H11 -.-> NARR
+    NARR -.-> H12([Authors: verify claims,<br/>finalise manuscript]):::human
 ```
