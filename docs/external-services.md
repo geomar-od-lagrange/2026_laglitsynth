@@ -1,10 +1,24 @@
 # External services setup
 
-Runbook for the two external services the pipeline depends on: **Ollama**
-(LLM inference for stages 3, 7, 8) and **GROBID** (PDF extraction for
-stage 6). Read this before running any LLM or full-text stage. The
+Runbook for the external services the pipeline depends on: **Ollama**
+(LLM inference for stages 3, 7, 8), **GROBID** (PDF extraction for
+stage 6), and optionally **OpenRouter** (hosted decisions models for
+stage 3). Read this before running any LLM or full-text stage. The
 [NESH HPC cluster](#nesh-hpc-cluster) section at the bottom covers
 batch operation on Kiel's GPU cluster.
+
+## OpenRouter (optional, stage 3)
+
+`screening-abstracts --backend decisions` sends each abstract to a hosted
+decisions model through OpenRouter instead of Ollama. It needs only an
+API key: put `OPENROUTER_API_KEY=...` in `.env` (see
+[.env.example](../.env.example)) or pass `--api-key`. No server to run,
+no model to pull. Available decisions models are listed by
+`curl 'https://openrouter.ai/api/v1/models?output_modalities=decisions'`;
+pass one as `--model`, e.g. `typesafe/jev-1.14`. Usage and cost show up on
+the OpenRouter dashboard; the per-request cost is returned in each
+response's `usage.cost`. See
+[screening-abstracts.md](screening-abstracts.md#backends).
 
 ## Ollama
 

@@ -73,6 +73,7 @@ def test_emit_full_config_round_trips(tmp_path: Path) -> None:
                 "eligibility": "gemma3:4b",
                 "extraction": "llama3.1:8b",
             },
+            "backends": {"screening": "decisions"},
             "num_ctx": {"eligibility": 32768, "extraction": 16384},
             "concurrency": {"llm": 4, "extraction": 1},
         },
@@ -92,6 +93,7 @@ def test_emit_full_config_round_trips(tmp_path: Path) -> None:
     assert parsed["CFG_SCREENING_MODEL"] == "gemma3:4b"
     assert parsed["CFG_ELIGIBILITY_MODEL"] == "gemma3:4b"
     assert parsed["CFG_EXTRACTION_MODEL"] == "llama3.1:8b"
+    assert parsed["CFG_SCREENING_BACKEND"] == "decisions"
     assert parsed["CFG_ELIGIBILITY_NUM_CTX"] == "32768"
     assert parsed["CFG_EXTRACTION_NUM_CTX"] == "16384"
     assert parsed["CFG_LLM_CONCURRENCY"] == "4"
@@ -116,6 +118,7 @@ def test_emit_none_fields_are_empty(tmp_path: Path) -> None:
         "CFG_SCREENING_MODEL",
         "CFG_ELIGIBILITY_MODEL",
         "CFG_EXTRACTION_MODEL",
+        "CFG_SCREENING_BACKEND",
         "CFG_ELIGIBILITY_NUM_CTX",
         "CFG_EXTRACTION_NUM_CTX",
         "CFG_LLM_CONCURRENCY",
@@ -126,6 +129,22 @@ def test_emit_none_fields_are_empty(tmp_path: Path) -> None:
     raw = {line.split("=", 1)[0]: line.split("=", 1)[1] for line in
            emit_cfg_lines(load_review_config(cfg))}
     assert raw["CFG_FROM_YEAR"] == "''"
+    assert raw["CFG_SCREENING_BACKEND"] == "''"
+
+
+def test_screening_backend_emitted_after_extraction_model() -> None:
+    config = ReviewConfig.model_validate(
+        {"query": "x", "backends": {"screening": "decisions"}}
+    )
+    names = [line.split("=", 1)[0] for line in emit_cfg_lines(config)]
+    idx = names.index("CFG_SCREENING_BACKEND")
+    assert names[idx - 1] == "CFG_EXTRACTION_MODEL"
+    assert "CFG_SCREENING_BACKEND=decisions" in emit_cfg_lines(config)
+
+
+def test_unknown_backends_key_rejected() -> None:
+    with pytest.raises(ValidationError):
+        ReviewConfig.model_validate({"query": "x", "backends": {"eligibility": "decisions"}})
 
 
 def test_query_with_spaces_and_quotes_is_shell_safe() -> None:

@@ -81,6 +81,7 @@ the query, the year window (`from_year` / `to_year`) and record cap
 (`max_records`), the three criteria/codebook paths (`screening_criteria`,
 `eligibility_criteria`, `codebook`), and nested per-stage groups for
 `thresholds.{retrieval,eligibility}`, `models.{screening,eligibility,extraction}`,
+`backends.screening` (`ollama` or `decisions`),
 `num_ctx.{eligibility,extraction}`, and `concurrency.{llm,extraction}`.
 Only `query` is required; every other field is optional. An absent
 optional field means "fall back to the runner's built-in default" — it
@@ -106,6 +107,7 @@ The stable, documented name set is:
 | `CFG_CODEBOOK` | `codebook` |
 | `CFG_RETRIEVAL_THRESHOLD` / `CFG_ELIGIBILITY_THRESHOLD` | `thresholds.{retrieval,eligibility}` |
 | `CFG_SCREENING_MODEL` / `CFG_ELIGIBILITY_MODEL` / `CFG_EXTRACTION_MODEL` | `models.{screening,eligibility,extraction}` |
+| `CFG_SCREENING_BACKEND` | `backends.screening` |
 | `CFG_ELIGIBILITY_NUM_CTX` / `CFG_EXTRACTION_NUM_CTX` | `num_ctx.{eligibility,extraction}` |
 | `CFG_LLM_CONCURRENCY` / `CFG_EXTRACTION_CONCURRENCY` | `concurrency.{llm,extraction}` |
 

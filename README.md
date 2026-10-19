@@ -37,7 +37,8 @@ implemented stage has its own doc under [`docs/`](docs/).
   OpenAlex ID, DOI, and title+author+year; accepts globs and multiple
   inputs. See [`docs/catalogue-dedup.md`](docs/catalogue-dedup.md).
 - Stage 3 — `laglitsynth screening-abstracts` — score every abstract for
-  relevance with a local Ollama-hosted LLM, emitting a `ScreeningVerdict`
+  relevance with a local Ollama-hosted LLM or, with `--backend decisions`,
+  a hosted decisions model via OpenRouter, emitting a `ScreeningVerdict`
   sidecar. See [`docs/screening-abstracts.md`](docs/screening-abstracts.md).
 - Stage 5 — `laglitsynth fulltext-retrieval` — join the deduplicated
   catalogue against the screening verdicts at a threshold, then fill a

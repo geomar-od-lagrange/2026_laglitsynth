@@ -19,6 +19,7 @@ from laglitsynth.screening_abstracts.screen import (
     format_screening_input,
     screen_works,
 )
+from laglitsynth.screening_abstracts.decisions import DEFAULT_DECISIONS_URL
 from laglitsynth.screening_abstracts.models import ScreeningMeta, ScreeningVerdict
 from laglitsynth.models import LlmMeta, RunMeta
 
@@ -456,6 +457,9 @@ def _run_args(tmp_path: Path, **overrides: Any) -> argparse.Namespace:
         "concurrency": 1,
         "config": None,
         "pass_all": False,
+        "backend": "ollama",
+        "api_key": None,
+        "decisions_url": DEFAULT_DECISIONS_URL,
     }
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -1130,3 +1134,196 @@ class TestPassAll:
 
         active = [w.id for w in _active_works(catalogue, verdicts, 50.0)]
         assert active == ["W1"]
+
+
+# ---------------------------------------------------------------------------
+# --backend decisions: hosted decisions model, probability -> score
+# ---------------------------------------------------------------------------
+
+_DECISION_BLOCK = {
+    "instructions": "Is this about ocean particle tracking?",
+    "criteria": {"true": "Ocean flow tracking.", "false": "Anything else."},
+}
+_DECISIONS_CRITERIA_SPEC = {**_TEST_CRITERIA_SPEC, "decision": _DECISION_BLOCK}
+
+
+class TestDecisionsBackend:
+    # Probability the mock endpoint returns, keyed by a phrase in the state.
+    _PROBS = {"Ocean currents.": 0.73, "Forest ecology.": 0.1}
+
+    def _works(self, tmp_path: Path) -> None:
+        _write_works_jsonl(
+            tmp_path / "input.jsonl",
+            [
+                _make_work("W1", abstract="Ocean currents."),
+                _make_work("W2", abstract=None),
+                _make_work("W3", abstract="Forest ecology."),
+            ],
+        )
+
+    def _args(self, tmp_path: Path, **overrides: Any) -> argparse.Namespace:
+        base: dict[str, Any] = {
+            "backend": "decisions",
+            "api_key": "k",
+            "model": "typesafe/jev",
+            "screening_criteria": _DECISIONS_CRITERIA_SPEC,
+        }
+        base.update(overrides)
+        return _run_args(tmp_path, **base)
+
+    def _run(
+        self, args: argparse.Namespace
+    ) -> tuple[MagicMock, MagicMock, list[dict[str, Any]]]:
+        """Run with the decisions endpoint mocked; return preflight, client factory, bodies."""
+        import httpx
+
+        bodies: list[dict[str, Any]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            bodies.append(body)
+            p = next(v for k, v in self._PROBS.items() if k in body["state"])
+            return httpx.Response(200, json={"answers": {"relevant": {"noul": p}}})
+
+        def make_client(api_key: str) -> httpx.Client:
+            return httpx.Client(transport=httpx.MockTransport(handler))
+
+        with (
+            patch("laglitsynth.screening_abstracts.screen.preflight") as mock_preflight,
+            patch(
+                "laglitsynth.screening_abstracts.screen.decisions_client",
+                side_effect=make_client,
+            ) as mock_client,
+            patch("laglitsynth.screening_abstracts.screen.OpenAI"),
+        ):
+            from laglitsynth.screening_abstracts.screen import run
+
+            run(args)
+        return mock_preflight, mock_client, bodies
+
+    def _out_dir(self, tmp_path: Path) -> Path:
+        return tmp_path / "screening-abstracts" / "test-run-id"
+
+    def test_writes_probability_scores_and_no_abstract(self, tmp_path: Path) -> None:
+        self._works(tmp_path)
+        mock_preflight, mock_client, bodies = self._run(self._args(tmp_path))
+
+        mock_preflight.assert_not_called()
+        mock_client.assert_called_once_with("k")
+        assert len(bodies) == 2
+        assert {b["model"] for b in bodies} == {"typesafe/jev"}
+        assert bodies[0]["questions"]["relevant"]["instructions"] == (
+            _DECISION_BLOCK["instructions"]
+        )
+
+        lines = (self._out_dir(tmp_path) / "verdicts.jsonl").read_text().splitlines()
+        verdicts = {
+            v.work_id: v for v in (ScreeningVerdict.model_validate_json(x) for x in lines)
+        }
+        assert set(verdicts) == {"W1", "W2", "W3"}
+        assert verdicts["W1"].relevance_score == 73
+        assert verdicts["W1"].reason is None
+        assert verdicts["W1"].seed is None
+        assert verdicts["W1"].raw_response == json.dumps({"noul": 0.73})
+        assert verdicts["W3"].relevance_score == 10
+        assert verdicts["W2"].reason == "no-abstract"
+        assert verdicts["W2"].relevance_score is None
+
+    def test_meta_records_question_and_null_temperature(self, tmp_path: Path) -> None:
+        from laglitsynth.prompts import DecisionQuestion
+        from laglitsynth.screening_abstracts.screen import USER_TEMPLATE
+
+        self._works(tmp_path)
+        self._run(self._args(tmp_path))
+
+        raw = json.loads((self._out_dir(tmp_path) / "screening-meta.json").read_text())
+        assert raw["llm"]["temperature"] is None
+        assert raw["llm"]["model"] == "typesafe/jev"
+
+        question = DecisionQuestion.model_validate(_DECISION_BLOCK)
+        assert raw["criterion"] == question.render()
+        expected = hashlib.sha256(
+            (question.canonical_json() + "\n" + USER_TEMPLATE).encode("utf-8")
+        ).hexdigest()
+        assert raw["llm"]["prompt_sha256"] == expected
+
+        meta = ScreeningMeta.model_validate(raw)
+        assert meta.input_count == 3
+        assert meta.above_threshold_count == 1
+        assert meta.below_threshold_count == 1
+        assert meta.skipped_count == 1
+
+    def test_config_yaml_records_backend(self, tmp_path: Path) -> None:
+        import yaml as _yaml
+
+        self._works(tmp_path)
+        self._run(self._args(tmp_path))
+
+        written = _yaml.safe_load((self._out_dir(tmp_path) / "config.yaml").read_text())
+        assert written["backend"] == "decisions"
+        assert written["screening_criteria"]["decision"] == _DECISION_BLOCK
+
+    def test_api_key_falls_back_to_env(self, tmp_path: Path) -> None:
+        self._works(tmp_path)
+        with patch(
+            "laglitsynth.screening_abstracts.screen.load_env_var", return_value="from-env"
+        ) as mock_env:
+            _, mock_client, _ = self._run(self._args(tmp_path, api_key=None))
+        mock_env.assert_called_once_with("OPENROUTER_API_KEY")
+        mock_client.assert_called_once_with("from-env")
+
+    def test_missing_api_key_exits_naming_the_env_var(self, tmp_path: Path) -> None:
+        self._works(tmp_path)
+        with (
+            patch(
+                "laglitsynth.screening_abstracts.screen.load_env_var", return_value=None
+            ),
+            pytest.raises(SystemExit, match="OPENROUTER_API_KEY"),
+        ):
+            self._run(self._args(tmp_path, api_key=None))
+        assert not (tmp_path / "screening-abstracts").exists()
+
+    def test_inline_criteria_without_decision_block_raises(self, tmp_path: Path) -> None:
+        self._works(tmp_path)
+        with pytest.raises(SystemExit, match="no 'decision' block"):
+            self._run(self._args(tmp_path, screening_criteria=_TEST_CRITERIA_SPEC))
+        assert not self._out_dir(tmp_path).exists()
+
+    def test_criteria_file_without_decision_block_names_the_file(
+        self, tmp_path: Path
+    ) -> None:
+        import yaml as _yaml
+
+        self._works(tmp_path)
+        criteria = tmp_path / "no-decision-criteria.yaml"
+        criteria.write_text(_yaml.safe_dump(_TEST_CRITERIA_SPEC), encoding="utf-8")
+        with pytest.raises(SystemExit, match="no-decision-criteria.yaml"):
+            self._run(self._args(tmp_path, screening_criteria=str(criteria)))
+
+    def test_ollama_backend_ignores_api_key(self, tmp_path: Path) -> None:
+        """Default backend still preflights and never builds a decisions client."""
+        self._works(tmp_path)
+        args = _run_args(tmp_path, screening_criteria=_DECISIONS_CRITERIA_SPEC)
+        classify_results = {
+            "W1": {"relevance_score": 80, "reason": "yes"},
+            "W3": {"relevance_score": 10, "reason": "no"},
+        }
+        with (
+            patch("laglitsynth.screening_abstracts.screen.preflight") as mock_preflight,
+            patch(
+                "laglitsynth.screening_abstracts.screen.classify_abstract",
+                side_effect=_mock_classify(classify_results),
+            ),
+            patch("laglitsynth.screening_abstracts.screen.OpenAI"),
+            patch("laglitsynth.screening_abstracts.screen.decisions_client") as mock_dc,
+            patch("laglitsynth.screening_abstracts.screen.load_env_var") as mock_env,
+        ):
+            from laglitsynth.screening_abstracts.screen import run
+
+            run(args)
+        mock_preflight.assert_called_once()
+        mock_dc.assert_not_called()
+        mock_env.assert_not_called()
+        raw = json.loads((self._out_dir(tmp_path) / "screening-meta.json").read_text())
+        assert raw["llm"]["temperature"] == 0.8
+        assert raw["criterion"] == _TEST_CRITERIA_SPEC["system_prompt"]
