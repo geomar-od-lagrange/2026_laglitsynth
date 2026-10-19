@@ -12,5 +12,5 @@ class RunMeta(BaseModel):
 class LlmMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     model: str
-    temperature: float
+    temperature: float | None  # None for backends without a sampling temperature
     prompt_sha256: str  # sha256(SYSTEM_PROMPT + "\n" + user prompt), full hex digest

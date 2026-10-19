@@ -18,6 +18,7 @@ from openai import APIConnectionError, APITimeoutError, OpenAI
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.concurrency import map_concurrent
 from laglitsynth.config import register_config_arg, resolve_yaml_arg, save_resolved_config
+from laglitsynth.dotenv import load_env_var
 from laglitsynth.io import (
     JsonlReadStats,
     append_jsonl,
@@ -33,8 +34,15 @@ from laglitsynth.layout import (
 from laglitsynth.manifest import resolve_run_id
 from laglitsynth.models import LlmMeta, RunMeta
 from laglitsynth.ollama import preflight
-from laglitsynth.prompts import load_system_prompt
+from laglitsynth.prompts import DecisionQuestion, load_decision_question, load_system_prompt
+from laglitsynth.screening_abstracts.decisions import (
+    DEFAULT_DECISIONS_URL,
+    classify_decision,
+    decisions_client,
+)
 from laglitsynth.screening_abstracts.models import TOOL_NAME, ScreeningMeta, ScreeningVerdict
+
+BACKENDS = ("ollama", "decisions")
 
 DEFAULT_SCREENING_CRITERIA = Path(
     "examples/screening-criteria/lagrangian-oceanography.yaml"
@@ -159,6 +167,57 @@ def _unscreened_verdict(work_id: str) -> ScreeningVerdict:
     )
 
 
+def _load_works(input_path: Path, max_records: int | None) -> list[Work]:
+    works: list[Work] = []
+    for idx, work in enumerate(read_jsonl(input_path, Work)):
+        if max_records is not None and idx >= max_records:
+            break
+        works.append(work)
+    return works
+
+
+def decide_works(
+    input_path: Path,
+    question: DecisionQuestion,
+    *,
+    model: str,
+    url: str,
+    api_key: str,
+    max_records: int | None,
+    concurrency: int = 1,
+) -> Iterator[ScreeningVerdict]:
+    """Yield a verdict per input work from a decisions model.
+
+    Same shape as ``screen_works``: ``no-abstract`` sentinels first, then
+    decisions in completion order through ``map_concurrent``.
+    """
+    works = _load_works(input_path, max_records)
+    with_abstract: list[Work] = []
+    for work in works:
+        if work.abstract is None:
+            logger.warning("Skipping work %s: no abstract", work.id)
+            yield _no_abstract_verdict(work.id)
+        else:
+            with_abstract.append(work)
+
+    client = decisions_client(api_key)
+    try:
+
+        def _decide_one(work: Work) -> ScreeningVerdict:
+            return classify_decision(
+                work.id,
+                format_screening_input(work),
+                question,
+                model=model,
+                url=url,
+                client=client,
+            )
+
+        yield from map_concurrent(_decide_one, with_abstract, max_workers=concurrency)
+    finally:
+        client.close()
+
+
 def pass_all_works(input_path: Path, *, max_records: int | None) -> Iterator[ScreeningVerdict]:
     """Yield an ``unscreened`` sentinel per input work; no LLM is called.
 
@@ -166,9 +225,7 @@ def pass_all_works(input_path: Path, *, max_records: int | None) -> Iterator[Scr
     passes. The run can be screened for real later; PDFs already held are
     kept either way.
     """
-    for idx, work in enumerate(read_jsonl(input_path, Work)):
-        if max_records is not None and idx >= max_records:
-            break
+    for work in _load_works(input_path, max_records):
         yield _unscreened_verdict(work.id)
 
 
@@ -262,7 +319,32 @@ def build_subparser(
         help="Run identifier (default: the run_id in <data-dir>/manifest.json).",
     )
     parser.add_argument(
-        "--model", default="gemma3:4b", help="Ollama model name (default: gemma3:4b)"
+        "--backend",
+        choices=BACKENDS,
+        default="ollama",
+        help=(
+            "ollama: chat completion against --base-url (default). decisions: a "
+            "hosted decisions model via --decisions-url, asking the criteria "
+            "file's 'decision' question; needs --api-key."
+        ),
+    )
+    parser.add_argument(
+        "--model",
+        default="gemma3:4b",
+        help="Model name for the chosen backend (default: gemma3:4b, an Ollama model)",
+    )
+    parser.add_argument(
+        "--api-key",
+        default=None,
+        help=(
+            "API key for --backend decisions (falls back to OPENROUTER_API_KEY "
+            "in .env). Unused by the ollama backend."
+        ),
+    )
+    parser.add_argument(
+        "--decisions-url",
+        default=DEFAULT_DECISIONS_URL,
+        help=f"Decisions endpoint for --backend decisions (default: {DEFAULT_DECISIONS_URL})",
     )
     parser.add_argument(
         "--screening-threshold",
@@ -320,8 +402,17 @@ def run(args: argparse.Namespace) -> None:
     )
 
     pass_all: bool = args.pass_all
-    if not pass_all:
+    backend: str = args.backend
+    api_key: str | None = None
+    if not pass_all and backend == "ollama":
         preflight(base_url=args.base_url, model=args.model)
+    if not pass_all and backend == "decisions":
+        api_key = args.api_key if args.api_key is not None else load_env_var("OPENROUTER_API_KEY")
+        if api_key is None:
+            raise SystemExit(
+                "--backend decisions needs an API key: pass --api-key or add "
+                "OPENROUTER_API_KEY=... to .env"
+            )
     output_dir: Path = data_dir / SCREENING_SUBDIR / args.run_id
     verdicts_path = output_dir / "verdicts.jsonl"
     meta_path = output_dir / "screening-meta.json"
@@ -330,20 +421,31 @@ def run(args: argparse.Namespace) -> None:
     threshold: float = args.screening_threshold
 
     # A pass-all run loads no criterion and calls no model: the meta's
-    # ``llm`` is None and ``criterion`` stays empty.
+    # ``llm`` is None and ``criterion`` stays empty. The chat backend hashes
+    # the system prompt, the decisions backend the question; both fold in
+    # the user-render marker so the digest pins the shape of the state.
     system_prompt = ""
+    question: DecisionQuestion | None = None
     llm_meta: LlmMeta | None = None
+    criterion = ""
     if not pass_all:
         criteria_spec = resolve_yaml_arg(args.screening_criteria)
-        system_prompt = load_system_prompt(criteria_spec)
-        # Hash the loaded system prompt + the user-render marker so the
-        # digest pins both the criterion and the shape of the user message.
-        prompt_sha256 = hashlib.sha256(
-            (system_prompt + "\n" + USER_TEMPLATE).encode("utf-8")
-        ).hexdigest()
-        llm_meta = LlmMeta(
-            model=args.model, temperature=_TEMPERATURE, prompt_sha256=prompt_sha256
-        )
+        if backend == "decisions":
+            # Pass the un-resolved spec so a missing block names the file.
+            try:
+                question = load_decision_question(args.screening_criteria)
+            except ValueError as exc:
+                raise SystemExit(str(exc)) from exc
+            criterion = question.render()
+            hashed = question.canonical_json()
+            temperature: float | None = None
+        else:
+            system_prompt = load_system_prompt(criteria_spec)
+            criterion = system_prompt
+            hashed = system_prompt
+            temperature = _TEMPERATURE
+        prompt_sha256 = hashlib.sha256((hashed + "\n" + USER_TEMPLATE).encode("utf-8")).hexdigest()
+        llm_meta = LlmMeta(model=args.model, temperature=temperature, prompt_sha256=prompt_sha256)
 
     stats = JsonlReadStats()
     total = sum(1 for _ in read_jsonl(args.input, Work, stats))
@@ -351,7 +453,7 @@ def run(args: argparse.Namespace) -> None:
     if pass_all:
         print(f"Passing all {total} works unscreened (no LLM call)", file=sys.stderr)
     else:
-        print(f"Screening {total} works with model {args.model}", file=sys.stderr)
+        print(f"Screening {total} works with {backend} model {args.model}", file=sys.stderr)
     print(f"Threshold: {threshold}", file=sys.stderr)
     if not args.dry_run:
         print(f"Output dir: {output_dir}", file=sys.stderr)
@@ -389,7 +491,7 @@ def run(args: argparse.Namespace) -> None:
             skipped_count=skipped,
             llm_parse_failure_count=parse_failures,
             llm_timeout_count=timeouts,
-            criterion=system_prompt,
+            criterion=criterion,
         )
 
     # Write meta upfront so a mid-run reviewer-export sees prompt + LLM
@@ -411,6 +513,17 @@ def run(args: argparse.Namespace) -> None:
     verdicts: Iterator[ScreeningVerdict]
     if pass_all:
         verdicts = pass_all_works(args.input, max_records=args.max_records)
+    elif backend == "decisions":
+        assert question is not None and api_key is not None
+        verdicts = decide_works(
+            args.input,
+            question,
+            model=args.model,
+            url=args.decisions_url,
+            api_key=api_key,
+            max_records=args.max_records,
+            concurrency=args.concurrency,
+        )
     else:
         verdicts = screen_works(
             args.input,

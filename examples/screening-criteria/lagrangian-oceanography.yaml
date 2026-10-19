@@ -20,3 +20,16 @@ system_prompt: |-
   - "reason": a short string (one sentence) explaining your score
 
   Return ONLY the JSON object, nothing else.
+
+# The same criterion as a yes/no decision, for `--backend decisions`.
+# Scope wording is tracked in issue #26; keep the two in step.
+decision:
+  instructions: >-
+    Is this work relevant to Lagrangian particle tracking in oceanography?
+  criteria:
+    "true": >-
+      The work tracks particles, tracers or objects in an ocean flow field,
+      or develops numerical methods for doing so.
+    "false": >-
+      The work is about something else, or applies Lagrangian particle
+      tracking outside the ocean.

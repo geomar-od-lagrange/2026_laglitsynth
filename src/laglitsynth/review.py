@@ -46,6 +46,11 @@ class _Models(BaseModel):
     extraction: str | None = None
 
 
+class _Backends(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    screening: str | None = None  # "ollama" | "decisions"
+
+
 class _NumCtx(BaseModel):
     model_config = ConfigDict(extra="forbid")
     eligibility: int | None = None
@@ -77,6 +82,7 @@ class ReviewConfig(BaseModel):
     codebook: Path | None = None
     thresholds: _Thresholds = _Thresholds()
     models: _Models = _Models()
+    backends: _Backends = _Backends()
     num_ctx: _NumCtx = _NumCtx()
     concurrency: _Concurrency = _Concurrency()
 
@@ -135,6 +141,7 @@ def emit_cfg_lines(config: ReviewConfig) -> list[str]:
         ("CFG_SCREENING_MODEL", config.models.screening),
         ("CFG_ELIGIBILITY_MODEL", config.models.eligibility),
         ("CFG_EXTRACTION_MODEL", config.models.extraction),
+        ("CFG_SCREENING_BACKEND", config.backends.screening),
         ("CFG_ELIGIBILITY_NUM_CTX", config.num_ctx.eligibility),
         ("CFG_EXTRACTION_NUM_CTX", config.num_ctx.extraction),
         ("CFG_LLM_CONCURRENCY", config.concurrency.llm),

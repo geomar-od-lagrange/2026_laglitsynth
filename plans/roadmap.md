@@ -208,6 +208,13 @@ Update this file when a plan is written, implemented, or archived.
   `fulltext-retrieval-export --packs N` plus an `export-meta.json` that
   records how each bundle was made.
 
+- [Decisions backend for abstract screening](done/decisions-screening-backend.md)
+  — `screening-abstracts --backend decisions` scores abstracts with a hosted
+  decisions model (TypeSafe Jev via OpenRouter) asking the criteria file's
+  `decision` question; probability becomes the score, no JSON to parse.
+  Criteria scope wording is
+  [issue #26](https://github.com/geomar-od-lagrange/2026_laglitsynth/issues/26).
+
 ## In flight
 
 - [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate is now planned as the [run manifest](done/run-manifest.md).

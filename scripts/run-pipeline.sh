@@ -37,6 +37,9 @@
 #   ELIGIBILITY_THRESHOLD  stage-7 LLM-pass cutoff    (default SCREENING_THRESHOLD)
 #   OUTPUT_ROOT, OLLAMA_BASE, GROBID_URL,
 #   SCREENING_MODEL, ELIGIBILITY_MODEL, EXTRACTION_MODEL,
+#   SCREENING_BACKEND      ollama (default) or decisions; decisions needs
+#                          OPENROUTER_API_KEY in .env and a SCREENING_MODEL
+#                          that is a decisions model id,
 #   ELIGIBILITY_NUM_CTX    (--num-ctx for stage 7; default 32768),
 #   EXTRACTION_NUM_CTX     (--num-ctx for stage 8; default 32768),
 #   LLM_CONCURRENCY        (--concurrency for stages 3 and 7; default 1),
@@ -95,6 +98,15 @@ ELIGIBILITY_THRESHOLD="${ELIGIBILITY_THRESHOLD:-${CFG_ELIGIBILITY_THRESHOLD:-$SC
 SCREENING_MODEL="${SCREENING_MODEL:-${CFG_SCREENING_MODEL:-gemma3:4b}}"
 ELIGIBILITY_MODEL="${ELIGIBILITY_MODEL:-${CFG_ELIGIBILITY_MODEL:-gemma3:4b}}"
 EXTRACTION_MODEL="${EXTRACTION_MODEL:-${CFG_EXTRACTION_MODEL:-llama3.1:8b}}"
+
+# Screening backend: ollama (local chat model) or decisions (hosted
+# decisions model via OpenRouter; passes the key from .env).
+SCREENING_BACKEND="${SCREENING_BACKEND:-${CFG_SCREENING_BACKEND:-ollama}}"
+screening_backend_flags=(--backend "$SCREENING_BACKEND")
+if [[ "$SCREENING_BACKEND" == "decisions" ]]; then
+    : "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY required for SCREENING_BACKEND=decisions — set in .env}"
+    screening_backend_flags+=(--api-key "$OPENROUTER_API_KEY")
+fi
 
 # Context windows.
 ELIGIBILITY_NUM_CTX="${ELIGIBILITY_NUM_CTX:-${CFG_ELIGIBILITY_NUM_CTX:-32768}}"
@@ -163,6 +175,7 @@ run_stage 3 screening-abstracts \
         --screening-criteria "$SCREENING_CRITERIA" \
         --data-dir "$ROOT" \
         ${run_id_flags[@]+"${run_id_flags[@]}"} \
+        "${screening_backend_flags[@]}" \
         --model "$SCREENING_MODEL" \
         --base-url "$OLLAMA_BASE" \
         --concurrency "$LLM_CONCURRENCY"

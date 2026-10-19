@@ -234,7 +234,8 @@ laglitsynth abstract-lookup \
 laglitsynth screening-abstracts [data/catalogue-dedup/deduplicated.jsonl] \
     [--screening-criteria FILE] \
     [--data-dir DIR] [--run-id ID] [--config FILE] \
-    [--model MODEL] [--screening-threshold FLOAT] \
+    [--backend ollama|decisions] [--model MODEL] [--api-key KEY] \
+    [--decisions-url URL] [--screening-threshold FLOAT] \
     [--base-url URL] [--max-records N] [--concurrency N] [--dry-run] \
     [--pass-all]
 

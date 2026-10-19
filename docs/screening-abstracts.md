@@ -1,10 +1,12 @@
 # screening-abstracts
 
-Screen a JSONL file of `Work` records by sending each abstract to a local
-Ollama-hosted LLM whose system prompt — the classifier contract plus the
-relevance criterion — is loaded from an external screening-criteria YAML.
+Screen a JSONL file of `Work` records by scoring each abstract against a
+relevance criterion loaded from an external screening-criteria YAML.
 Outputs a `ScreeningVerdict` sidecar covering every work in the input — one
-verdict per work regardless of score.
+verdict per work regardless of score. Two backends do the scoring: a local
+Ollama-hosted chat LLM given the YAML's `system_prompt` (the default), or a
+hosted decisions model asked the YAML's `decision` question; see
+[Backends](#backends).
 
 The system prompt lives in a screening-criteria YAML (default
 [`examples/screening-criteria/lagrangian-oceanography.yaml`](../examples/screening-criteria/lagrangian-oceanography.yaml)),
@@ -41,6 +43,9 @@ laglitsynth screening-abstracts input.jsonl --config data/screening-abstracts/<r
 
 # prompt tuning: process first 20 works, print verdicts, don't write output
 laglitsynth screening-abstracts input.jsonl --dry-run --max-records 20
+
+# hosted decisions model instead of local Ollama (key from .env)
+laglitsynth screening-abstracts --backend decisions --model typesafe/jev-1.14 --concurrency 4
 ```
 
 ## CLI arguments
@@ -52,9 +57,13 @@ laglitsynth screening-abstracts input.jsonl --dry-run --max-records 20
 | `--data-dir` | Bucket root for stage outputs (default: `data/`). |
 | `--run-id` | Run identifier. The flag wins; otherwise the `run_id` in `<data-dir>/manifest.json`; otherwise the stage exits. A re-run under the same run-id rewrites that run's `verdicts.jsonl` and says so on stderr — pass `--run-id` to keep an earlier run. See [run-manifest.md](run-manifest.md). |
 | `--config` | YAML config file whose values seed argparse defaults; explicit CLI flags override. |
-| `--model` | Ollama model name (default: `gemma3:4b`). |
+| `--backend` | `ollama` (default) or `decisions`. See [Backends](#backends). |
+| `--model` | Model name for the chosen backend (default: `gemma3:4b`, an Ollama tag). |
+| `--api-key` | API key for `--backend decisions`; falls back to `OPENROUTER_API_KEY` in `.env`. |
+| `--decisions-url` | Decisions endpoint (default: `https://openrouter.ai/api/alpha/decisions`). |
 | `--screening-threshold` | Relevance score cutoff, 0--100 as a `float` (default: `50.0`). |
-| `--base-url` | Ollama API base URL (default: `http://localhost:11434`). |
+| `--base-url` | Ollama API base URL (default: `http://localhost:11434`); unused by the decisions backend. |
+| `--pass-all` | Write an `unscreened` verdict per work and call no model. See [Passing everything through](#passing-everything-through---pass-all). |
 | `--max-records` | Process only the first N works. Useful with `--dry-run`. |
 | `--dry-run` | Print verdicts to stderr without writing any output files. |
 | `--concurrency` | In-flight LLM requests (default: `1`). See [llm-concurrency.md](llm-concurrency.md). |
@@ -86,7 +95,49 @@ system_prompt: |-
   relevant is this work to Lagrangian particle tracking in oceanography?
   ...
   Return ONLY the JSON object, nothing else.
+decision:
+  instructions: >-
+    Is this work relevant to Lagrangian particle tracking in oceanography?
+  criteria:
+    "true": The work tracks particles, tracers or objects in an ocean flow field, ...
+    "false": The work is about something else, or applies Lagrangian particle tracking outside the ocean.
 ```
+
+The optional `decision` block is the same criterion as one yes/no question
+for the decisions backend; keep the two in step when the scope changes.
+
+## Backends
+
+### `ollama` (default)
+
+A chat completion against the Ollama server at `--base-url`, system prompt
+from the YAML, user message the work listing, JSON response parsed into
+the verdict. Temperature `0.8` with a random per-call seed, both recorded.
+The Ollama preflight (server reachable, model pulled) runs first.
+
+### `decisions`
+
+One request per work to a decisions model through OpenRouter's decisions
+endpoint (`--decisions-url`), authenticated with `--api-key` or
+`OPENROUTER_API_KEY` from `.env`. The request carries the same work listing
+as `state` and the YAML's `decision` block as a single `noul` (yes/no)
+question; the answer is a probability that the work is relevant, which
+becomes `relevance_score = round(100 * p)`. The model returns no
+justification, so `reason` is `null`; the raw answer JSON (with the exact
+probability) is kept in `raw_response`. No Ollama preflight runs; a missing
+key or a criteria file without a `decision` block exits before any request.
+Retries: transport errors, HTTP 5xx and 429 are retried four times with a
+growing backoff, then the work gets the `llm-timeout` sentinel; a 2xx body
+without the expected answer gets `llm-parse-failure`. In the meta,
+`llm.temperature` is `null` and `prompt_sha256` hashes the question's
+canonical JSON plus the user-render marker, so two runs with the same
+question compare equal. Measured on TypeSafe Jev 1.14: about 0.3 s per
+abstract sequentially and 0.00003 USD each.
+
+Decisions models on OpenRouter are listed by
+`GET /api/v1/models?output_modalities=decisions`; `typesafe/jev-1.14` and
+`openai/gpt-6-luna-decisions` were both probed and agreed on 37 of 40
+abstracts.
 
 ## Output format
 
@@ -132,9 +183,10 @@ Four fixed strings mark non-LLM outcomes:
   LLM was called for any work. `relevance_score=null`, `seed=null`,
   `raw_response=null`.
 
-All other `reason` values are the LLM's free-text justification.
-`raw_response` is set on successful verdicts and on `llm-parse-failure`
-sentinels; it is `None` on the other sentinels.
+All other `reason` values are the LLM's free-text justification, or `null`
+on a decisions-backend verdict (the model gives none). `raw_response` is
+set on successful verdicts and on `llm-parse-failure` sentinels; it is
+`None` on the other sentinels.
 
 Downstream stages never filter on a `null` score, so every sentinel passes
 the threshold gate.
@@ -171,13 +223,16 @@ latency — adjust the constants in `screen.py` if a real run hits them.
 The meta sidecar nests two shared blocks:
 
 - **`run`** (`RunMeta`): `tool`, `tool_version`, `run_at`, `validation_skipped`.
-- **`llm`** (`LlmMeta | null`): `model`, `temperature` (explicit; currently `0.8`),
-  `prompt_sha256` (sha256 of `system_prompt + "\n" + USER_TEMPLATE`, 64 hex
+- **`llm`** (`LlmMeta | null`): `model`, `temperature` (`0.8` for the
+  ollama backend, `null` for decisions), `prompt_sha256` (sha256 of
+  `system_prompt + "\n" + USER_TEMPLATE` for ollama, of the decision
+  question's canonical JSON + `"\n"` + `USER_TEMPLATE` for decisions; 64 hex
   chars, where `USER_TEMPLATE` is the user-render marker). `null` on a
   `--pass-all` run.
 
-The loaded `system_prompt` is also stored verbatim on the meta as
-`criterion`, so the reviewer export embeds the exact question the LLM saw.
+The loaded `system_prompt` (or the rendered decision question) is also
+stored verbatim on the meta as `criterion`, so the reviewer export embeds
+the exact question the model saw.
 
 Alongside `above_threshold_count`, `below_threshold_count`, and
 `skipped_count`, the meta records two failure counters:

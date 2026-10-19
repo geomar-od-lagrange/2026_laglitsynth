@@ -29,9 +29,11 @@ codebook: ../codebooks/lagrangian-oceanography.yaml
 #   retrieval: 50      # stage-5 PDF-fetch cutoff
 #   eligibility: 50    # stage-7 LLM-pass cutoff
 # models:
-#   screening: gemma3:4b
+#   screening: gemma3:4b      # or a decisions model id, e.g. typesafe/jev-1.14
 #   eligibility: gemma3:4b
 #   extraction: llama3.1:8b
+# backends:
+#   screening: ollama         # or decisions (needs OPENROUTER_API_KEY in .env)
 # num_ctx:
 #   eligibility: 32768
 #   extraction: 32768
