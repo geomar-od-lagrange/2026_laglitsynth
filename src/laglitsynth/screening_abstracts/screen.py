@@ -150,6 +150,28 @@ def _no_abstract_verdict(work_id: str) -> ScreeningVerdict:
     )
 
 
+def _unscreened_verdict(work_id: str) -> ScreeningVerdict:
+    return ScreeningVerdict(
+        work_id=work_id,
+        relevance_score=None,
+        reason="unscreened",
+        seed=None,
+    )
+
+
+def pass_all_works(input_path: Path, *, max_records: int | None) -> Iterator[ScreeningVerdict]:
+    """Yield an ``unscreened`` sentinel per input work; no LLM is called.
+
+    Downstream stages treat a ``None`` score as in scope, so every work
+    passes. The run can be screened for real later; PDFs already held are
+    kept either way.
+    """
+    for idx, work in enumerate(read_jsonl(input_path, Work)):
+        if max_records is not None and idx >= max_records:
+            break
+        yield _unscreened_verdict(work.id)
+
+
 def screen_works(
     input_path: Path,
     system_prompt: str,
@@ -265,6 +287,15 @@ def build_subparser(
         help="Print verdicts to stderr without writing output",
     )
     parser.add_argument(
+        "--pass-all",
+        action="store_true",
+        help=(
+            "Write an 'unscreened' verdict (score null) for every work without "
+            "calling the LLM, so downstream stages take the whole catalogue. "
+            "Screen for real later by rerunning without this flag."
+        ),
+    )
+    parser.add_argument(
         "--concurrency",
         type=int,
         default=1,
@@ -288,7 +319,9 @@ def run(args: argparse.Namespace) -> None:
         upstream="catalogue-dedup",
     )
 
-    preflight(base_url=args.base_url, model=args.model)
+    pass_all: bool = args.pass_all
+    if not pass_all:
+        preflight(base_url=args.base_url, model=args.model)
     output_dir: Path = data_dir / SCREENING_SUBDIR / args.run_id
     verdicts_path = output_dir / "verdicts.jsonl"
     meta_path = output_dir / "screening-meta.json"
@@ -296,19 +329,29 @@ def run(args: argparse.Namespace) -> None:
         warn_existing_run_dir(output_dir, "verdicts.jsonl")
     threshold: float = args.screening_threshold
 
-    criteria_spec = resolve_yaml_arg(args.screening_criteria)
-    system_prompt = load_system_prompt(criteria_spec)
-
-    # Hash the loaded system prompt + the user-render marker so the digest
-    # pins both the criterion and the shape of the user message.
-    prompt_sha256 = hashlib.sha256(
-        (system_prompt + "\n" + USER_TEMPLATE).encode("utf-8")
-    ).hexdigest()
+    # A pass-all run loads no criterion and calls no model: the meta's
+    # ``llm`` is None and ``criterion`` stays empty.
+    system_prompt = ""
+    llm_meta: LlmMeta | None = None
+    if not pass_all:
+        criteria_spec = resolve_yaml_arg(args.screening_criteria)
+        system_prompt = load_system_prompt(criteria_spec)
+        # Hash the loaded system prompt + the user-render marker so the
+        # digest pins both the criterion and the shape of the user message.
+        prompt_sha256 = hashlib.sha256(
+            (system_prompt + "\n" + USER_TEMPLATE).encode("utf-8")
+        ).hexdigest()
+        llm_meta = LlmMeta(
+            model=args.model, temperature=_TEMPERATURE, prompt_sha256=prompt_sha256
+        )
 
     stats = JsonlReadStats()
     total = sum(1 for _ in read_jsonl(args.input, Work, stats))
 
-    print(f"Screening {total} works with model {args.model}", file=sys.stderr)
+    if pass_all:
+        print(f"Passing all {total} works unscreened (no LLM call)", file=sys.stderr)
+    else:
+        print(f"Screening {total} works with model {args.model}", file=sys.stderr)
     print(f"Threshold: {threshold}", file=sys.stderr)
     if not args.dry_run:
         print(f"Output dir: {output_dir}", file=sys.stderr)
@@ -318,7 +361,9 @@ def run(args: argparse.Namespace) -> None:
     # docs/llm-concurrency.md.
     if not args.dry_run:
         output_dir.mkdir(parents=True, exist_ok=True)
-        save_resolved_config(args, output_dir, inlines=["screening_criteria"])
+        save_resolved_config(
+            args, output_dir, inlines=[] if pass_all else ["screening_criteria"]
+        )
         verdicts_path.unlink(missing_ok=True)
 
     def _build_meta(
@@ -335,11 +380,7 @@ def run(args: argparse.Namespace) -> None:
                 run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
                 validation_skipped=stats.skipped,
             ),
-            llm=LlmMeta(
-                model=args.model,
-                temperature=_TEMPERATURE,
-                prompt_sha256=prompt_sha256,
-            ),
+            llm=llm_meta,
             threshold=threshold,
             input_path=str(args.input),
             input_count=total,
@@ -367,17 +408,23 @@ def run(args: argparse.Namespace) -> None:
     llm_timeout_count = 0
     index = 0
 
-    for verdict in screen_works(
-        args.input,
-        system_prompt,
-        model=args.model,
-        base_url=args.base_url,
-        max_records=args.max_records,
-        concurrency=args.concurrency,
-    ):
+    verdicts: Iterator[ScreeningVerdict]
+    if pass_all:
+        verdicts = pass_all_works(args.input, max_records=args.max_records)
+    else:
+        verdicts = screen_works(
+            args.input,
+            system_prompt,
+            model=args.model,
+            base_url=args.base_url,
+            max_records=args.max_records,
+            concurrency=args.concurrency,
+        )
+
+    for verdict in verdicts:
         index += 1
 
-        if verdict.reason in ("no-abstract", "llm-parse-failure", "llm-timeout"):
+        if verdict.reason in ("no-abstract", "llm-parse-failure", "llm-timeout", "unscreened"):
             skipped_count += 1
             if verdict.reason == "llm-parse-failure":
                 llm_parse_failure_count += 1

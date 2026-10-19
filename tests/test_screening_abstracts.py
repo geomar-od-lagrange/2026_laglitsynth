@@ -455,6 +455,7 @@ def _run_args(tmp_path: Path, **overrides: Any) -> argparse.Namespace:
         "dry_run": False,
         "concurrency": 1,
         "config": None,
+        "pass_all": False,
     }
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -1032,3 +1033,100 @@ class TestDataDirResolution:
         _run_patched(_run_args(tmp_path))
 
         assert not (tmp_path / "manifest.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# --pass-all: an unscreened sentinel per work, no LLM
+# ---------------------------------------------------------------------------
+
+
+class TestPassAll:
+    def _run(self, args: argparse.Namespace) -> tuple[MagicMock, MagicMock]:
+        """Run with preflight and the OpenAI client patched; return both mocks."""
+        with (
+            patch("laglitsynth.screening_abstracts.screen.preflight") as mock_preflight,
+            patch("laglitsynth.screening_abstracts.screen.OpenAI") as mock_openai,
+        ):
+            from laglitsynth.screening_abstracts.screen import run
+
+            run(args)
+        return mock_preflight, mock_openai
+
+    def _works(self, tmp_path: Path) -> list[str]:
+        works = [
+            _make_work("W1", abstract="Ocean currents."),
+            _make_work("W2", abstract=None),
+            _make_work("W3", abstract="Forest ecology."),
+        ]
+        _write_works_jsonl(tmp_path / "input.jsonl", works)
+        return [w.id for w in works]
+
+    def test_writes_unscreened_verdict_per_work(self, tmp_path: Path) -> None:
+        ids = self._works(tmp_path)
+        mock_preflight, mock_openai = self._run(_run_args(tmp_path, pass_all=True))
+
+        mock_preflight.assert_not_called()
+        mock_openai.assert_not_called()
+
+        out_dir = tmp_path / "screening-abstracts" / "test-run-id"
+        verdicts = [
+            ScreeningVerdict.model_validate_json(line)
+            for line in (out_dir / "verdicts.jsonl").read_text().splitlines()
+        ]
+        assert [v.work_id for v in verdicts] == ids
+        for v in verdicts:
+            assert v.reason == "unscreened"
+            assert v.relevance_score is None
+            assert v.seed is None
+            assert v.raw_response is None
+
+    def test_meta_has_no_llm_and_counts_all_skipped(self, tmp_path: Path) -> None:
+        self._works(tmp_path)
+        self._run(_run_args(tmp_path, pass_all=True))
+
+        out_dir = tmp_path / "screening-abstracts" / "test-run-id"
+        raw = json.loads((out_dir / "screening-meta.json").read_text())
+        assert raw["llm"] is None
+        meta = ScreeningMeta.model_validate(raw)
+        assert meta.llm is None
+        assert meta.criterion == ""
+        assert meta.input_count == 3
+        assert meta.skipped_count == meta.input_count
+        assert meta.above_threshold_count == 0
+        assert meta.below_threshold_count == 0
+        assert meta.llm_parse_failure_count == 0
+        assert meta.llm_timeout_count == 0
+
+    def test_config_yaml_records_pass_all(self, tmp_path: Path) -> None:
+        import yaml as _yaml
+
+        self._works(tmp_path)
+        self._run(_run_args(tmp_path, pass_all=True))
+
+        out_dir = tmp_path / "screening-abstracts" / "test-run-id"
+        written = _yaml.safe_load((out_dir / "config.yaml").read_text())
+        assert written["pass_all"] is True
+
+    def test_max_records_caps_the_verdicts(self, tmp_path: Path) -> None:
+        ids = self._works(tmp_path)
+        self._run(_run_args(tmp_path, pass_all=True, max_records=2))
+
+        out_dir = tmp_path / "screening-abstracts" / "test-run-id"
+        lines = (out_dir / "verdicts.jsonl").read_text().splitlines()
+        assert [json.loads(line)["work_id"] for line in lines] == ids[:2]
+
+    def test_stage5_join_keeps_unscreened_works(self, tmp_path: Path) -> None:
+        from laglitsynth.fulltext_retrieval.retrieve import _active_works
+
+        catalogue = tmp_path / "catalogue.jsonl"
+        _write_works_jsonl(catalogue, [_make_work("W1"), _make_work("W2")])
+        verdicts = tmp_path / "verdicts.jsonl"
+        verdicts.write_text(
+            ScreeningVerdict(work_id="W1", reason="unscreened").model_dump_json()
+            + "\n"
+            + ScreeningVerdict(work_id="W2", relevance_score=10).model_dump_json()
+            + "\n"
+        )
+
+        active = [w.id for w in _active_works(catalogue, verdicts, 50.0)]
+        assert active == ["W1"]

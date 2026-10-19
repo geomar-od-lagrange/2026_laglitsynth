@@ -9,8 +9,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from laglitsynth.catalogue_fetch.models import Location, Source, Work
-from laglitsynth.fulltext_retrieval.export import run, write_export
-from laglitsynth.fulltext_retrieval.models import PdfProvenanceRecord, PdfSource
+from laglitsynth.fulltext_retrieval.export import run, split_packs, write_export
+from laglitsynth.fulltext_retrieval.models import (
+    EXPORT_TOOL_NAME,
+    ExportMeta,
+    PdfProvenanceRecord,
+    PdfSource,
+)
 from laglitsynth.fulltext_retrieval.store import write_provenance
 from laglitsynth.layout import (
     PDF_MANIFEST_FILENAME,
@@ -275,6 +280,7 @@ class TestRun:
         args.screening_threshold = 50.0
         args.data_dir = data_dir
         args.export_dir = None
+        args.packs = 1
 
         run(args)
 
@@ -309,6 +315,7 @@ class TestConventionalPaths:
         args.screening_threshold = 50.0
         args.data_dir = data_dir
         args.export_dir = None
+        args.packs = 1
         return args
 
     def test_data_dir_only_matches_fully_flagged_invocation(
@@ -377,3 +384,195 @@ class TestConventionalPaths:
         with pytest.raises(SystemExit) as exc_info:
             run(self._args(data_dir))
         assert "--run-id" in str(exc_info.value)
+
+
+_BUNDLE_FILES = (
+    "dois.txt",
+    "missing.ris",
+    PDF_MANIFEST_FILENAME,
+    "no-doi.csv",
+    "README.md",
+)
+
+
+class TestSplitPacks:
+    def _works(self, count: int) -> list[Work]:
+        return [_make_work(f"https://openalex.org/W{i}") for i in range(count)]
+
+    def test_remainder_goes_to_the_first_packs(self) -> None:
+        works = self._works(7)
+        packs = split_packs(works, 3)
+        assert [len(p) for p in packs] == [3, 2, 2]
+        # Contiguous slices that rebuild the input in order.
+        assert [w.id for p in packs for w in p] == [w.id for w in works]
+
+    def test_fewer_works_than_packs_gives_empty_packs(self) -> None:
+        assert [len(p) for p in split_packs(self._works(2), 3)] == [1, 1, 0]
+
+    def test_single_pack_is_everything(self) -> None:
+        works = self._works(4)
+        assert split_packs(works, 1) == [works]
+
+    @pytest.mark.parametrize("packs", [0, -1])
+    def test_packs_below_one_raises(self, packs: int) -> None:
+        with pytest.raises(ValueError):
+            split_packs(self._works(3), packs)
+
+
+class TestPacksAndMeta:
+    """``--packs`` subdirs and ``export-meta.json`` through ``run()``."""
+
+    def _layout(self, data_dir: Path, *, held: int = 0) -> list[Work]:
+        """Seven in-scope works plus one below threshold; the first ``held`` have a PDF."""
+        works = [
+            _work_with_journal(
+                f"https://openalex.org/W{i}", doi=None if i % 3 == 0 else f"10.1/{i}"
+            )
+            for i in range(1, 8 + held)
+        ]
+        below = _work_with_journal("https://openalex.org/W99", doi="10.1/below")
+        catalogue_path = deduplicated_path(data_dir)
+        catalogue_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_works_jsonl(catalogue_path, [*works, below])
+        verdicts_path = screening_verdicts_path(data_dir, TEST_RUN_ID)
+        verdicts_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_verdicts_jsonl(
+            verdicts_path,
+            [ScreeningVerdict(work_id=w.id, relevance_score=80) for w in works]
+            + [ScreeningVerdict(work_id=below.id, relevance_score=10)],
+        )
+        if held:
+            write_provenance(
+                data_dir,
+                {
+                    w.id: PdfProvenanceRecord(
+                        work_id=w.id,
+                        stem=w.id.rsplit("/", 1)[-1],
+                        doi=w.doi,
+                        source=PdfSource.oa,
+                        source_url="https://example.com/p.pdf",
+                        pdf_path=f"pdfs/{w.id.rsplit('/', 1)[-1]}.pdf",
+                        content_sha256="x",
+                        obtained_at="2026-01-01T00:00:00+00:00",
+                    )
+                    for w in works[:held]
+                },
+            )
+        return works
+
+    def _args(self, data_dir: Path, packs: int) -> MagicMock:
+        args = MagicMock()
+        args.catalogue = None
+        args.screening_verdicts = None
+        args.run_id = None
+        args.screening_threshold = 50.0
+        args.data_dir = data_dir
+        args.export_dir = None
+        args.packs = packs
+        return args
+
+    def _meta(self, data_dir: Path) -> ExportMeta:
+        return ExportMeta.model_validate_json(
+            (export_dir(data_dir) / "export-meta.json").read_text()
+        )
+
+    def test_one_pack_writes_meta_and_no_pack_dirs(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "data"
+        self._layout(data_dir)
+        _write_manifest(data_dir)
+
+        run(self._args(data_dir, packs=1))
+
+        bundle = export_dir(data_dir)
+        assert (bundle / "export-meta.json").exists()
+        assert not list(bundle.glob("pack-*"))
+        readme = (bundle / "README.md").read_text(encoding="utf-8")
+        assert "This is pack" not in readme
+        meta = self._meta(data_dir)
+        assert meta.packs == 1
+        assert meta.pack_sizes == [7]
+
+    def test_three_packs_split_the_full_bundle(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "data"
+        self._layout(data_dir)
+        _write_manifest(data_dir)
+
+        run(self._args(data_dir, packs=3))
+
+        bundle = export_dir(data_dir)
+        top_ids = [r["work_id"] for r in _read_manifest(bundle / PDF_MANIFEST_FILENAME)]
+        assert len(top_ids) == 7
+
+        pack_ids: list[str] = []
+        sizes: list[int] = []
+        for k in (1, 2, 3):
+            pack_dir = bundle / f"pack-{k}"
+            for filename in _BUNDLE_FILES:
+                assert (pack_dir / filename).exists(), f"pack-{k}/{filename}"
+            ids = [r["work_id"] for r in _read_manifest(pack_dir / PDF_MANIFEST_FILENAME)]
+            pack_ids.extend(ids)
+            sizes.append(len(ids))
+            readme = (pack_dir / "README.md").read_text(encoding="utf-8")
+            assert f"This is pack {k} of 3" in readme
+        assert not (bundle / "pack-4").exists()
+        assert "This is pack" not in (bundle / "README.md").read_text(encoding="utf-8")
+
+        assert sorted(pack_ids) == sorted(top_ids)
+        assert len(pack_ids) == len(set(pack_ids))
+        assert sizes == [3, 2, 2]
+        meta = self._meta(data_dir)
+        assert meta.packs == 3
+        assert meta.pack_sizes == sizes
+
+    def test_meta_counts(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "data"
+        works = self._layout(data_dir, held=2)
+        _write_manifest(data_dir)
+
+        run(self._args(data_dir, packs=2))
+
+        meta = self._meta(data_dir)
+        exported = works[2:]
+        assert meta.active_count == len(works)
+        assert meta.held_count == 2
+        assert meta.exported_count == meta.active_count - meta.held_count
+        assert meta.exported_count == len(exported)
+        assert meta.with_doi_count == sum(1 for w in exported if w.doi is not None)
+        assert sum(meta.pack_sizes) == meta.exported_count
+        assert meta.screening_threshold == 50.0
+        assert meta.catalogue == str(deduplicated_path(data_dir))
+        assert meta.screening_verdicts == str(
+            screening_verdicts_path(data_dir, TEST_RUN_ID)
+        )
+        assert meta.run.tool == EXPORT_TOOL_NAME
+
+    def test_run_id_from_manifest_when_verdicts_defaulted(
+        self, tmp_path: Path
+    ) -> None:
+        data_dir = tmp_path / "data"
+        self._layout(data_dir)
+        _write_manifest(data_dir)
+
+        run(self._args(data_dir, packs=1))
+
+        assert self._meta(data_dir).run_id == TEST_RUN_ID
+
+    def test_run_id_none_with_explicit_verdicts(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "data"
+        self._layout(data_dir)
+        # No manifest: an explicit verdicts path needs no run-id.
+
+        args = self._args(data_dir, packs=1)
+        args.screening_verdicts = screening_verdicts_path(data_dir, TEST_RUN_ID)
+        run(args)
+
+        assert self._meta(data_dir).run_id is None
+
+    def test_packs_zero_exits(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "data"
+        self._layout(data_dir)
+        _write_manifest(data_dir)
+
+        with pytest.raises(SystemExit, match="--packs"):
+            run(self._args(data_dir, packs=0))
+        assert not export_dir(data_dir).exists()

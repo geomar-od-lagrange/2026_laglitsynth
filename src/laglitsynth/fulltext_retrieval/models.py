@@ -34,3 +34,24 @@ class RetrievalMeta(BaseModel):
     retrieved_count: int
     missing_count: int
     by_source: dict[str, int]
+
+
+EXPORT_TOOL_NAME = "laglitsynth.fulltext_retrieval.export"
+
+
+class ExportMeta(BaseModel):
+    """How a handoff bundle was made: ``export-meta.json`` next to it."""
+
+    model_config = ConfigDict(extra="forbid")
+    run: RunMeta
+    git_commit: str | None  # None outside a git checkout
+    run_id: str | None  # None when --screening-verdicts was passed explicitly
+    catalogue: str
+    screening_verdicts: str
+    screening_threshold: float
+    active_count: int  # works in scope after the screening join
+    held_count: int  # of those, already holding a PDF
+    exported_count: int  # active minus held: what the bundle lists
+    with_doi_count: int
+    packs: int
+    pack_sizes: list[int]

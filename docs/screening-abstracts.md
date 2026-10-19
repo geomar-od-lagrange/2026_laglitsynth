@@ -116,7 +116,7 @@ Each run produces three files in `<data-dir>/screening-abstracts/<run-id>/`:
 
 ### Sentinel reason values
 
-Three fixed strings mark non-LLM outcomes:
+Four fixed strings mark non-LLM outcomes:
 
 - `reason="no-abstract"` — the work had no abstract; the LLM was not
   called. `relevance_score=null`, `seed=null`, `raw_response=null`.
@@ -128,10 +128,27 @@ Three fixed strings mark non-LLM outcomes:
   per-work call site catches the exception so a single hang does not
   kill the whole stage. `relevance_score=null`, `seed=null`,
   `raw_response=null`.
+- `reason="unscreened"` — the run was made with `--pass-all` (below); no
+  LLM was called for any work. `relevance_score=null`, `seed=null`,
+  `raw_response=null`.
 
 All other `reason` values are the LLM's free-text justification.
 `raw_response` is set on successful verdicts and on `llm-parse-failure`
-sentinels; it is `None` on `no-abstract` and `llm-timeout` sentinels.
+sentinels; it is `None` on the other sentinels.
+
+Downstream stages never filter on a `null` score, so every sentinel passes
+the threshold gate.
+
+### Passing everything through: `--pass-all`
+
+`screening-abstracts --pass-all` writes an `unscreened` verdict for every
+input work and contacts no model: no Ollama preflight, no criteria file
+loaded. The run dir is otherwise normal, so stage 5 and the export take the
+whole catalogue through the usual join. Use it to retrieve PDFs before
+deciding on screening; a later real run under a new run-id screens the same
+catalogue, and the PDFs already held are kept. The meta's `llm` block is
+`null` and `criterion` is empty on such a run; `config.yaml` records
+`pass_all: true`.
 
 ### LLM input format
 
@@ -154,9 +171,10 @@ latency — adjust the constants in `screen.py` if a real run hits them.
 The meta sidecar nests two shared blocks:
 
 - **`run`** (`RunMeta`): `tool`, `tool_version`, `run_at`, `validation_skipped`.
-- **`llm`** (`LlmMeta`): `model`, `temperature` (explicit; currently `0.8`),
+- **`llm`** (`LlmMeta | null`): `model`, `temperature` (explicit; currently `0.8`),
   `prompt_sha256` (sha256 of `system_prompt + "\n" + USER_TEMPLATE`, 64 hex
-  chars, where `USER_TEMPLATE` is the user-render marker).
+  chars, where `USER_TEMPLATE` is the user-render marker). `null` on a
+  `--pass-all` run.
 
 The loaded `system_prompt` is also stored verbatim on the meta as
 `criterion`, so the reviewer export embeds the exact question the LLM saw.
