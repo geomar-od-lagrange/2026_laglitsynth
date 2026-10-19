@@ -66,7 +66,7 @@ def _active_works(
     """Yield Works that pass the screening threshold gate.
 
     Works whose ``ScreeningVerdict.relevance_score`` is None (sentinels:
-    ``no-abstract``, ``llm-parse-failure``, ``llm-timeout``) are never
+    ``no-abstract``, ``llm-parse-failure``, ``llm-timeout``, ``unscreened``) are never
     filtered — absence of a score is not evidence of irrelevance.  Only an
     explicit numeric score strictly below ``screening_threshold`` excludes.
 

@@ -17,7 +17,7 @@ class ScreeningVerdict(BaseModel):
 class ScreeningMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run: RunMeta
-    llm: LlmMeta
+    llm: LlmMeta | None  # None on a --pass-all run: no model was called
     threshold: float
     input_path: str
     input_count: int

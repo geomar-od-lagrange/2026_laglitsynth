@@ -9,6 +9,7 @@ from pathlib import Path
 from laglitsynth.bake_model import build_subparser as build_bake_model_subparser
 from laglitsynth.abstract_lookup.lookup import build_subparser as build_abstract_lookup_subparser
 from laglitsynth.catalogue_dedup.dedup import build_subparser as build_dedup_subparser
+from laglitsynth.catalogue_dedup.sample import build_subparser as build_sample_subparser
 from laglitsynth.catalogue_fetch.fetch import build_subparser as build_fetch_subparser
 from laglitsynth.config import load_config
 from laglitsynth.extraction_codebook.export import build_subparser as build_extraction_codebook_export_subparser
@@ -29,6 +30,7 @@ _BUILDERS = (
     build_bake_model_subparser,
     build_fetch_subparser,
     build_dedup_subparser,
+    build_sample_subparser,
     build_abstract_lookup_subparser,
     build_screening_subparser,
     build_screening_export_subparser,

@@ -76,6 +76,7 @@ The meta files stay as per-run provenance records — they are not merged.
 | `data/catalogue-dedup/deduplicated.jsonl` | [`Work`](../src/laglitsynth/catalogue_fetch/models.py) | Deduplicated catalogue — single source of Work records for the pipeline |
 | `data/catalogue-dedup/dropped.jsonl` | [`DroppedRecord`](../src/laglitsynth/catalogue_dedup/models.py) | Dropped duplicates with the matching rule and the surviving work's ID |
 | `data/catalogue-dedup/dedup-meta.json` | [`DeduplicationMeta`](../src/laglitsynth/catalogue_dedup/models.py) | Counts by matching rule |
+| `data/catalogue-dedup/sample-<n>-seed<seed>.jsonl` | [`Work`](../src/laglitsynth/catalogue_fetch/models.py) | Optional seeded subset written by `catalogue-sample`, passed downstream as `--catalogue`; `.meta.json` sidecar is a [`SampleMeta`](../src/laglitsynth/catalogue_dedup/models.py) |
 
 ### Stage 2b — abstract-lookup *(exists)*
 
@@ -110,7 +111,8 @@ output.
 | `data/pdfs/<stem>.pdf` | (binary) | The persistent, work-keyed PDF store: one PDF per work, shared across searches |
 | `data/pdfs/provenance.jsonl` | [`PdfProvenanceRecord`](../src/laglitsynth/fulltext_retrieval/models.py) | Per-work store state: where its one PDF came from, or that it is still `missing` (whole-file, last-write-wins, single writer) |
 | `data/fulltext-retrieval/retrieval-meta.json` | [`RetrievalMeta`](../src/laglitsynth/fulltext_retrieval/models.py) | Per-invocation counts: `total_works`, `retrieved_count`, `missing_count`, and `by_source` (a `dict[str, int]` keyed by `PdfSource`) |
-| `data/pdfs/export/{dois.txt,missing.ris,pdf-manifest.csv}` | (plain text / CSV) | Export bundle for a collaborator: still-missing works as DOI links, RIS, and the round-trip stem map |
+| `data/pdfs/export/{dois.txt,missing.ris,no-doi.csv,pdf-manifest.csv,README.md}` | (plain text / CSV) | Export bundle for a collaborator: still-missing works as DOI links, RIS, the no-DOI worklist, the round-trip stem map, and the instructions; `pack-N/` subdirs hold the same for each slice when `--packs` is given |
+| `data/pdfs/export/export-meta.json` | [`ExportMeta`](../src/laglitsynth/fulltext_retrieval/models.py) | How the bundle was made: git commit, run-id, inputs, threshold, counts, pack sizes |
 
 Stage 5 joins the deduplicated catalogue against stage 3's `verdicts.jsonl`
 at the `--screening-threshold` cutoff to determine the active work set.
@@ -216,6 +218,11 @@ laglitsynth catalogue-dedup \
     [--input "data/catalogue-fetch/*.jsonl"] \
     [--output-dir data/catalogue-dedup/]
 
+# Stage 2 — catalogue-sample (optional: a seeded subset as its own catalogue)
+laglitsynth catalogue-sample --n N --seed N \
+    [--input data/catalogue-dedup/deduplicated.jsonl] \
+    [--output data/catalogue-dedup/sample-<n>-seed<seed>.jsonl]
+
 # Stage 2b — abstract-lookup
 laglitsynth abstract-lookup \
     --input data/catalogue-dedup/deduplicated.jsonl \
@@ -228,7 +235,8 @@ laglitsynth screening-abstracts [data/catalogue-dedup/deduplicated.jsonl] \
     [--screening-criteria FILE] \
     [--data-dir DIR] [--run-id ID] [--config FILE] \
     [--model MODEL] [--screening-threshold FLOAT] \
-    [--base-url URL] [--max-records N] [--concurrency N] [--dry-run]
+    [--base-url URL] [--max-records N] [--concurrency N] [--dry-run] \
+    [--pass-all]
 
 # Stage 3 — screening-abstracts-export (human review, XLSX only)
 laglitsynth screening-abstracts-export \
@@ -249,7 +257,7 @@ laglitsynth fulltext-retrieval-export \
     [--catalogue data/catalogue-dedup/deduplicated.jsonl] \
     [--screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl] \
     [--run-id ID] [--screening-threshold 50] [--data-dir DIR] \
-    [--export-dir data/pdfs/export/]
+    [--export-dir data/pdfs/export/] [--packs 1]
 
 # Stage 5 — fulltext-retrieval-import (ingest a returned PDF folder)
 laglitsynth fulltext-retrieval-import \

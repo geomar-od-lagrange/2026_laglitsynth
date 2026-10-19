@@ -155,10 +155,23 @@ non-`missing` provenance record, and writes a handoff bundle into
 - `README.md` — what the bundle is, what each file is for, and what to send
   back: the PDFs as downloaded, in one folder, no renaming. It travels with
   the bundle, because the bundle travels and the repo does not.
+- `export-meta.json` — how the bundle was made, as an
+  [`ExportMeta`](../src/laglitsynth/fulltext_retrieval/models.py): git
+  commit, run-id (None when `--screening-verdicts` was given explicitly),
+  the resolved catalogue and verdicts paths, threshold, counts (active,
+  already held, exported, with DOI), and pack sizes. This is what makes a
+  bundle on a shared drive traceable back to the run that produced it.
 
 Works without a DOI appear in `pdf-manifest.csv`, `no-doi.csv`, and
 `missing.ris` (DOI empty) but not in `dois.txt` — there is no link to
 resolve.
+
+`--packs N` additionally splits the selection into `pack-1/` … `pack-N/`
+under the bundle directory, contiguous slices of near-equal size, each a
+complete bundle of its own whose README says which pack it is. One pack
+goes to each collaborator. The top-level bundle stays complete, and import
+reads the top-level `pdf-manifest.csv`, so which pack a folder came back
+from does not matter.
 
 The runner exports the gap when `EXPORT_GAP=1`, straight after stage 5. With
 `STOP_AFTER_STAGE=5 EXPORT_GAP=1`, one invocation of
@@ -200,14 +213,13 @@ wins) unless `--overwrite` is passed. Matched, new PDFs are copied in and
 their provenance is upserted with the given `--source`. A PDF that resolves
 to no manifest stem, or is not a real PDF, is reported and skipped. Import
 prints a summary — matched and copied, skipped, and how many manifest works
-are still missing after this import. The unmatched residual is the
-operator's to resolve, by renaming those files to their `expected_filename`
-and importing again; the collaborator is never asked to name anything.
-
-A title-matching fallback for PDFs that embed no DOI is the open follow-up —
+are still missing after this import. The unmatched residual is a matching
+problem, not the collaborator's: they are never asked to name anything. A
+title-matching fallback for PDFs that embed no DOI is the open follow-up —
 [contributor-pdf-matching.md](explorations/contributor-pdf-matching.md)
 records the measurement behind the current matching and what the fallback
-needs.
+needs. Until it lands, renaming a residual file to its `expected_filename`
+and importing again files it.
 
 ## Collaboration model
 

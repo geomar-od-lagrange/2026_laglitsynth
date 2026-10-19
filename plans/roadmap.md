@@ -202,6 +202,12 @@ Update this file when a plan is written, implemented, or archived.
   [contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md);
   the residual that embeds no DOI is the title-matching question.
 
+- [Unscreened sample run and packed handoff](done/unscreened-sample-run.md) —
+  `catalogue-sample` (seeded subset as its own catalogue),
+  `screening-abstracts --pass-all` (`unscreened` sentinel, no model call),
+  `fulltext-retrieval-export --packs N` plus an `export-meta.json` that
+  records how each bundle was made.
+
 ## In flight
 
 - [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate is now planned as the [run manifest](done/run-manifest.md).

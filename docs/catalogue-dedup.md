@@ -70,6 +70,8 @@ data/catalogue-dedup/
   deduplicated.jsonl      # Work records after deduplication
   dedup-meta.json         # DeduplicationMeta
   dropped.jsonl           # one DroppedRecord per dropped duplicate
+  sample-<n>-seed<seed>.jsonl       # optional: catalogue-sample output
+  sample-<n>-seed<seed>.meta.json   # SampleMeta
 ```
 
 ## CLI interface
@@ -94,6 +96,27 @@ laglitsynth catalogue-dedup \
 
 When nothing matches the input, the stage exits naming `catalogue-fetch` as
 the stage to run first. See [run-manifest.md](run-manifest.md) for the layout.
+
+## Sampling a catalogue
+
+`catalogue-sample` writes a seeded random sample of a catalogue as a
+catalogue of its own, for running the downstream stages on a subset
+before committing to the whole corpus:
+
+```
+laglitsynth catalogue-sample --n 500 --seed 42
+```
+
+It reads `<data-dir>/catalogue-dedup/deduplicated.jsonl` (`--input`
+overrides) and writes `sample-<n>-seed<seed>.jsonl` next to it (`--output`
+overrides), keeping catalogue order. `--seed` is required so the choice is
+recorded, not defaulted; the same seed over the same input gives the same
+sample. `--n` at or above the catalogue size returns every work. A
+[`SampleMeta`](../src/laglitsynth/catalogue_dedup/models.py) sidecar
+(`sample-<n>-seed<seed>.meta.json`) records input path and count, `n`,
+`seed`, and the output count. Downstream stages take the sample through
+their `--catalogue` flag (or stage 3's positional input); nothing else
+changes.
 
 ## What is deferred
 

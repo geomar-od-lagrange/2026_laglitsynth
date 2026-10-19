@@ -14,6 +14,14 @@ bundle a collaborator can act on through their own institutional access:
   written, with its header row, even when empty.
 - ``README.md`` — what the bundle is, what each file is for, and what to
   send back, filled in from a template with the work count and export date.
+- ``export-meta.json`` — how the bundle was made (``ExportMeta``): git
+  commit, run-id, input paths, threshold, counts, pack sizes.
+
+With ``--packs N`` (N > 1) the top-level bundle stays complete and
+``pack-1/`` … ``pack-N/`` each hold a full bundle for a contiguous,
+near-equal slice of it, for handing to N collaborators. Import reads the
+top-level ``pdf-manifest.csv``, so which pack a folder came back from does
+not matter.
 
 ``--catalogue`` and ``--screening-verdicts`` default to their conventional
 paths under ``--data-dir``; the verdicts path takes the run-id from
@@ -24,17 +32,22 @@ from __future__ import annotations
 
 import argparse
 import csv
+import shutil
+import subprocess
 import sys
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 
 from laglitsynth.catalogue_fetch.models import Work
-from laglitsynth.fulltext_retrieval.models import PdfSource
+from laglitsynth.fulltext_retrieval.models import EXPORT_TOOL_NAME, ExportMeta, PdfSource
 from laglitsynth.fulltext_retrieval.retrieve import _DOI_PREFIX_RE, _active_works
 from laglitsynth.fulltext_retrieval.store import load_provenance
 from laglitsynth.ids import work_id_to_filename
+from laglitsynth.io import write_meta
 from laglitsynth.layout import PDF_MANIFEST_FILENAME, export_dir, resolve_screening_inputs
+from laglitsynth.manifest import resolve_run_id
+from laglitsynth.models import RunMeta
 
 
 def _doi_url(doi: str) -> str:
@@ -83,7 +96,7 @@ _README_TEMPLATE = """\
 # PDF handoff bundle
 
 Exported {export_date}. {work_count} works still need a PDF{no_doi_clause}.
-
+{pack_clause}
 ## What's in this folder
 
 - `dois.txt` — one `https://doi.org/...` link per work that has a DOI. Open
@@ -111,13 +124,24 @@ _NO_DOI_BULLET = """\
 """
 
 
-def _readme_content(*, work_count: int, doi_count: int, export_date: str) -> str:
+def _readme_content(
+    *,
+    work_count: int,
+    doi_count: int,
+    export_date: str,
+    pack: tuple[int, int] | None = None,
+) -> str:
     no_doi_count = work_count - doi_count
     return _README_TEMPLATE.format(
         export_date=export_date,
         work_count=work_count,
         no_doi_clause=(
             f" ({doi_count} with a DOI, {no_doi_count} without)" if no_doi_count else ""
+        ),
+        pack_clause=(
+            f"This is pack {pack[0]} of {pack[1]}; the other packs go to other people.\n"
+            if pack is not None
+            else ""
         ),
         no_doi_bullet=(
             _NO_DOI_BULLET.format(
@@ -133,10 +157,13 @@ def _readme_content(*, work_count: int, doi_count: int, export_date: str) -> str
 def write_export(
     works: Iterable[Work],
     export_dir: Path,
+    *,
+    pack: tuple[int, int] | None = None,
 ) -> int:
     """Write the handoff bundle for ``works``; return the work count.
 
-    ``works`` is the already-filtered missing selection.
+    ``works`` is the already-filtered missing selection. ``pack`` is
+    ``(index, total)`` when this bundle is one pack of a split export.
     """
     works = list(works)
     export_dir.mkdir(parents=True, exist_ok=True)
@@ -183,11 +210,53 @@ def write_export(
             work_count=len(works),
             doi_count=doi_count,
             export_date=datetime.now(UTC).date().isoformat(),
+            pack=pack,
         ),
         encoding="utf-8",
     )
 
     return len(works)
+
+
+def split_packs(works: list[Work], packs: int) -> list[list[Work]]:
+    """Split ``works`` into ``packs`` contiguous slices of near-equal size.
+
+    The first ``len(works) % packs`` slices are one longer. Fewer than
+    ``packs`` works gives some empty slices, which are still written so the
+    pack count a collaborator was told holds.
+    """
+    if packs < 1:
+        raise ValueError("packs must be at least 1")
+    base, extra = divmod(len(works), packs)
+    out: list[list[Work]] = []
+    start = 0
+    for i in range(packs):
+        size = base + (1 if i < extra else 0)
+        out.append(works[start : start + size])
+        start += size
+    return out
+
+
+def _git_commit() -> str | None:
+    """HEAD of the checkout this module runs from; None when there is none."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parent,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _remove_stale_packs(bundle_dir: Path) -> None:
+    """Drop ``pack-*`` dirs from an earlier export so no outdated pack is handed on."""
+    for stale in bundle_dir.glob("pack-*"):
+        if stale.is_dir():
+            shutil.rmtree(stale)
 
 
 def build_subparser(
@@ -235,6 +304,15 @@ def build_subparser(
         default=None,
         help="Bundle output directory (default: <data-dir>/pdfs/export/).",
     )
+    parser.add_argument(
+        "--packs",
+        type=int,
+        default=1,
+        help=(
+            "Also split the bundle into N near-equal packs, pack-1/ … pack-N/, "
+            "one per collaborator (default: 1, no packs)."
+        ),
+    )
     parser.set_defaults(run=run)
     return parser
 
@@ -244,7 +322,13 @@ def run(args: argparse.Namespace) -> None:
     bundle_dir: Path = (
         args.export_dir if args.export_dir is not None else export_dir(data_dir)
     )
+    packs: int = args.packs
+    if packs < 1:
+        raise SystemExit("--packs must be at least 1")
 
+    run_id: str | None = (
+        None if args.screening_verdicts is not None else resolve_run_id(data_dir, args.run_id)
+    )
     catalogue, screening_verdicts = resolve_screening_inputs(
         data_dir, args.catalogue, args.screening_verdicts, args.run_id
     )
@@ -256,18 +340,43 @@ def run(args: argparse.Namespace) -> None:
         if rec.source != PdfSource.missing
     }
 
-    selection = [
-        w
-        for w in _active_works(
-            catalogue, screening_verdicts, args.screening_threshold
-        )
-        if w.id not in have_pdf
-    ]
+    active = list(_active_works(catalogue, screening_verdicts, args.screening_threshold))
+    selection = [w for w in active if w.id not in have_pdf]
 
     count = write_export(selection, bundle_dir)
+    _remove_stale_packs(bundle_dir)
+    pack_sizes = [count]
+    if packs > 1:
+        slices = split_packs(selection, packs)
+        pack_sizes = [len(s) for s in slices]
+        for i, works in enumerate(slices, 1):
+            write_export(works, bundle_dir / f"pack-{i}", pack=(i, packs))
+
     with_doi = sum(1 for w in selection if w.doi is not None)
+    write_meta(
+        bundle_dir / "export-meta.json",
+        ExportMeta(
+            run=RunMeta(
+                tool=EXPORT_TOOL_NAME,
+                run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+                validation_skipped=0,
+            ),
+            git_commit=_git_commit(),
+            run_id=run_id,
+            catalogue=str(catalogue),
+            screening_verdicts=str(screening_verdicts),
+            screening_threshold=args.screening_threshold,
+            active_count=len(active),
+            held_count=len(active) - count,
+            exported_count=count,
+            with_doi_count=with_doi,
+            packs=packs,
+            pack_sizes=pack_sizes,
+        ),
+    )
+    pack_note = f" in {packs} packs ({'/'.join(map(str, pack_sizes))})" if packs > 1 else ""
     print(
-        f"Exported {count} missing works to {bundle_dir} "
+        f"Exported {count} missing works to {bundle_dir}{pack_note} "
         f"({with_doi} with a DOI in dois.txt).",
         file=sys.stderr,
     )
