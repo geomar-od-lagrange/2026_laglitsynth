@@ -1,0 +1,3 @@
+[submodule "data"]
+	path = data
+	url = https://git.geomar.de/willi-rath/2026_laglitsynth_data.git

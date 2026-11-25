@@ -1,7 +1,3 @@
-data/**
-!data/**/
-!data/**/.gitkeep
-
 # Bench-mode TEI files live at the repo root (rsync'd in). Copyright.
 *.tei.xml
 

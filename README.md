@@ -12,6 +12,12 @@ pixi install
 cp .env.example .env  # then fill in OPENALEX_API_KEY and UNPAYWALL_EMAIL
 ```
 
+`data/` is a git submodule holding the PDF store (`data/pdfs/`, in Git
+LFS) in the private repo
+[willi-rath/2026_laglitsynth_data](https://git.geomar.de/willi-rath/2026_laglitsynth_data).
+With access, fetch it with `git lfs install && git submodule update --init`.
+Everything else the pipeline writes under `data/` stays local.
+
 Stages 1 and 5 read `OPENALEX_API_KEY` and `UNPAYWALL_EMAIL` from `.env`
 automatically when their flags are absent. See
 [`docs/external-services.md`](docs/external-services.md) for the full
