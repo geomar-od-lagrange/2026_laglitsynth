@@ -40,8 +40,9 @@ holds, with no warning. (Stage 8 does raise on the opposite
 inconsistency — a verdict whose `work_id` is missing from the catalogue.)
 
 The screening threshold is a CLI flag (`--screening-threshold`, a `float`)
-on stage 7 and `fulltext-retrieval-export`; the export records it in its
-meta. Screening itself applies no threshold and records none.
+on stage 7, `fulltext-retrieval-export` and `corpus-assemble`; the export
+and the corpus record it in their metas. Screening itself applies no
+threshold and records none.
 
 ## Artifact map
 
@@ -104,6 +105,28 @@ per work (`source` one of `oa` / `unpaywall` / `missing`).
 collaborator; `fulltext-retrieval-import` ingests their returned PDF folder
 (`source` `zotero-import` / `manual`), matched back to works through the
 export's `pdf-manifest.csv`.
+
+### corpus-assemble *(exists)*
+
+| Path | Model | Description |
+|---|---|---|
+| `data/corpus/works.jsonl` | [`Work`](../src/laglitsynth/catalogue_fetch/models.py) | The selected catalogue works |
+| `data/corpus/verdicts.jsonl` | [`ScreeningVerdict`](../src/laglitsynth/screening_abstracts/models.py) | Their screening verdicts (none for works included by `--allow-unscreened`) |
+| `data/corpus/pdfs/<stem>.pdf` | (binary) | Copies of the store PDFs of the selected works |
+| `data/corpus/provenance.jsonl` | [`CorpusPdf`](../src/laglitsynth/corpus/models.py) | One row per selected work: `pdf_path` (relative to `data/corpus/`, `None` without a PDF), `content_sha256` of the copy, and the store's `PdfProvenanceRecord` |
+| `data/corpus/corpus-meta.json` | [`CorpusMeta`](../src/laglitsynth/corpus/models.py) | Inputs, screening LLM and threshold, counts, `corpus_id` and `analysis_run_id` |
+
+`corpus-assemble` selects every catalogue work whose screening verdict
+scores `None` or at least `--screening-threshold`. It exits without
+writing when a verdict row or `screening-meta.json` fails validation, or
+when catalogue works have no verdict row and `--allow-unscreened` is not
+passed. It rewrites `data/corpus/` whole, through `data/corpus.tmp/`.
+`corpus_id` is the sha256 of the lines `work_id\tcontent_sha256` (empty
+without a PDF), sorted by work id and joined with newlines, so it changes
+only with membership or PDF bytes. `analysis_run_id` is kept from the
+previous `corpus-meta.json` while `corpus_id` is unchanged and minted
+afresh otherwise. The readers for stages 6–8 are in
+[`corpus/load.py`](../src/laglitsynth/corpus/load.py).
 
 ### Stage 6 — fulltext-extraction
 
@@ -220,6 +243,13 @@ laglitsynth fulltext-retrieval-import \
     --source zotero-import|manual \
     [--pdf-manifest data/pdfs/export/pdf-manifest.csv] \
     [--data-dir DIR] [--overwrite]
+
+# corpus-assemble (selected works + PDF copies into data/corpus/)
+laglitsynth corpus-assemble \
+    [--catalogue data/catalogue-dedup/deduplicated.jsonl] \
+    [--screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl] \
+    [--screening-run-id ID] --screening-threshold FLOAT \
+    [--allow-unscreened] [--data-dir DIR]
 
 # Stage 6 — fulltext-extraction
 laglitsynth fulltext-extraction \
@@ -344,6 +374,9 @@ laglitsynth fulltext-retrieval-export
 laglitsynth fulltext-retrieval-import \
     --import-dir ~/Downloads/returned-pdfs/ \
     --source zotero-import
+
+# Assemble the corpus: the one place the screening threshold is applied.
+laglitsynth corpus-assemble --screening-threshold 50
 
 # 6. Fulltext extraction
 # Manual: start GROBID container first

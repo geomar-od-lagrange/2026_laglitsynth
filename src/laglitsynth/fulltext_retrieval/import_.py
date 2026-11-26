@@ -37,8 +37,9 @@ from pypdf import PdfReader
 from pypdf.errors import PyPdfError
 
 from laglitsynth.fulltext_retrieval.models import PdfProvenanceRecord, PdfSource
-from laglitsynth.fulltext_retrieval.retrieve import _DOI_PREFIX_RE, _validate_pdf
+from laglitsynth.fulltext_retrieval.retrieve import _DOI_PREFIX_RE
 from laglitsynth.fulltext_retrieval.store import (
+    file_has_pdf_magic,
     load_provenance,
     sha256_of,
     store_pdf_path,
@@ -278,9 +279,7 @@ def import_pdfs(
     summary = _ImportSummary()
 
     for pdf_path in sorted(import_dir.glob("*.pdf")):
-        with open(pdf_path, "rb") as f:
-            head = f.read(4)
-        if not _validate_pdf(head):
+        if not file_has_pdf_magic(pdf_path):
             summary.skipped_not_pdf.append(pdf_path.name)
             continue
 

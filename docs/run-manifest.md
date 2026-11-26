@@ -35,6 +35,7 @@ paths are spelled out. Under `<data-dir>/`:
 | `fulltext-retrieval` | the catalogue | `pdfs/` |
 | `fulltext-retrieval-export` | the catalogue, `screening-abstracts/<run-id>/verdicts.jsonl` | `pdfs/export/` |
 | `fulltext-retrieval-import` | `pdfs/export/pdf-manifest.csv` | `pdfs/` |
+| `corpus-assemble` | the catalogue, `screening-abstracts/<run-id>/verdicts.jsonl` and `screening-meta.json`, `pdfs/` | `corpus/` |
 | `fulltext-extraction` | `pdfs/` | `fulltext-extraction/extraction.jsonl` |
 | `fulltext-eligibility` | the catalogue, the screening verdicts, `fulltext-extraction/extraction.jsonl` | `fulltext-eligibility/<run-id>/verdicts.jsonl` |
 | `extraction-codebook` | the catalogue, `fulltext-eligibility/<run-id>/verdicts.jsonl`, the extractions | `extraction-codebook/<run-id>/records.jsonl` |
@@ -52,6 +53,11 @@ flag to pass instead (`… not found; run catalogue-dedup first or pass
 exits asking for one. No stage mints a run-id on its own, because a leaf
 nobody else knows about is exactly the divergence the manifest exists to
 prevent. `generate-run-id` remains for ad-hoc use with an explicit `--run-id`.
+`corpus-assemble` resolves the screening run-id the same way, from
+`--screening-run-id`. The one id it mints, `analysis_run_id` in
+`corpus/corpus-meta.json`, is tied to the corpus content: it is kept while
+the corpus is unchanged and replaced when it changes (see
+[interfaces.md](interfaces.md#corpus-assemble-exists)).
 
 One run-id per review means a re-run of `screening-abstracts` without
 `--run-id` writes into the same run directory and replaces its

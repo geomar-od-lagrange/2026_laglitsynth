@@ -19,6 +19,7 @@ EXTRACTION_SUBDIR = "fulltext-extraction"
 ELIGIBILITY_SUBDIR = "fulltext-eligibility"
 EXTRACTION_CODEBOOK_SUBDIR = "extraction-codebook"
 EXPORT_SUBDIR = "pdfs/export"
+CORPUS_SUBDIR = "corpus"
 
 PDF_MANIFEST_FILENAME = "pdf-manifest.csv"
 
@@ -41,6 +42,10 @@ def deduplicated_path(data_dir: Path) -> Path:
 
 def screening_verdicts_path(data_dir: Path, run_id: str) -> Path:
     return data_dir / SCREENING_SUBDIR / run_id / "verdicts.jsonl"
+
+
+def corpus_dir(data_dir: Path) -> Path:
+    return data_dir / CORPUS_SUBDIR
 
 
 def extraction_dir(data_dir: Path) -> Path:
@@ -83,7 +88,7 @@ def resolve_screening_inputs(
     screening_verdicts: Path | None,
     run_id: str | None,
 ) -> tuple[Path, Path]:
-    """Resolve the catalogue + screening-verdicts pair stage 7 and the retrieval export join on.
+    """Resolve the catalogue + screening-verdicts pair that is joined on screening.
 
     Each omitted flag takes its conventional path; the verdicts path needs
     the run-id, which comes from ``run_id`` or the manifest.

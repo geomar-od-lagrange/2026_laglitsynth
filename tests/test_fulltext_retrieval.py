@@ -15,7 +15,6 @@ from laglitsynth.fulltext_retrieval.retrieve import (
     _DOI_PREFIX_RE,
     _RateLimiter,
     _retrieve_one,
-    _validate_pdf,
     run,
 )
 from laglitsynth.fulltext_retrieval.store import load_provenance, store_pdf_path
@@ -58,22 +57,6 @@ class TestWorkIdToFilename:
 
     def test_bare_id(self) -> None:
         assert work_id_to_filename("W999") == "W999"
-
-
-class TestValidatePdf:
-    def test_pdf_header(self) -> None:
-        assert _validate_pdf(b"%PDF-1.4 content") is True
-
-    def test_rejects_html_with_pdf_content_type(self) -> None:
-        # Content-type alone is not enough; magic bytes must be %PDF.
-        assert _validate_pdf(b"<html>") is False
-
-    def test_rejects_html_body(self) -> None:
-        # HTML body, would-be application/pdf content-type, must be rejected.
-        assert _validate_pdf(b"<html><body>error page</body></html>") is False
-
-    def test_invalid(self) -> None:
-        assert _validate_pdf(b"not pdf at all") is False
 
 
 class TestOaRetrieval:

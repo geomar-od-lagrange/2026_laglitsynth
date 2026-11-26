@@ -22,6 +22,22 @@ from laglitsynth.io import read_jsonl
 
 PDFS_SUBDIR = "pdfs"
 PROVENANCE_FILENAME = "provenance.jsonl"
+PDF_MAGIC = b"%PDF"
+
+
+def has_pdf_magic(data: bytes) -> bool:
+    """Return whether ``data`` starts with the ``%PDF`` magic bytes.
+
+    Rejects an HTML error page served as ``application/pdf`` and an
+    unfetched Git LFS pointer file alike.
+    """
+    return data[: len(PDF_MAGIC)] == PDF_MAGIC
+
+
+def file_has_pdf_magic(path: Path) -> bool:
+    """Return whether the file at ``path`` starts with the ``%PDF`` magic bytes."""
+    with open(path, "rb") as f:
+        return has_pdf_magic(f.read(len(PDF_MAGIC)))
 
 
 def pdfs_dir(data_dir: Path) -> Path:

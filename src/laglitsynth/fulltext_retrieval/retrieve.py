@@ -31,6 +31,7 @@ from laglitsynth.fulltext_retrieval.models import (
     RetrievalMeta,
 )
 from laglitsynth.fulltext_retrieval.store import (
+    has_pdf_magic,
     load_provenance,
     sha256_of,
     store_pdf_path,
@@ -73,10 +74,6 @@ class _RateLimiter:
         self._last_request[domain] = time.monotonic()
 
 
-def _validate_pdf(data: bytes) -> bool:
-    return data[:4] == b"%PDF"
-
-
 def _download_pdf(
     url: str,
     dest: Path,
@@ -88,7 +85,7 @@ def _download_pdf(
     rate_limiter.wait(domain)
     response = client.get(url, follow_redirects=True)
     response.raise_for_status()
-    if not _validate_pdf(response.content):
+    if not has_pdf_magic(response.content):
         raise ValueError(f"Response from {url} is not a valid PDF")
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp_fd = tempfile.NamedTemporaryFile(
