@@ -142,7 +142,7 @@ below), set the LLM endpoint (see [LLM endpoint](#llm-endpoint)), then
 invoke the runner:
 
 ```bash
-docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0         # stage 6
+docker run --rm -p 8070:8070 grobid/grobid:0.9.0-crf        # stage 6
 
 SCREENING_THRESHOLD=50 scripts/run-pipeline.sh                                 # default review config, N=5
 scripts/run-pipeline.sh examples/reviews/my-review.yaml                        # a review config that sets screening_threshold
@@ -235,8 +235,11 @@ Stages 3 and 7 ask decisions at `<base-url>/decisions` unless
 The extraction stage requires a running GROBID server. One-shot via Docker:
 
 ```bash
-docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0  # Apple Silicon: image is amd64-only; install Rosetta first via softwareupdate --install-rosetta
+docker run --rm -p 8070:8070 grobid/grobid:0.9.0-crf
 ```
+
+The image is multi-arch (amd64 and arm64), so it runs natively on Apple
+Silicon.
 
 See [`docs/fulltext-extraction.md`](docs/fulltext-extraction.md) for details.
 

@@ -16,13 +16,13 @@ means:
 Start the GROBID container before running this stage:
 
 ```bash
-docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0
+docker run --rm -p 8070:8070 grobid/grobid:0.9.0-crf
 ```
 
-GROBID takes ~30–60 seconds to start.
-Health check: `GET http://localhost:8070/api/isalive`.
-See [external-services.md](external-services.md) for the full setup (Apple
-Silicon Rosetta workaround, memory requirements, crash recovery).
+Wait for the health check before running the stage:
+`GET http://localhost:8070/api/isalive`.
+See [external-services.md](external-services.md) for the full setup
+(memory requirements, crash recovery).
 
 The stage reads only the [corpus](corpus.md), so the machines that
 acquire PDFs need no GROBID or Docker. The PDF is the scarce artifact;
@@ -45,11 +45,12 @@ does not require re-retrieving anything.
 
 From [grobid-lessons.md](grobid-lessons.md):
 
-- Run GROBID as a Docker container (`lfoppiano/grobid:0.8.0`).
-- amd64-only image; runs under Rosetta on Apple Silicon (slower but
-  functional).
-- Startup takes ~30–60 seconds. Health check: `GET /api/isalive`.
-- Memory footprint: ~2 GB.
+- Run GROBID as a Docker container (`grobid/grobid:0.9.0-crf`, the
+  CRF-only image). It is multi-arch (amd64 and arm64), so it runs natively
+  on Apple Silicon.
+- Health check: `GET /api/isalive`.
+- Memory: give Docker more than its 2 GB default (see
+  [external-services.md](external-services.md#memory-tuning)).
 - Processing endpoint: `POST /api/processFulltextDocument` with the PDF as
   multipart form data.
 - Timeout: 120 seconds per paper.
@@ -190,8 +191,10 @@ class ExtractionMeta(BaseModel):
 Stages 7 and 8 exit when `extraction-meta.json` is missing or names
 another `corpus_id` than the current corpus.
 
-`grobid_version` is read from the GROBID `/api/version` probe at startup;
-if that probe fails it falls back to the literal string `"unknown"`.
+`grobid_version` is read from the GROBID `/api/version` probe at startup:
+the `version` field of its JSON answer (GROBID 0.9.0), or the plain-text
+body (GROBID 0.8.0). If that probe fails it falls back to the literal
+string `"unknown"`.
 
 ## Storage layout
 
@@ -277,13 +280,13 @@ If GROBID goes down mid-corpus, restart the container and re-run with
 `--skip-existing` to continue from where extraction stopped:
 
 ```bash
-docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0  # restart GROBID
+docker run --rm -p 8070:8070 grobid/grobid:0.9.0-crf  # restart GROBID
 laglitsynth fulltext-extraction --skip-existing
 ```
 
 Works whose latest `ExtractedDocument` in `extraction.jsonl` matches the
 current corpus PDF are skipped. See [external-services.md](external-services.md)
-for the macOS/Apple Silicon Rosetta workaround if GROBID fails to start.
+for memory tuning if GROBID crashes again.
 
 ## Limits
 

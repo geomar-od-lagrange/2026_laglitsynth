@@ -20,10 +20,65 @@ Both failed on the same PDF (`W2953172649`, HTTP 500). The 0.8.0 container
 used about 5 GB of memory. At these rates the whole store (about 5,900
 PDFs) takes about 3.3 h emulated or 1.6 h native. Stage 6 sent one request
 at a time when this was measured, so these rates need concurrency in stage 6.
-Switching to 0.9.0 needs a check that the TEI parser handles its output.
+Switching to 0.9.0 needed a check that the TEI parser handles its output;
+see the next section.
 
 The benchmark script is `data/scratch-retrieval/grobid-bench/bench.py`
 (local, unversioned).
+
+## GROBID 0.9.0 TEI check
+
+All 39 papers of an earlier 0.8.0 run (`data/run/fulltext-extraction/tei/`)
+were sent from the PDF store to `grobid/grobid:0.9.0-crf` (arm64, native)
+with stage 6's request, one at a time. All 39 succeeded; median 1.5 s per
+request, 74 s in total including a 9 s first request. Both TEI sets were
+parsed with `TeiDocument` and rendered with the stage 7 and stage 8
+`render_fulltext`.
+
+| Measure (sum over 39 papers) | 0.8.0 | 0.9.0 |
+|---|---|---|
+| Parse failures | 0 | 0 |
+| Rendered body text (chars) | 1,151,038 | 1,210,644 |
+| Body sections (all top level, none nested) | 426 | 430 |
+| Papers with an `<abstract>` | 33 | 35 |
+| Figures and tables (`<figure>` in body) | 388 | 373 |
+| Text in `<figDesc>` (chars) | 116,592 | 103,953 |
+| In-text citations (`ref[@type='bibr']`) | 1,892 | 1,915 |
+| Bibliography entries / with DOI | 1,331 / 511 | 1,342 / 500 |
+
+The TEI namespace and the set of element names were identical; no element
+appeared in only one version. Titles in `titleStmt` were identical for all
+39 papers. Section heads were identical for 12 papers; the rest differ by
+split or merged sections and head text. Rendered body text changed by less
+than 10% for 30 papers, grew by more than 10% for 7 and shrank for 2.
+
+The gains are text that 0.8.0 misplaced: W1439505426 went from 885 to
+11,663 chars of body, W4390284427 (Russian) from 6,555 to 15,613 because
+0.8.0 had put most of it into `<figDesc>`. The main loss is W2476309498
+(a conference paper, 20,307 to 13,663 chars): 0.9.0 put the sections
+"Synthetic pressure field" and "Experimental pressure field" into
+`<back><div type="annex">`, which `sections()` does not read, and a
+repeated page header into figure labels. W3204761479 lost about 680 chars
+of body to a `<figDesc>`.
+
+0.9.0 splits more back matter out of `annex` into new `<div>` types
+`conflict` and `contribution`. The parser reads no back matter other than
+`<listBibl>`, so this changes nothing downstream. 0.9.0 typed fewer
+`<figure>` elements as `type="table"`; figures and tables never reach the
+rendered text. Both versions leave `<formula>` and `<note>` elements
+directly under a section `<div>` out of the rendered text (about 18,000
+and 17,000 chars over the 39 papers).
+
+The one incompatibility was `/api/version`: 0.9.0 answers with JSON
+(`{"version":"0.9.0","revision":"0.9.0"}`) where 0.8.0 sent plain text,
+so stage 6 recorded the JSON string as `grobid_version` until
+`_grobid_version` learned to read the `version` field.
+
+The 0.9.0 container used about 3.1 GB right after startup and 4.2 GB
+after the 39 PDFs, on Docker Desktop 4.99.0 with 16 GB. A restart of the
+container answered `/api/isalive` after 10 s.
+
+The scripts are in the session scratch area (unversioned).
 
 ## LLM pricing
 

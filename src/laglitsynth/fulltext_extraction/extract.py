@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import logging
 import sys
 import time
@@ -55,13 +56,28 @@ def _grobid_health(grobid_url: str, client: httpx.Client) -> bool:
 
 
 def _grobid_version(grobid_url: str, client: httpx.Client) -> str:
+    """Return GROBID's version string, or ``"unknown"`` if the probe fails.
+
+    GROBID 0.9.0 answers ``/api/version`` with JSON
+    (``{"version": "0.9.0", "revision": "0.9.0"}``); 0.8.0 answered with
+    the bare version as plain text. Both shapes are accepted.
+    """
     try:
         resp = client.get(f"{grobid_url}/api/version")
-        if resp.status_code == 200:
-            return resp.text.strip()
+        if resp.status_code != 200:
+            return "unknown"
+        text = resp.text.strip()
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            return text or "unknown"
+        if isinstance(payload, dict):
+            version = payload.get("version")
+            if isinstance(version, str) and version:
+                return version
+        return text or "unknown"
     except Exception:
-        pass
-    return "unknown"
+        return "unknown"
 
 
 def _process_pdf(
@@ -178,8 +194,8 @@ def run(args: argparse.Namespace) -> None:
         preflight_client.close()
         raise SystemExit(
             f"GROBID is not running at {args.grobid_url}.\n"
-            "Start it with: docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0\n"
-            "Wait 30-60 seconds for startup, then retry."
+            "Start it with: docker run --rm -p 8070:8070 grobid/grobid:0.9.0-crf\n"
+            "Wait until /api/isalive answers, then retry."
         )
 
     version = _grobid_version(args.grobid_url, preflight_client)

@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from laglitsynth.fulltext_extraction.extract import build_subparser, run
+from laglitsynth.fulltext_extraction.extract import _grobid_version, build_subparser, run
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
 
 from conftest import _corpus_pdf_bytes, _make_work, _write_corpus
@@ -38,9 +38,10 @@ def _patch_clients(fake_tei: bytes) -> tuple[MagicMock, MagicMock]:
         text="alive",
         request=httpx.Request("GET", "http://localhost:8070/api/isalive"),
     )
+    # GROBID 0.9.0's /api/version shape.
     version_ok = httpx.Response(
         200,
-        text="0.8.0",
+        text='{"version":"0.9.0","revision":"0.9.0"}',
         request=httpx.Request("GET", "http://localhost:8070/api/version"),
     )
 
@@ -202,6 +203,7 @@ class TestCorpusInput:
         meta = json.loads((tmp_path / "out" / "extraction-meta.json").read_text())
         assert meta["corpus_id"] == corpus_meta.corpus_id
         assert meta["extracted_count"] == 1
+        assert meta["grobid_version"] == "0.9.0"
 
     def test_skip_existing_reextracts_changed_corpus_pdf(self, tmp_path: Path) -> None:
         corpus = tmp_path / "corpus"
@@ -417,3 +419,40 @@ class TestConcurrency:
         mock_tpe.assert_not_called()
         assert grobid.sent == [f"W{n}.pdf" for n in range(1, 7)]
         assert [r.work_id for r in _records(tmp_path / "out")] == _WORK_IDS
+
+
+class TestGrobidVersion:
+    @staticmethod
+    def _client(response: httpx.Response | Exception) -> MagicMock:
+        client = MagicMock(spec=httpx.Client)
+        if isinstance(response, Exception):
+            client.get.side_effect = response
+        else:
+            client.get.return_value = response
+        return client
+
+    @staticmethod
+    def _response(status: int, text: str) -> httpx.Response:
+        return httpx.Response(
+            status,
+            text=text,
+            request=httpx.Request("GET", "http://localhost:8070/api/version"),
+        )
+
+    def test_json_body_of_grobid_0_9(self) -> None:
+        client = self._client(
+            self._response(200, '{"version":"0.9.0","revision":"0.9.0"}')
+        )
+        assert _grobid_version("http://localhost:8070", client) == "0.9.0"
+
+    def test_plain_text_body_of_grobid_0_8(self) -> None:
+        client = self._client(self._response(200, "0.8.0\n"))
+        assert _grobid_version("http://localhost:8070", client) == "0.8.0"
+
+    def test_error_status_is_unknown(self) -> None:
+        client = self._client(self._response(500, "boom"))
+        assert _grobid_version("http://localhost:8070", client) == "unknown"
+
+    def test_connection_error_is_unknown(self) -> None:
+        client = self._client(httpx.ConnectError("refused"))
+        assert _grobid_version("http://localhost:8070", client) == "unknown"

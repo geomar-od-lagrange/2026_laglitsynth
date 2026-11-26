@@ -34,6 +34,11 @@ different TEI structures. Common failure modes:
 - Abstract in `<abstract>` outside `<body>` rather than as a body section.
 - Figure captions interleaved with body paragraphs.
 - Two-column layouts cause paragraph-level text reordering.
+- Body sections placed in `<back><div type="annex">` and body paragraphs
+  placed in `<figure><figDesc>` (for example when a running page header is
+  taken for a figure label). Seen with both 0.8.0 and 0.9.0. `sections()`
+  reads only `<body>` and drops figures, so this text does not reach
+  stages 7 and 8.
 
 The TEI parser must not crash on these shapes. When no top-level `<div>`
 sections are found, `sections()` returns an empty list (there is no
@@ -42,16 +47,22 @@ as a `tei-parse-failure` sentinel.
 
 ## Infrastructure weight
 
-GROBID is a Java application, best run as a Docker container
-(`lfoppiano/grobid:0.8.0`). Operational details:
+GROBID is a Java application, best run as a Docker container. litrag used
+`lfoppiano/grobid:0.8.0`; this pipeline uses `grobid/grobid:0.9.0-crf`.
+Operational details:
 
-- The Docker image is amd64-only. On Apple Silicon it runs under Rosetta
-  emulation — functional but slower.
-- Startup takes ~30-60 seconds (model loading). The health-check
+- `lfoppiano/grobid:0.8.0` is amd64-only and runs under Rosetta emulation
+  on Apple Silicon. `grobid/grobid:0.9.0-crf` is multi-arch (amd64 and
+  arm64) and runs natively there.
+- Startup loads the models before the service answers. The health-check
   endpoint is `GET /api/isalive`.
-- Memory footprint is ~2 GB.
+- Memory footprint was about 2 GB in litrag with 0.8.0; larger footprints
+  under batch load are recorded in
+  [explorations/run-cost-and-throughput.md](explorations/run-cost-and-throughput.md).
 - The processing endpoint is `POST /api/processFulltextDocument` with the PDF
   as multipart form data. Timeout should be at least 120 seconds per paper.
+- `GET /api/version` answers with plain text in 0.8.0 and with JSON
+  (`{"version": …, "revision": …}`) in 0.9.0.
 
 ## Docker networking gotcha
 
@@ -68,7 +79,8 @@ docker run --rm --network container:litrag-grobid \
 ```
 
 This may or may not reproduce on other machines but is worth knowing about
-before assuming GROBID is reachable from the host.
+before assuming GROBID is reachable from the host. It did not reproduce with
+`grobid/grobid:0.9.0-crf` on Docker Desktop 4.99.0 for macOS.
 
 ## Citation consolidation requires internet
 
@@ -78,6 +90,7 @@ slows processing. Default to `consolidateCitations=0`; make it opt-in.
 
 ## Practical throughput
 
-No systematic benchmarks, but single-paper processing (upload + parse +
-response) took several seconds per PDF on emulated amd64. For a corpus of
-hundreds of papers, expect the GROBID step alone to take tens of minutes.
+In litrag, single-paper processing (upload + parse + response) with
+`lfoppiano/grobid:0.8.0` took several seconds per PDF on emulated amd64.
+Measured rates for both images are in
+[explorations/run-cost-and-throughput.md](explorations/run-cost-and-throughput.md).

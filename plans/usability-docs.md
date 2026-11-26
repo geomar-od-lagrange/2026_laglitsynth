@@ -83,9 +83,8 @@ Single runbook a manual user reads before stages 3, 6, 7, 8. Sequence:
    `ssh -A -L … && ssh -R …` pattern from
    [`nesh-ollama.md`](../docs/explorations/nesh-ollama.md) L33–55.
 6. **GROBID install** — `docker run --rm -p 8070:8070
-   lfoppiano/grobid:0.8.0`; Apple Silicon Rosetta caveat
-   (`softwareupdate --install-rosetta` first; image is amd64-only);
-   30–60 s startup; health check `curl http://localhost:8070/api/isalive`.
+   grobid/grobid:0.9.0-crf` (multi-arch, native on Apple Silicon); health
+   check `curl http://localhost:8070/api/isalive`.
 7. **GROBID memory tuning** — Docker Desktop default is 2 GB; GROBID
    wants ~2 GB itself; recommend 6–8 GB to give the JVM headroom (per
    [`nesh-grobid.md`](../docs/explorations/nesh-grobid.md) L125).

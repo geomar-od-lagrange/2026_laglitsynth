@@ -30,18 +30,16 @@ sentinel each other error gives.
 
 ### Install
 
-GROBID runs as a Docker container. The image is amd64-only; on Apple
-Silicon it runs under Rosetta emulation (functional but slower):
+GROBID runs as a Docker container. The pipeline uses the CRF-only image
+`grobid/grobid:0.9.0-crf`, which is multi-arch (amd64 and arm64) and so
+runs natively on Apple Silicon without Rosetta:
 
 ```bash
-# Apple Silicon: install Rosetta first if prompted
-softwareupdate --install-rosetta
-
-docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0
+docker run --rm -p 8070:8070 grobid/grobid:0.9.0-crf
 ```
 
-Startup takes ~30–60 seconds while the JVM and models load. Poll the
-health endpoint before running stage 6:
+The JVM and models load at startup. Poll the health endpoint before
+running stage 6:
 
 ```bash
 curl http://localhost:8070/api/isalive
@@ -49,9 +47,10 @@ curl http://localhost:8070/api/isalive
 
 ### Memory tuning
 
-Docker Desktop's default VM allocation is 2 GB. GROBID's JVM heap alone
-needs roughly 2 GB under normal load; spikes during batch processing can
-exceed that. Set Docker Desktop's memory limit to at least **6–8 GB**
+Docker Desktop's default VM allocation is 2 GB. GROBID's JVM needs more
+than that once it processes PDFs (observed with `lfoppiano/grobid:0.8.0`
+and `grobid/grobid:0.9.0-crf`; see
+[explorations/run-cost-and-throughput.md](explorations/run-cost-and-throughput.md)). Set Docker Desktop's memory limit to at least **6–8 GB**
 (Preferences → Resources → Memory) before running stage 6 on a real
 corpus. Under-allocation causes silent JVM crashes mid-corpus without
 a helpful error from the container.
@@ -60,7 +59,9 @@ a helpful error from the container.
 
 On some macOS Docker Desktop versions, host calls to `localhost:8070`
 are silently blocked by network sandboxing even when the container is
-running and healthy. The workaround is to issue the GROBID request from
+running and healthy (seen in the litrag prototype with 0.8.0; host calls
+to `grobid/grobid:0.9.0-crf` worked directly on Docker Desktop 4.99.0
+for macOS). The workaround is to issue the GROBID request from
 a helper container joined to GROBID's network namespace:
 
 ```bash
@@ -92,7 +93,7 @@ If GROBID or the Docker container crashes during a long stage-6 run,
 restart the container and re-run with `--skip-existing`:
 
 ```bash
-docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0 &
+docker run --rm -p 8070:8070 grobid/grobid:0.9.0-crf &
 # wait for /api/isalive ...
 laglitsynth fulltext-extraction --skip-existing \
     --corpus-dir data/corpus/ --output-dir data/fulltext-extraction/ ...
