@@ -1,9 +1,13 @@
 # PDF store
 
-`data/pdfs/` holds one PDF per catalogue work for 5,936 of
-the 9,149 works in the deduplicated catalogue (65 %), 28.4 GB in total.
+`data/pdfs/` holds at most one PDF per work in the deduplicated catalogue.
 It is the input to corpus assembly in
-[pipeline-restructure.md](../plans/pipeline-restructure.md).
+[pipeline-restructure.md](../plans/pipeline-restructure.md). Current
+counts per source:
+
+```sh
+grep -o '"source":"[^"]*"' data/pdfs/provenance.jsonl | sort | uniq -c
+```
 
 The store lives in the `data/` submodule, the private repo
 [willi-rath/2026_laglitsynth_data](https://git.geomar.de/willi-rath/2026_laglitsynth_data),
@@ -16,28 +20,27 @@ obtained through GEOMAR and Kiel University subscriptions. Setup is in the
 - `pdfs/<openalex short id>.pdf`: the PDF.
 - `pdfs/provenance.jsonl`: one `PdfProvenanceRecord` per work (see
   [fulltext-retrieval.md](fulltext-retrieval.md)). `source` names the
-  route. Works the pipeline tried without success have a `missing` record
-  (184); the remaining works without a PDF have no record.
+  route. Works the pipeline tried without success have a `missing` record;
+  other works without a PDF have no record.
 - `pdfs/acquisition-routes.csv`: source and sha256 per PDF, with the
   source URL and original file name where they were recorded. It was
   written when the store was assembled; the CLI does not maintain it.
 
 ## Where the PDFs come from
 
-| `source` | PDFs | Route |
-|---|---|---|
-| `oa` | 3,765 | Open-access URLs: OpenAlex locations, Semantic Scholar `openAccessPdf`, arXiv |
-| `unpaywall` | 17 | Unpaywall `best_oa_location`, where OpenAlex had nothing |
-| `zotero-desktop` | 1,470 | Zotero desktop "Find Available PDF" on an RIS import, GEOMAR network |
-| `institutional` | 534 | DOI → landing page → `citation_pdf_url` over the GEOMAR and Kiel University networks |
-| `browser` | 150 | Zotero browser connector on doi.org tabs, or a PDF link clicked by hand, GEOMAR network |
+| `source` | Route |
+|---|---|
+| `oa` | Open-access URLs: OpenAlex locations, Semantic Scholar `openAccessPdf`, arXiv |
+| `unpaywall` | Unpaywall `best_oa_location`, where OpenAlex had nothing |
+| `zotero-desktop` | Zotero desktop "Find Available PDF" on an RIS import |
+| `institutional` | DOI → landing page → `citation_pdf_url` over an institution's network |
+| `browser` | Zotero browser connector on doi.org tabs, or a PDF link clicked by hand |
 
 `laglitsynth fulltext-retrieval` covers only part of `oa` (OpenAlex's best
 open-access URL) and `unpaywall`. The rest of `oa` and all of
 `institutional` came from one-off scripts outside the CLI. Zotero desktop
-reaches publishers that refuse scripted requests: of the 1,101 PDFs in its
-last batch, 424 are from Wiley-hosted journals (AGU and ASLO among them),
-207 from MDPI, 52 from IEEE and 29 from Taylor & Francis.
+reaches publishers that refuse scripted requests, notably Wiley-hosted
+journals (AGU, ASLO), MDPI, IEEE and Taylor & Francis.
 
 Conference abstracts (EGU, AGU, AVISO/OSTST meeting abstracts) are not
 pursued: there is no paper behind them.

@@ -16,7 +16,7 @@ cp .env.example .env  # then fill in OPENALEX_API_KEY and UNPAYWALL_EMAIL
 LFS) in the private repo
 [willi-rath/2026_laglitsynth_data](https://git.geomar.de/willi-rath/2026_laglitsynth_data).
 With access, fetch it with `git lfs install && git submodule update --init`.
-That downloads about 28 GB of PDFs; prefix the command with
+That downloads every PDF; prefix the command with
 `GIT_LFS_SKIP_SMUDGE=1` to fetch only the pointers and run
 `git -C data lfs pull` later. Without access, leave `data/` uninitialised;
 the pipeline works the same. Everything else the pipeline writes under
