@@ -774,6 +774,22 @@ class TestRun:
         with pytest.raises(SystemExit, match="another-corpus"):
             _run(args, ctx)
 
+    def test_skip_existing_refuses_when_eligibility_prompt_sha256_differs(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        args = _one_work_args(tmp_path, skip_existing=True, run_id="stale-run")
+        out_dir = _resolved_out_dir(args)
+        out_dir.mkdir(parents=True)
+        prompt_sha256 = hashlib.sha256(
+            (ctx.system_prompt + "\n" + USER_TEMPLATE).encode("utf-8")
+        ).hexdigest()
+        (out_dir / "extraction-codebook-meta.json").write_text(
+            json.dumps(_stale_meta(_corpus_id(args.corpus_dir), prompt_sha256, "1" * 64))
+        )
+
+        with pytest.raises(SystemExit, match="eligibility_prompt_sha256"):
+            _run(args, ctx)
+
     def test_validation_skipped_counts_invalid_verdict_lines(
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
@@ -829,7 +845,9 @@ class TestRun:
         assert meta["skipped_count"] == 0
 
 
-def _stale_meta(corpus_id: str, prompt_sha256: str) -> dict[str, Any]:
+def _stale_meta(
+    corpus_id: str, prompt_sha256: str, eligibility_prompt_sha256: str | None = None
+) -> dict[str, Any]:
     """A valid ``ExtractionCodebookMeta`` dict for the resume guards."""
     from laglitsynth.extraction_codebook.models import ExtractionCodebookMeta
 
@@ -847,7 +865,11 @@ def _stale_meta(corpus_id: str, prompt_sha256: str) -> dict[str, Any]:
             "prompt_sha256": prompt_sha256,
         },
         "corpus_id": corpus_id,
-        "eligibility_prompt_sha256": criteria_sha256(_CRITERIA_SPEC),
+        "eligibility_prompt_sha256": (
+            eligibility_prompt_sha256
+            if eligibility_prompt_sha256 is not None
+            else criteria_sha256(_CRITERIA_SPEC)
+        ),
         "input_eligibility_verdicts": "verdicts.jsonl",
         "input_extractions": "extraction.jsonl",
         "input_count": 1,

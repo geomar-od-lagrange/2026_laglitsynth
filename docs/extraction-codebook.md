@@ -264,9 +264,11 @@ to run (see [run-manifest.md](run-manifest.md)).
   records are appended to the existing sidecar. If
   `extraction-codebook-meta.json` already exists and its recorded
   `prompt_sha256` differs from the hash the current invocation would
-  produce, or its `corpus_id` differs from the current corpus, the run
-  aborts with an error — mixing records from different prompt versions or
-  corpora in one file would silently corrupt any downstream analysis.
+  produce, its `eligibility_prompt_sha256` differs from that of the
+  eligibility verdicts read now, or its `corpus_id` differs from the
+  current corpus, the run aborts with an error — mixing records from
+  different prompt versions, eligibility gates or corpora in one file
+  would silently corrupt any downstream analysis.
 - `--max-records`: process only the first N eligible works.
 - `--dry-run`: print summaries to stderr without writing any output.
 - `--base-url`, `--model`: the OpenAI-compatible base URL (including

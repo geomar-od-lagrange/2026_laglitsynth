@@ -436,8 +436,9 @@ def run(args: argparse.Namespace) -> None:
         (ctx.system_prompt + "\n" + USER_TEMPLATE).encode("utf-8")
     ).hexdigest()
 
-    # Resume guards: refuse --skip-existing when the recorded prompt hash
-    # or corpus differs, so records.jsonl never mixes either.
+    # Resume guards: refuse --skip-existing when the recorded prompt hash,
+    # eligibility prompt hash or corpus differs, so records.jsonl never
+    # mixes any of them.
     if args.skip_existing and meta_path.exists():
         try:
             recorded = json.loads(meta_path.read_text())
@@ -452,6 +453,16 @@ def run(args: argparse.Namespace) -> None:
                 f"recorded prompt_sha256 in {meta_path} differs from current; "
                 f"refusing --skip-existing to avoid mixing prompt versions in "
                 f"{records_path}"
+            )
+        recorded_eligibility_sha = recorded.get("eligibility_prompt_sha256")
+        if (
+            recorded_eligibility_sha is not None
+            and recorded_eligibility_sha != eligibility_prompt_sha256
+        ):
+            raise SystemExit(
+                f"recorded eligibility_prompt_sha256 in {meta_path} differs from "
+                f"the eligibility verdicts read now; refusing --skip-existing to "
+                f"avoid mixing eligibility prompt versions in {records_path}"
             )
         if recorded.get("corpus_id") != corpus_meta.corpus_id:
             raise SystemExit(
