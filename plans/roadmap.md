@@ -196,7 +196,8 @@ Update this file when a plan is written, implemented, or archived.
 - [Import matching tiers](done/import-matching-tiers.md) — import gathers
   every self-identifying DOI (Info dictionary, XMP, link annotations,
   first-page text) and keeps the first metadata hit present in
-  `pdf-manifest.csv`; page text counts only when it names one work. The DOI
+  `pdf-manifest.csv` (now the whole catalogue, see the
+  [pipeline restructure](done/pipeline-restructure.md)); page text counts only when it names one work. The DOI
   pattern accepts the angle brackets in AMS DOIs. Measured on real publisher
   PDFs in
   [contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md);

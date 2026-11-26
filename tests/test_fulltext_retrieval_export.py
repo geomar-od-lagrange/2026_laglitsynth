@@ -380,17 +380,18 @@ class TestUnfiltered:
         assert meta.held_count == 1
         assert meta.exported_count == 2
 
-    def test_verdict_flags_without_threshold_exit(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        "flag",
+        [["--run-id", TEST_RUN_ID], ["--screening-verdicts", "v.jsonl"]],
+        ids=["run-id", "screening-verdicts"],
+    )
+    def test_verdict_flags_without_threshold_exit(
+        self, tmp_path: Path, flag: list[str]
+    ) -> None:
         data_dir = tmp_path / "data"
         with pytest.raises(SystemExit, match="--screening-threshold"):
             main(
-                [
-                    "fulltext-retrieval-export",
-                    "--data-dir",
-                    str(data_dir),
-                    "--run-id",
-                    TEST_RUN_ID,
-                ]
+                ["fulltext-retrieval-export", "--data-dir", str(data_dir), *flag]
             )
         assert not export_dir(data_dir).exists()
 

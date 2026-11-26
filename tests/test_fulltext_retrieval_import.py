@@ -272,6 +272,23 @@ class TestWholeCatalogue:
         assert rec.doi == "10.1234/never-exported"
         assert store_pdf_path(data_dir, "W2").exists()
 
+    def test_url_form_catalogue_doi_matches_and_is_stored_bare(
+        self, tmp_path: Path
+    ) -> None:
+        data_dir = tmp_path / "data"
+        catalogue = tmp_path / "catalogue.jsonl"
+        _write_catalogue(
+            catalogue, [("https://openalex.org/W1", "W1", "https://doi.org/10.1234/ABC")]
+        )
+        _make_pdf(tmp_path / "incoming" / "paper.pdf", doi_in_metadata="10.1234/abc")
+
+        summary, _ = import_pdfs(
+            tmp_path / "incoming", catalogue, data_dir, PdfSource.browser, overwrite=False
+        )
+
+        assert summary.copied == 1
+        assert load_provenance(data_dir)["https://openalex.org/W1"].doi == "10.1234/ABC"
+
     def test_bare_stem_pdf_lands_without_an_export(self, tmp_path: Path) -> None:
         data_dir = tmp_path / "data"
         _write_catalogue(

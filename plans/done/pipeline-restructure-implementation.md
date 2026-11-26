@@ -541,7 +541,7 @@ s3 commit 5, s4 commit 6, s5 commit 7 and s6 commit 8.
 
 ## Critical files
 
-- [plans/pipeline-restructure.md](pipeline-restructure.md),
+- [plans/done/pipeline-restructure.md](pipeline-restructure.md),
   [plans/roadmap.md](../roadmap.md)
 - [src/laglitsynth/cli.py](../../src/laglitsynth/cli.py),
   [layout.py](../../src/laglitsynth/layout.py),

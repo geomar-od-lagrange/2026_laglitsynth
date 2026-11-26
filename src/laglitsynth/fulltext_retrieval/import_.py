@@ -85,17 +85,17 @@ class _ImportSummary:
     skipped_existing_differs: list[str] = field(default_factory=list)
 
 
-def _normalise_doi(doi: str | None) -> str | None:
-    if doi is None:
-        return None
-    bare = _DOI_PREFIX_RE.sub("", doi).strip().lower()
-    return bare or None
-
-
 def _bare_doi(doi: str | None) -> str | None:
+    """Strip any ``https://doi.org/`` / ``doi:`` prefix; keep the case (stored form)."""
     if doi is None:
         return None
     return _DOI_PREFIX_RE.sub("", doi).strip() or None
+
+
+def _normalise_doi(doi: str | None) -> str | None:
+    """The match key: the bare DOI, lowercased (DOIs are case-insensitive)."""
+    bare = _bare_doi(doi)
+    return bare.lower() if bare is not None else None
 
 
 def read_catalogue_entries(path: Path) -> list[CatalogueEntry]:

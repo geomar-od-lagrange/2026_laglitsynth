@@ -9,9 +9,9 @@ on through their own institutional access:
 - ``missing.ris`` — one RIS record per missing work (any reference manager),
   carrying the work's stem in ``AN`` and its DOI link (or landing page) in
   ``UR``.
-- ``pdf-manifest.csv`` — the round-trip key import reads back: columns
-  ``work_id``, ``stem``, ``doi``, ``title``, ``year``, ``expected_filename``
-  (``<stem>.pdf``).
+- ``pdf-manifest.csv`` — the list for people: columns ``work_id``,
+  ``stem``, ``doi``, ``title``, ``year``, ``expected_filename``
+  (``<stem>.pdf``); import does not read it.
 - ``no-doi.csv`` — the works ``dois.txt`` cannot represent (no DOI), with
   ``work_id``, ``stem``, ``title``, ``year``, ``expected_filename``. Always
   written, with its header row, even when empty.

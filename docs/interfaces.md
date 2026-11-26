@@ -103,7 +103,7 @@ output.
 | `data/pdfs/<stem>.pdf` | (binary) | The persistent, work-keyed PDF store: one PDF per work, shared across searches |
 | `data/pdfs/provenance.jsonl` | [`PdfProvenanceRecord`](../src/laglitsynth/fulltext_retrieval/models.py) | Per-work store state: where its one PDF came from, or that it is still `missing` (whole-file, last-write-wins, single writer) |
 | `data/fulltext-retrieval/retrieval-meta.json` | [`RetrievalMeta`](../src/laglitsynth/fulltext_retrieval/models.py) | Per-invocation counts: `total_works`, `retrieved_count`, `missing_count`, and `by_source` (a `dict[str, int]` keyed by `PdfSource`) |
-| `data/pdfs/export/{dois.txt,missing.ris,no-doi.csv,pdf-manifest.csv,README.md}` | (plain text / CSV) | Export bundle for a collaborator: still-missing works as DOI links, RIS, the no-DOI worklist, the round-trip stem map, and the instructions; `pack-N/` subdirs hold the same for each slice when `--packs` is given |
+| `data/pdfs/export/{dois.txt,missing.ris,no-doi.csv,pdf-manifest.csv,README.md}` | (plain text / CSV) | Export bundle for a collaborator: still-missing works as DOI links, RIS, the no-DOI worklist, the full list for people (title, year, expected filename), and the instructions; `pack-N/` subdirs hold the same for each slice when `--packs` is given |
 | `data/pdfs/export/export-meta.json` | [`ExportMeta`](../src/laglitsynth/fulltext_retrieval/models.py) | How the bundle was made: git commit, run-id, inputs, threshold (`None` when unfiltered), counts, pack sizes |
 
 Stage 5 runs over every work in the `--catalogue`; it reads no screening
