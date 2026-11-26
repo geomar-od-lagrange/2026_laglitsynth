@@ -84,8 +84,13 @@ key comes from `--api-key`, else `os.environ["LLM_API_KEY"]`, else
 with none, it exits naming `LLM_API_KEY`.
 
 `chat_client(endpoint, timeout)` returns an `openai.OpenAI`. Stage 8 calls
-`chat.completions.create` with `model`, `messages` and
-`response_format={"type": "json_object"}` only. `decisions_client(endpoint)`
+`chat.completions.create` with `model`, `messages`,
+`response_format={"type": "json_object"}` and, only when set,
+`reasoning_effort` from stage 8's `--reasoning-effort` (review config
+`models.extraction_reasoning_effort`, runner env
+`EXTRACTION_REASONING_EFFORT`; values `low`, `medium`, `high`). Unset means
+the provider default. The decisions stages send no effort.
+`decisions_client(endpoint)`
 returns an `httpx.Client` with the bearer header, and `decide(client,
 endpoint, *, input, name, question) -> Decision` POSTs to
 `endpoint.decisions_url`. `Decision` is `{probability: float | None,
@@ -115,8 +120,9 @@ full text lands now that nothing truncates it. An unparseable 2xx gives
 `llm-parse-failure` with the body attached.
 
 [`LlmMeta`](../src/laglitsynth/models.py) becomes `{model, base_url,
-decisions_url: str | None, prompt_sha256}`, with `decisions_url` `None`
-for stage 8. [`save_resolved_config`](../src/laglitsynth/config.py) adds
+decisions_url: str | None, reasoning_effort: str | None, prompt_sha256}`,
+with `decisions_url` `None` for stage 8 and `reasoning_effort` `None` for
+stages 3 and 7. [`save_resolved_config`](../src/laglitsynth/config.py) adds
 `api_key` to `_DROP_KEYS`. Today a key passed on the command line ends up
 in the run's `config.yaml`.
 
@@ -429,7 +435,13 @@ s3 commit 5, s4 commit 6, s5 commit 7 and s6 commit 8.
    stage 8's catalogue read. Add `rationale` to the example codebook. The
    runner runs `corpus-assemble` with `SCREENING_THRESHOLD`, stops passing a
    threshold to stage 7, passes `ANALYSIS_RUN_ID` to stages 7 and 8, and
-   passes `--eligibility-criteria` to stage 8. Tests: `conftest.py` gains a
+   passes `--eligibility-criteria` to stage 8. Add stage 8's
+   `--reasoning-effort` as specified under the endpoint section (if commit
+   3 did not already): the flag, `models.extraction_reasoning_effort` in
+   `ReviewConfig`, `EXTRACTION_REASONING_EFFORT` in the runner and
+   `.env.example`, and `LlmMeta.reasoning_effort`. Tests: `create` receives
+   `reasoning_effort="high"` when set and no such key when unset, and the
+   meta records it. `conftest.py` gains a
    `_write_corpus` helper. `tests/test_fulltext_extraction.py`: only corpus
    PDFs are sent, a changed corpus PDF is re-extracted under
    `--skip-existing`, and the meta carries `corpus_id`.
