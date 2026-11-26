@@ -73,8 +73,8 @@ docker run --rm --network container:<grobid-container-name> \
   http://localhost:8070/api/processFulltextDocument
 ```
 
-The `fulltext-extraction` stage uses the Python GROBID client, which
-makes the same HTTP call. If stage 6 fails with connection errors on
+The `fulltext-extraction` stage makes the same HTTP call, posting the PDF
+to `/api/processFulltextDocument` with `httpx`. If stage 6 fails with connection errors on
 macOS despite the container being alive, try this network-namespace
 approach. Full context in [grobid-lessons.md](grobid-lessons.md).
 

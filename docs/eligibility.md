@@ -228,14 +228,16 @@ to run (see [run-manifest.md](run-manifest.md)).
 - `--config`: optional YAML config file whose values seed argparse
   defaults; explicit CLI flags still win. See [configs.md](configs.md).
 - `--skip-existing`: load any prior `verdicts.jsonl` (in the run dir
-  pointed at by `--run-id`) and skip already-assessed `work_id`s. The
-  verdict sidecar is appended to on completion. If `eligibility-meta.json`
+  pointed at by `--run-id`) and skip already-assessed `work_id`s. New
+  verdicts are appended to the existing `verdicts.jsonl` one record at a
+  time as they complete. If `eligibility-meta.json`
   already exists and its recorded `prompt_sha256` differs from the hash the
   current invocation would produce, or its `corpus_id` differs from the
   current corpus, the run aborts with an error — mixing verdicts from
   different prompt versions or corpora in one file would silently corrupt
   any downstream analysis.
-- `--max-records`: process only the first N corpus works.
+- `--max-records`: process only the first N corpus works that have a
+  current extraction (and, under `--skip-existing`, no verdict yet).
 - `--dry-run`: print verdicts to stderr without writing any output.
 - `--base-url`, `--model`: the OpenAI-compatible base URL (including
   `/v1`) and the decisions model. Both required. The full rendered text is sent; a

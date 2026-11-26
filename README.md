@@ -191,6 +191,7 @@ reproducible random sample.
 # Stage 8 — codebook extraction records (needs the run's --codebook)
 laglitsynth extraction-codebook-export \
     --records data/run/extraction-codebook/<run-id>/records.jsonl \
+    --codebook examples/codebooks/lagrangian-oceanography.yaml \
     --catalogue data/run/corpus/works.jsonl \
     --n-subset 30 --subset-seed 1
 ```

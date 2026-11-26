@@ -113,8 +113,9 @@ sentinel and no request.
 
 ### Errors and retries
 
-Transport errors, HTTP 5xx and 429 are retried four times with a growing
-backoff; then the work gets the `llm-timeout` sentinel. HTTP 401, 402, 403
+A request that meets a transport error, HTTP 5xx or 429 is made up to four
+times in all (three retries) with a growing backoff; then the work gets the
+`llm-timeout` sentinel. HTTP 401, 402, 403
 and 404 fail every work the same way, so the stage exits naming the URL.
 Any other non-2xx response gives `llm-rejected` with the error body, and a
 2xx body without a probability in [0, 1] for `relevant` gives
