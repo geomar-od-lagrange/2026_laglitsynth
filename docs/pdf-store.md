@@ -34,6 +34,7 @@ obtained through GEOMAR and Kiel University subscriptions. Setup is in the
 | `zotero-desktop` | Zotero desktop "Find Available PDF" on an RIS import |
 | `institutional` | DOI → landing page → `citation_pdf_url` over an institution's network |
 | `browser` | Zotero browser connector on doi.org tabs, or a PDF link clicked by hand |
+| `manual` | Any other folder of PDFs brought in with `fulltext-retrieval-import` |
 
 `laglitsynth fulltext-retrieval` covers only part of `oa` (OpenAlex's best
 open-access URL) and `unpaywall`. The rest of `oa` and all of
@@ -54,13 +55,14 @@ Each PDF ends up as `data/pdfs/<openalex short id>.pdf` with a provenance
 record, and the operator commits and pushes in `data/`. A work that
 already has a PDF keeps it.
 
-The CLI does not support this procedure end to end yet.
-`fulltext-retrieval-export` writes an RIS file without `AN` and `UR`, and
-`fulltext-retrieval-import` records only the sources `zotero-import` and
-`manual`. Until step 4 of
-[pipeline-restructure.md](../plans/pipeline-restructure.md) closes this,
-the RIS export, the copy out of Zotero and the provenance records for
-`zotero-desktop` and `browser` happen outside the CLI.
+`laglitsynth fulltext-retrieval-export` writes the list of missing works,
+including the RIS file below; `--screening-threshold` narrows it to works
+worth a collaborator's time. `laglitsynth fulltext-retrieval-import
+--import-dir <folder> --source zotero-desktop|browser|institutional|manual`
+brings a folder back. Import matches each PDF against the whole
+deduplicated catalogue, by the DOI the file carries or by a `<stem>.pdf`
+name, so a folder needs no prior export and any PDF of a known work lands.
+See [fulltext-retrieval.md](fulltext-retrieval.md) for the matching rules.
 
 ### Zotero desktop
 
@@ -92,7 +94,8 @@ File → Import, or POST it to `http://localhost:23120/connector/import`
 with content type `application/x-research-info-systems`.
 
 Apply the patch below, select all items, and run "Find Available PDF".
-Afterwards, copy each item's child PDF to `<AN>.pdf`.
+Afterwards, copy each item's child PDF to `<AN>.pdf` in one folder and
+import it with `--source zotero-desktop`.
 
 #### The 429 patch
 
@@ -140,6 +143,8 @@ The PDFs attached so far are counted through the local API at
 
 Open doi.org tabs for the works still missing. Save each with the Zotero
 connector, or click the PDF link. Items saved by the connector lose `AN`,
-and downloads carry no work id at all. Match them to the catalogue by DOI,
-then by title, and confirm the match against the PDF's first pages.
-Record them with source `browser`.
+and downloads carry no work id at all. Collect the PDFs in one folder and
+import it with `--source browser`: import reads the DOI out of each file.
+A PDF it reports as unmatched is matched to the catalogue by hand (by
+title, confirmed against its first pages), renamed to `<stem>.pdf` and
+imported again.

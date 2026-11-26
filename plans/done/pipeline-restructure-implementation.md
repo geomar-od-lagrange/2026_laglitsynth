@@ -15,24 +15,24 @@ one planned `synthesis` step in the docs. Retrieval keeps its current two
 routes: trying every OpenAlex location plus Semantic Scholar and arXiv
 (mission step 2) is a follow-up, and the store already holds those PDFs from
 one-off scripts. Title-based import matching stays queued in the
-[roadmap](roadmap.md). The Ollama explorations under
-[docs/explorations/](../docs/explorations/) are left as history.
+[roadmap](../roadmap.md). The Ollama explorations under
+[docs/explorations/](../../docs/explorations/) are left as history.
 
 ## Target state
 
 ### Deleted
 
-- Stage 2b: [`abstract_lookup/`](../src/laglitsynth/abstract_lookup/),
-  [docs/abstract-lookup.md](../docs/abstract-lookup.md), and the
+- Stage 2b: [`abstract_lookup/`](../../src/laglitsynth/abstract_lookup/),
+  [docs/abstract-lookup.md](../../docs/abstract-lookup.md), and the
   `ABSTRACT_LOOKUP_EMAIL` and `SEMANTIC_SCHOLAR_API_KEY` keys in
   `.env.example`.
-- Stage 9: [docs/adjudication-extraction.md](../docs/adjudication-extraction.md),
+- Stage 9: [docs/adjudication-extraction.md](../../docs/adjudication-extraction.md),
   [plans/multi-run-consensus.md](multi-run-consensus.md), and the
   `reviewer_correction` column of `extraction-codebook-export` (the per-work
   tab becomes `field | value | context`).
 - XLSX review exports for screening and eligibility:
-  [`screening_abstracts/export.py`](../src/laglitsynth/screening_abstracts/export.py)
-  and [`fulltext_eligibility/export.py`](../src/laglitsynth/fulltext_eligibility/export.py).
+  [`screening_abstracts/export.py`](../../src/laglitsynth/screening_abstracts/export.py)
+  and [`fulltext_eligibility/export.py`](../../src/laglitsynth/fulltext_eligibility/export.py).
   `extraction-codebook-export` stays, so `openpyxl` stays.
 - `--pass-all` and the `unscreened` sentinel. `ScreeningMeta.llm` is no
   longer optional.
@@ -44,22 +44,22 @@ one-off scripts. Title-based import matching stays queued in the
 - The screening join in `fulltext-retrieval`: its `_active_works`,
   `--screening-verdicts`, `--run-id` and `--screening-threshold` go.
   Retrieval runs over the whole `--catalogue`. The export keeps the join
-  (moved into [`export.py`](../src/laglitsynth/fulltext_retrieval/export.py))
+  (moved into [`export.py`](../../src/laglitsynth/fulltext_retrieval/export.py))
   until commit 8.
-- Ollama: [`ollama.py`](../src/laglitsynth/ollama.py),
-  [`bake_model.py`](../src/laglitsynth/bake_model.py) and
-  [docs/bake-model.md](../docs/bake-model.md). Also `--num-ctx`, the
+- Ollama: [`ollama.py`](../../src/laglitsynth/ollama.py),
+  [`bake_model.py`](../../src/laglitsynth/bake_model.py) and
+  [docs/bake-model.md](../../docs/bake-model.md). Also `--num-ctx`, the
   `extra_body` `num_ctx` hint, `CHAR_BUDGET` and its block truncation in
-  [`extraction_codebook/prompts.py`](../src/laglitsynth/extraction_codebook/prompts.py),
+  [`extraction_codebook/prompts.py`](../../src/laglitsynth/extraction_codebook/prompts.py),
   the `truncated` record field, the explicit `temperature` and per-call
   `seed`, the `seed` field on every verdict and record, `--backend`, and
   the chat path of screening. In
-  [nesh-pipeline.sbatch](../scripts/nesh-pipeline.sbatch) the Ollama install
+  [nesh-pipeline.sbatch](../../scripts/nesh-pipeline.sbatch) the Ollama install
   check, `ollama serve`, its wait loop, the pulls and the Modelfile tags go,
   and the GPU request (`--partition=gpu`, `--constraint`, `--gpus-per-node`)
   becomes `--partition=base`. GROBID and the proxy exports stay; the hosted
   endpoint is reached through the proxy.
-- [`ReviewConfig`](../src/laglitsynth/review.py) loses `backends`, `num_ctx`
+- [`ReviewConfig`](../../src/laglitsynth/review.py) loses `backends`, `num_ctx`
   and `thresholds`. The runner loses `RETRIEVAL_THRESHOLD`,
   `ELIGIBILITY_THRESHOLD`, `OLLAMA_BASE`, `SCREENING_BACKEND` and
   `*_NUM_CTX`.
@@ -67,7 +67,7 @@ one-off scripts. Title-based import matching stays queued in the
 ### LLM backend: `src/laglitsynth/llm.py`
 
 One module replaces `ollama.py` and
-[`screening_abstracts/decisions.py`](../src/laglitsynth/screening_abstracts/decisions.py).
+[`screening_abstracts/decisions.py`](../../src/laglitsynth/screening_abstracts/decisions.py).
 The three LLM stages register `--base-url`, `--model`, `--api-key` and
 `--concurrency` with `add_endpoint_args(parser, decisions=...)`; stages 3
 and 7 pass `decisions=True`, which adds `--decisions-url`.
@@ -80,7 +80,7 @@ overrides it for a provider that serves the endpoint elsewhere.
 have no default: argparse `required=True` would ignore `--config`
 defaults, so `resolve_endpoint` exits naming the missing flag instead. The
 key comes from `--api-key`, else `os.environ["LLM_API_KEY"]`, else
-`LLM_API_KEY` in `.env` through [`load_env_var`](../src/laglitsynth/dotenv.py);
+`LLM_API_KEY` in `.env` through [`load_env_var`](../../src/laglitsynth/dotenv.py);
 with none, it exits naming `LLM_API_KEY`.
 
 `chat_client(endpoint, timeout)` returns an `openai.OpenAI`. Stage 8 calls
@@ -119,10 +119,10 @@ Any other decisions 4xx, and chat `BadRequestError`, give a new
 full text lands now that nothing truncates it. An unparseable 2xx gives
 `llm-parse-failure` with the body attached.
 
-[`LlmMeta`](../src/laglitsynth/models.py) becomes `{model, base_url,
+[`LlmMeta`](../../src/laglitsynth/models.py) becomes `{model, base_url,
 decisions_url: str | None, reasoning_effort: str | None, prompt_sha256}`,
 with `decisions_url` `None` for stage 8 and `reasoning_effort` `None` for
-stages 3 and 7. [`save_resolved_config`](../src/laglitsynth/config.py) adds
+stages 3 and 7. [`save_resolved_config`](../../src/laglitsynth/config.py) adds
 `api_key` to `_DROP_KEYS`. Today a key passed on the command line ends up
 in the run's `config.yaml`.
 
@@ -138,15 +138,15 @@ eligible: bool | None, reason: str | None, raw_response}`, with `eligible =
 probability >= 0.5` and `reason` set only for sentinels. Any other cut is
 made ad hoc on `verdicts.jsonl`, the same way as for screening. The
 `input` sent is the rendered full text
-([`render_fulltext`](../src/laglitsynth/fulltext_eligibility/prompts.py)).
+([`render_fulltext`](../../src/laglitsynth/fulltext_eligibility/prompts.py)).
 The eligibility-criteria YAML becomes a `decision` block covering criteria
 1 and 2 only (ocean particle/tracer/object tracking; primary research).
 `_EligibilityPayload` and
-[`prompts.load_system_prompt`](../src/laglitsynth/prompts.py) go.
+[`prompts.load_system_prompt`](../../src/laglitsynth/prompts.py) go.
 
 `ExtractionRecord` keeps `{work_id, reason, raw_response}` plus the
 codebook payload. The example codebook
-([lagrangian-oceanography.yaml](../examples/codebooks/lagrangian-oceanography.yaml))
+([lagrangian-oceanography.yaml](../../examples/codebooks/lagrangian-oceanography.yaml))
 gains a `rationale` field (`context: true`) for the stated reasons behind
 numerical choices (RQ1.3). It needs no code change: fields are driven by
 the YAML.
@@ -154,7 +154,7 @@ the YAML.
 The prompt hash for a decisions stage is
 `sha256(question.canonical_json() + "\n" + USER_TEMPLATE)`.
 `criteria_sha256(spec)` in
-[`fulltext_eligibility/eligibility.py`](../src/laglitsynth/fulltext_eligibility/eligibility.py)
+[`fulltext_eligibility/eligibility.py`](../../src/laglitsynth/fulltext_eligibility/eligibility.py)
 is the one implementation, and stage 8 imports it.
 
 ### Corpus: `src/laglitsynth/corpus/`
@@ -162,7 +162,7 @@ is the one implementation, and stage 8 imports it.
 `laglitsynth corpus-assemble [--catalogue] [--screening-verdicts]
 [--screening-run-id] --screening-threshold FLOAT [--allow-unscreened]
 [--data-dir]` resolves the catalogue and the verdicts with the existing
-[`resolve_screening_inputs`](../src/laglitsynth/layout.py); the screening
+[`resolve_screening_inputs`](../../src/laglitsynth/layout.py); the screening
 run-id defaults to the manifest's. The command selects every catalogue
 work whose verdict scores `None` or `>= threshold`. The threshold is
 required: it is a review decision, and the runner passes it from the review
@@ -193,7 +193,7 @@ always rewritten whole:
   selected_count, unscored_count, below_threshold_count, no_verdict_count,
   with_pdf_count}`.
 
-[`corpus/load.py`](../src/laglitsynth/corpus/) holds the readers stages 6–8
+[`corpus/load.py`](../../src/laglitsynth/corpus/) holds the readers stages 6–8
 share: `load_corpus_meta`, `read_corpus_works`, `read_corpus_pdfs`, and
 `require_corpus(recorded, current, source)`, which exits naming the stale
 file and the stage to re-run.
@@ -223,7 +223,7 @@ and check it:
   guard.
 
 The halves get separate run-ids.
-[`data/manifest.json`](../src/laglitsynth/manifest.py) keeps the screening
+[`data/manifest.json`](../../src/laglitsynth/manifest.py) keeps the screening
 run-id. Screening writes under it, and `corpus-assemble` and the export read
 verdicts from it unless `--screening-run-id` or `--screening-verdicts` names
 another run. `corpus-assemble` keeps the previous
@@ -280,7 +280,7 @@ the three models, `SCREENING_THRESHOLD` (env or config) and `LLM_API_KEY`
 never passes `--api-key`, so the key stays out of the process list; the CLI
 reads it itself. The key never sits in a committed YAML; this is how the
 mission's "key taken from the review config" is met. The
-[example review](../examples/reviews/lagrangian-oceanography.yaml) leaves
+[example review](../../examples/reviews/lagrangian-oceanography.yaml) leaves
 base URL, decisions URL, models and threshold as commented placeholders and
 names no provider. The run order is: 1 fetch → 2 dedup → 3 screening → 5
 retrieval → `corpus-assemble` (gated with stage 5) → 6 → 7 → 8.
@@ -325,13 +325,13 @@ broader doc rewrite is commit 7. Slices: s1 is commits 1–2, s2 commits 3–4,
 s3 commit 5, s4 commit 6, s5 commit 7 and s6 commit 8.
 
 1. Drop abstract lookup, adjudication and the screening/eligibility XLSX
-   exports. Delete [`abstract_lookup/`](../src/laglitsynth/abstract_lookup/),
-   the two export modules, their builders in [`cli.py`](../src/laglitsynth/cli.py),
-   [docs/abstract-lookup.md](../docs/abstract-lookup.md),
-   [docs/adjudication-extraction.md](../docs/adjudication-extraction.md),
+   exports. Delete [`abstract_lookup/`](../../src/laglitsynth/abstract_lookup/),
+   the two export modules, their builders in [`cli.py`](../../src/laglitsynth/cli.py),
+   [docs/abstract-lookup.md](../../docs/abstract-lookup.md),
+   [docs/adjudication-extraction.md](../../docs/adjudication-extraction.md),
    [multi-run-consensus.md](multi-run-consensus.md), and the two
    `.env.example` keys. Drop `reviewer_correction` and its placeholder from
-   [`extraction_codebook/export.py`](../src/laglitsynth/extraction_codebook/export.py).
+   [`extraction_codebook/export.py`](../../src/laglitsynth/extraction_codebook/export.py).
    Tests: delete `tests/test_abstract_lookup.py`,
    `tests/test_screening_abstracts_export.py` and
    `tests/test_fulltext_eligibility_export.py`; in
@@ -341,7 +341,7 @@ s3 commit 5, s4 commit 6, s5 commit 7 and s6 commit 8.
 2. Drop `--pass-all`, the thresholds outside the corpus, and the
    Ollama-specific code. Remove `pass_all_works`, `_unscreened_verdict`,
    `--pass-all` and `--screening-threshold` from
-   [`screen.py`](../src/laglitsynth/screening_abstracts/screen.py), drop the
+   [`screen.py`](../../src/laglitsynth/screening_abstracts/screen.py), drop the
    three `ScreeningMeta` threshold fields, and make `ScreeningMeta.llm`
    required. Retrieval runs over the whole catalogue, and `_active_works`
    moves into `export.py`. Delete `ollama.py`, `bake_model.py` and
@@ -349,14 +349,14 @@ s3 commit 5, s4 commit 6, s5 commit 7 and s6 commit 8.
    `extra_body` hint, `CHAR_BUDGET` with `_truncate_blocks`, and the
    `truncated` record field with its proto attribute, `truncated_count` and
    the `truncated` row of the codebook export. In
-   [`render_fulltext`](../src/laglitsynth/extraction_codebook/prompts.py),
+   [`render_fulltext`](../../src/laglitsynth/extraction_codebook/prompts.py),
    return the full text. `ReviewConfig.thresholds` becomes
    `screening_threshold`, emitted as `CFG_SCREENING_THRESHOLD`; the runner
    requires `SCREENING_THRESHOLD` and passes it to stage 7's
    `--screening-threshold` until commit 6. Update `emit_cfg_lines`,
-   [run-pipeline.sh](../scripts/run-pipeline.sh) and the sbatch as listed
+   [run-pipeline.sh](../../scripts/run-pipeline.sh) and the sbatch as listed
    under Deleted, and drop the threshold text from
-   [screening-abstracts.md](../docs/screening-abstracts.md). Tests: delete
+   [screening-abstracts.md](../../docs/screening-abstracts.md). Tests: delete
    `tests/test_bake_model.py` and `tests/test_preflight.py`; remove the
    pass-all and threshold-split tests from `tests/test_screening_abstracts.py`,
    the truncation tests from `tests/test_extraction_codebook_prompts.py`,
@@ -455,55 +455,55 @@ s3 commit 5, s4 commit 6, s5 commit 7 and s6 commit 8.
    example codebook yields `rationale` and `rationale_context`.
 
 7. Docs and roadmap, in present tense, describing only what stays true.
-   [pipeline.md](../docs/pipeline.md) shows the two halves meeting at the
+   [pipeline.md](../../docs/pipeline.md) shows the two halves meeting at the
    corpus and names the one-branch-per-paper principle; stage 2b, stage 9,
    the feedback loops, citation-network and author review go; stages 10–12
    become one planned `synthesis`; the flowchart and human spot-checking
-   are redrawn. [interfaces.md](../docs/interfaces.md) gets the artifact
+   are redrawn. [interfaces.md](../../docs/interfaces.md) gets the artifact
    map, CLI contract, model tables, `LlmMeta`, prompt-hash table and
    `--concurrency`, and loses the resolve-module gap.
-   [data-model.md](../docs/data-model.md) follows the new models.
-   [glossary.md](../docs/glossary.md) redefines *corpus* and drops
+   [data-model.md](../../docs/data-model.md) follows the new models.
+   [glossary.md](../../docs/glossary.md) redefines *corpus* and drops
    adjudication, included catalogue, eligible corpus, source basis and the
    PRISMA framing, each checked against the code.
-   [vocabulary.md](../docs/vocabulary.md) loses the adjudication
-   dependence. [codebook.md](../docs/codebook.md) gains the `rationale`
+   [vocabulary.md](../../docs/vocabulary.md) loses the adjudication
+   dependence. [codebook.md](../../docs/codebook.md) gains the `rationale`
    field, reversing the "replaces rationale sections" passages. Rewrite the
-   stage docs ([screening-abstracts.md](../docs/screening-abstracts.md),
-   [eligibility.md](../docs/eligibility.md),
-   [extraction-codebook.md](../docs/extraction-codebook.md),
-   [fulltext-extraction.md](../docs/fulltext-extraction.md),
-   [fulltext-retrieval.md](../docs/fulltext-retrieval.md)) and the setup
-   and run docs ([configs.md](../docs/configs.md),
-   [run-manifest.md](../docs/run-manifest.md),
-   [cross-machine.md](../docs/cross-machine.md), and
-   [two-pass-extraction.md](../docs/two-pass-extraction.md) for
-   `CHAR_BUDGET`). In [external-services.md](../docs/external-services.md)
+   stage docs ([screening-abstracts.md](../../docs/screening-abstracts.md),
+   [eligibility.md](../../docs/eligibility.md),
+   [extraction-codebook.md](../../docs/extraction-codebook.md),
+   [fulltext-extraction.md](../../docs/fulltext-extraction.md),
+   [fulltext-retrieval.md](../../docs/fulltext-retrieval.md)) and the setup
+   and run docs ([configs.md](../../docs/configs.md),
+   [run-manifest.md](../../docs/run-manifest.md),
+   [cross-machine.md](../../docs/cross-machine.md), and
+   [two-pass-extraction.md](../../docs/two-pass-extraction.md) for
+   `CHAR_BUDGET`). In [external-services.md](../../docs/external-services.md)
    the Ollama sections become an endpoint section that names no provider.
-   Delete [llm-concurrency.md](../docs/llm-concurrency.md) and point the
+   Delete [llm-concurrency.md](../../docs/llm-concurrency.md) and point the
    `--concurrency` help strings at interfaces.md. Update
-   [README.md](../README.md) and add [docs/corpus.md](../docs/corpus.md).
-   In the [roadmap](roadmap.md), multi-run consensus, stages 9–12, the
+   [README.md](../../README.md) and add [docs/corpus.md](../../docs/corpus.md).
+   In the [roadmap](../roadmap.md), multi-run consensus, stages 9–12, the
    shared export helper and the open abstract-lookup question become
    Withdrawn entries or the synthesis entry, retrieval over every OpenAlex
    location plus Semantic Scholar and arXiv gets a Queued entry, and the
-   Ollama parts of [usability-docs.md](usability-docs.md) are marked
+   Ollama parts of [usability-docs.md](../usability-docs.md) are marked
    obsolete. Tests: none new.
 
 8. Export/import for the collaborator procedure. In
-   [`export.py`](../src/laglitsynth/fulltext_retrieval/export.py) the
+   [`export.py`](../../src/laglitsynth/fulltext_retrieval/export.py) the
    screening filter becomes optional: with no `--screening-threshold` the
    bundle lists every catalogue work without a held PDF, and the
    `ExportMeta` screening fields become `| None`. The RIS record gets
    `AN  - <stem>`, `UR  - https://doi.org/<doi>` (falling back to
    `primary_location.landing_page_url`) and `T2` in place of `JO`.
-   [`import_.py`](../src/laglitsynth/fulltext_retrieval/import_.py) matches
+   [`import_.py`](../../src/laglitsynth/fulltext_retrieval/import_.py) matches
    DOIs and stems against the whole `--catalogue` (default: the
    deduplicated catalogue) instead of `--pdf-manifest`, which goes.
    `--source` takes `zotero-desktop | browser | institutional | manual`,
    and `PdfSource.zotero_import` goes; the store holds no such record.
-   [pdf-store.md](../docs/pdf-store.md),
-   [fulltext-retrieval.md](../docs/fulltext-retrieval.md) and
+   [pdf-store.md](../../docs/pdf-store.md),
+   [fulltext-retrieval.md](../../docs/fulltext-retrieval.md) and
    interfaces.md drop the "does not support this procedure yet" text. This
    plan and the mission statement move to `plans/done/` and to Implemented
    in the roadmap, and links to them (pdf-store.md among them) are
@@ -523,7 +523,7 @@ s3 commit 5, s4 commit 6, s5 commit 7 and s6 commit 8.
   full re-run cost matter.
 - Synthesis design, including whether RQ1.3 rationale grouping keeps human
   labelling: decided when synthesis is planned.
-- Refining [vocabulary.md](../docs/vocabulary.md): waits for the first
+- Refining [vocabulary.md](../../docs/vocabulary.md): waits for the first
   codebook results.
 
 ## Risks
@@ -542,41 +542,41 @@ s3 commit 5, s4 commit 6, s5 commit 7 and s6 commit 8.
 ## Critical files
 
 - [plans/pipeline-restructure.md](pipeline-restructure.md),
-  [plans/roadmap.md](roadmap.md)
-- [src/laglitsynth/cli.py](../src/laglitsynth/cli.py),
-  [layout.py](../src/laglitsynth/layout.py),
-  [manifest.py](../src/laglitsynth/manifest.py),
-  [models.py](../src/laglitsynth/models.py),
-  [config.py](../src/laglitsynth/config.py),
-  [review.py](../src/laglitsynth/review.py),
-  [prompts.py](../src/laglitsynth/prompts.py),
-  [dotenv.py](../src/laglitsynth/dotenv.py),
-  [io.py](../src/laglitsynth/io.py),
-  [ollama.py](../src/laglitsynth/ollama.py),
-  [bake_model.py](../src/laglitsynth/bake_model.py)
-- [screening_abstracts/screen.py](../src/laglitsynth/screening_abstracts/screen.py),
-  [decisions.py](../src/laglitsynth/screening_abstracts/decisions.py),
-  [models.py](../src/laglitsynth/screening_abstracts/models.py)
-- [fulltext_retrieval/retrieve.py](../src/laglitsynth/fulltext_retrieval/retrieve.py),
-  [export.py](../src/laglitsynth/fulltext_retrieval/export.py),
-  [import_.py](../src/laglitsynth/fulltext_retrieval/import_.py),
-  [store.py](../src/laglitsynth/fulltext_retrieval/store.py),
-  [models.py](../src/laglitsynth/fulltext_retrieval/models.py)
-- [fulltext_extraction/extract.py](../src/laglitsynth/fulltext_extraction/extract.py),
-  [models.py](../src/laglitsynth/fulltext_extraction/models.py)
-- [fulltext_eligibility/eligibility.py](../src/laglitsynth/fulltext_eligibility/eligibility.py),
-  [models.py](../src/laglitsynth/fulltext_eligibility/models.py),
-  [prompts.py](../src/laglitsynth/fulltext_eligibility/prompts.py)
-- [extraction_codebook/extract.py](../src/laglitsynth/extraction_codebook/extract.py),
-  [codebook.py](../src/laglitsynth/extraction_codebook/codebook.py),
-  [prompts.py](../src/laglitsynth/extraction_codebook/prompts.py),
-  [export.py](../src/laglitsynth/extraction_codebook/export.py)
-- [examples/](../examples/),
-  [scripts/run-pipeline.sh](../scripts/run-pipeline.sh),
-  [scripts/nesh-pipeline.sbatch](../scripts/nesh-pipeline.sbatch),
-  [.env.example](../.env.example)
-- [docs/pipeline.md](../docs/pipeline.md),
-  [docs/interfaces.md](../docs/interfaces.md),
-  [docs/data-model.md](../docs/data-model.md),
-  [docs/pdf-store.md](../docs/pdf-store.md),
-  [docs/glossary.md](../docs/glossary.md)
+  [plans/roadmap.md](../roadmap.md)
+- [src/laglitsynth/cli.py](../../src/laglitsynth/cli.py),
+  [layout.py](../../src/laglitsynth/layout.py),
+  [manifest.py](../../src/laglitsynth/manifest.py),
+  [models.py](../../src/laglitsynth/models.py),
+  [config.py](../../src/laglitsynth/config.py),
+  [review.py](../../src/laglitsynth/review.py),
+  [prompts.py](../../src/laglitsynth/prompts.py),
+  [dotenv.py](../../src/laglitsynth/dotenv.py),
+  [io.py](../../src/laglitsynth/io.py),
+  [ollama.py](../../src/laglitsynth/ollama.py),
+  [bake_model.py](../../src/laglitsynth/bake_model.py)
+- [screening_abstracts/screen.py](../../src/laglitsynth/screening_abstracts/screen.py),
+  [decisions.py](../../src/laglitsynth/screening_abstracts/decisions.py),
+  [models.py](../../src/laglitsynth/screening_abstracts/models.py)
+- [fulltext_retrieval/retrieve.py](../../src/laglitsynth/fulltext_retrieval/retrieve.py),
+  [export.py](../../src/laglitsynth/fulltext_retrieval/export.py),
+  [import_.py](../../src/laglitsynth/fulltext_retrieval/import_.py),
+  [store.py](../../src/laglitsynth/fulltext_retrieval/store.py),
+  [models.py](../../src/laglitsynth/fulltext_retrieval/models.py)
+- [fulltext_extraction/extract.py](../../src/laglitsynth/fulltext_extraction/extract.py),
+  [models.py](../../src/laglitsynth/fulltext_extraction/models.py)
+- [fulltext_eligibility/eligibility.py](../../src/laglitsynth/fulltext_eligibility/eligibility.py),
+  [models.py](../../src/laglitsynth/fulltext_eligibility/models.py),
+  [prompts.py](../../src/laglitsynth/fulltext_eligibility/prompts.py)
+- [extraction_codebook/extract.py](../../src/laglitsynth/extraction_codebook/extract.py),
+  [codebook.py](../../src/laglitsynth/extraction_codebook/codebook.py),
+  [prompts.py](../../src/laglitsynth/extraction_codebook/prompts.py),
+  [export.py](../../src/laglitsynth/extraction_codebook/export.py)
+- [examples/](../../examples/),
+  [scripts/run-pipeline.sh](../../scripts/run-pipeline.sh),
+  [scripts/nesh-pipeline.sbatch](../../scripts/nesh-pipeline.sbatch),
+  [.env.example](../../.env.example)
+- [docs/pipeline.md](../../docs/pipeline.md),
+  [docs/interfaces.md](../../docs/interfaces.md),
+  [docs/data-model.md](../../docs/data-model.md),
+  [docs/pdf-store.md](../../docs/pdf-store.md),
+  [docs/glossary.md](../../docs/glossary.md)

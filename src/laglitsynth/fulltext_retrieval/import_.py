@@ -1,23 +1,26 @@
 """Ingest a collaborator's returned folder of PDFs into the shared store.
 
-``fulltext-retrieval-import`` reads the ``pdf-manifest.csv`` written by a
-matching export, resolves each returned PDF to a work stem, validates it is
-a real PDF, dedups by content hash, copies matched PDFs into
+``fulltext-retrieval-import`` matches each returned PDF against the whole
+``--catalogue`` (default: the deduplicated catalogue), so a folder needs no
+prior export: any PDF of a known work lands. It validates that the file is a
+real PDF, dedups by content hash, copies matched PDFs into
 ``<data-dir>/pdfs/``, and upserts each work's provenance with the given
-``--source`` (``zotero-import`` | ``manual``).
+``--source`` (``zotero-desktop`` | ``browser`` | ``institutional`` |
+``manual``).
 
 Stem resolution order, per work, never guessed:
 
-1. a self-identifying DOI that appears in the manifest's DOI→stem map, taken
+1. a self-identifying DOI that appears in the catalogue's DOI→stem map, taken
    from the Info dictionary, XMP metadata, a title-page link annotation, or
    first-page text. Every candidate is gathered and the first one present in
-   the manifest wins, because a publisher's Info dictionary often carries the
-   journal's DOI rather than the article's;
-2. a filename whose stem matches the manifest directly (plain folder drop);
+   the catalogue wins, because a publisher's Info dictionary often carries
+   the journal's DOI rather than the article's;
+2. a filename whose stem is a catalogue stem (``<stem>.pdf``, the name the
+   RIS ``AN`` field gives);
 3. a returned sidecar ``*.csv`` / ``*.json`` mapping the collaborator's
    filenames to DOIs.
 
-A PDF that resolves to no manifest stem, or is not a real PDF, is reported
+A PDF that resolves to no catalogue stem, or is not a real PDF, is reported
 and skipped.
 """
 
@@ -36,6 +39,7 @@ from pathlib import Path
 from pypdf import PdfReader
 from pypdf.errors import PyPdfError
 
+from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.fulltext_retrieval.models import PdfProvenanceRecord, PdfSource
 from laglitsynth.fulltext_retrieval.retrieve import _DOI_PREFIX_RE
 from laglitsynth.fulltext_retrieval.store import (
@@ -45,7 +49,9 @@ from laglitsynth.fulltext_retrieval.store import (
     store_pdf_path,
     upsert_provenance,
 )
-from laglitsynth.layout import pdf_manifest_path, require_input
+from laglitsynth.ids import work_id_to_filename
+from laglitsynth.io import read_jsonl
+from laglitsynth.layout import deduplicated_path, require_input
 
 # DOI syntax per Crossref's recommended regex (case-insensitive), plus the
 # angle brackets AMS DOIs carry:
@@ -53,16 +59,21 @@ from laglitsynth.layout import pdf_manifest_path, require_input
 _DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:a-z0-9<>]+", re.IGNORECASE)
 
 _IMPORT_SOURCES = {
-    "zotero-import": PdfSource.zotero_import,
-    "manual": PdfSource.manual,
+    source.value: source
+    for source in (
+        PdfSource.zotero_desktop,
+        PdfSource.browser,
+        PdfSource.institutional,
+        PdfSource.manual,
+    )
 }
 
 
 @dataclass
-class ManifestEntry:
+class CatalogueEntry:
     work_id: str
     stem: str
-    doi: str | None
+    doi: str | None  # bare, as the catalogue spells it; None for DOI-less works
 
 
 @dataclass
@@ -81,22 +92,22 @@ def _normalise_doi(doi: str | None) -> str | None:
     return bare or None
 
 
-def read_manifest(path: Path) -> list[ManifestEntry]:
-    """Parse ``pdf-manifest.csv`` into ``ManifestEntry`` rows."""
-    entries: list[ManifestEntry] = []
-    with open(path, newline="", encoding="utf-8") as f:
-        # The export also writes ``title``, ``year``, and ``expected_filename``
-        # columns for the collaborator's eyes; import matches on DOI and stem
-        # only, so they are not pulled into the entry.
-        for row in csv.DictReader(f):
-            entries.append(
-                ManifestEntry(
-                    work_id=row["work_id"],
-                    stem=row["stem"],
-                    doi=row.get("doi") or None,
-                )
-            )
-    return entries
+def _bare_doi(doi: str | None) -> str | None:
+    if doi is None:
+        return None
+    return _DOI_PREFIX_RE.sub("", doi).strip() or None
+
+
+def read_catalogue_entries(path: Path) -> list[CatalogueEntry]:
+    """Return the work id, stem and bare DOI of every work in a catalogue."""
+    return [
+        CatalogueEntry(
+            work_id=work.id,
+            stem=work_id_to_filename(work.id),
+            doi=_bare_doi(work.doi),
+        )
+        for work in read_jsonl(path, Work)
+    ]
 
 
 def _load_sidecar(import_dir: Path) -> dict[str, str]:
@@ -135,7 +146,7 @@ def _strip_trailing_punct(doi: str) -> str:
     ``_DOI_RE`` greedily matches ``[-._;()/:a-z0-9]`` characters, so a DOI
     rendered in running text as ``10.1234/abc.`` (or followed by ``,;:)``)
     captures the punctuation. Stripping it lets such a match equal the bare
-    manifest DOI ``10.1234/abc``.
+    catalogue DOI ``10.1234/abc``.
     """
     return doi.rstrip(".,;:)")
 
@@ -158,13 +169,13 @@ def _embedded_dois(pdf_path: Path) -> _DoiCandidates:
     """Return every self-identifying DOI in a PDF, grouped by trust.
 
     The caller keeps the first metadata candidate that appears in the
-    manifest, so returning several is what lets a wrong one be discarded — an
+    catalogue, so returning several is what lets a wrong one be discarded — an
     AGU or Wiley Info dictionary carries the journal's ISSN-DOI, and the
     article's own DOI is printed on page 1.
 
     Never reads the reference list or deep body text. This corpus is topically
     clustered, so a bibliography very likely cites other works in the same
-    manifest, and a DOI harvested there would file the PDF under the wrong
+    catalogue, and a DOI harvested there would file the PDF under the wrong
     work.
     """
     found = _DoiCandidates()
@@ -214,8 +225,8 @@ def _resolve_stem(
     stems: set[str],
     sidecar: dict[str, str],
 ) -> str | None:
-    """Resolve a returned PDF to a manifest stem, or None if unmatched."""
-    # (a) a self-identifying DOI that lands in the manifest. Membership
+    """Resolve a returned PDF to a catalogue stem, or None if unmatched."""
+    # (a) a self-identifying DOI that lands in the catalogue. Membership
     # decides, not position: the first candidate is often a journal-level DOI.
     found = _embedded_dois(pdf_path)
     for candidate in found.metadata:
@@ -223,7 +234,7 @@ def _resolve_stem(
         if embedded is not None and embedded in doi_to_stem:
             return doi_to_stem[embedded]
     # First-page text is accepted only when it points at exactly one work;
-    # two manifest DOIs on page 1 is a correction notice or a cited companion,
+    # two catalogue DOIs on page 1 is a correction notice or a cited companion,
     # and guessing between them would file the PDF under the wrong work.
     text_hits = {
         doi_to_stem[embedded]
@@ -235,12 +246,12 @@ def _resolve_stem(
         return text_hits.pop()
     if len(text_hits) > 1:
         print(
-            f"  ! {pdf_path.name}: first page names {len(text_hits)} manifest works "
+            f"  ! {pdf_path.name}: first page names {len(text_hits)} catalogue works "
             f"({', '.join(sorted(text_hits))}); not guessing",
             file=sys.stderr,
         )
 
-    # (b) filename stem matching the manifest directly.
+    # (b) filename stem matching a catalogue stem directly.
     if pdf_path.stem in stems:
         return pdf_path.stem
 
@@ -254,7 +265,7 @@ def _resolve_stem(
 
 def import_pdfs(
     import_dir: Path,
-    manifest_path: Path,
+    catalogue_path: Path,
     data_dir: Path,
     source: PdfSource,
     *,
@@ -262,10 +273,10 @@ def import_pdfs(
 ) -> tuple[_ImportSummary, int]:
     """Import PDFs from ``import_dir``; return ``(summary, still_missing)``.
 
-    ``still_missing`` is the number of manifest works without a non-missing
+    ``still_missing`` is the number of catalogue works without a non-missing
     provenance record after this import.
     """
-    entries = read_manifest(manifest_path)
+    entries = read_catalogue_entries(catalogue_path)
     by_stem = {e.stem: e for e in entries}
     stems = set(by_stem)
     doi_to_stem: dict[str, str] = {}
@@ -347,12 +358,12 @@ def build_subparser(
         help="Folder of PDFs a collaborator shipped back.",
     )
     parser.add_argument(
-        "--pdf-manifest",
+        "--catalogue",
         type=Path,
         default=None,
         help=(
-            "pdf-manifest.csv from the matching export "
-            "(default: <data-dir>/pdfs/export/pdf-manifest.csv)."
+            "Catalogue JSONL whose works the PDFs are matched against "
+            "(default: <data-dir>/catalogue-dedup/deduplicated.jsonl)."
         ),
     )
     parser.add_argument(
@@ -379,16 +390,14 @@ def build_subparser(
 def run(args: argparse.Namespace) -> None:
     data_dir: Path = args.data_dir
     source = _IMPORT_SOURCES[args.source]
-    manifest_path = require_input(
-        args.pdf_manifest
-        if args.pdf_manifest is not None
-        else pdf_manifest_path(data_dir),
-        flag="--pdf-manifest",
-        upstream="fulltext-retrieval-export",
+    catalogue = require_input(
+        args.catalogue if args.catalogue is not None else deduplicated_path(data_dir),
+        flag="--catalogue",
+        upstream="catalogue-dedup",
     )
     summary, still_missing = import_pdfs(
         args.import_dir,
-        manifest_path,
+        catalogue,
         data_dir,
         source,
         overwrite=args.overwrite,
@@ -415,8 +424,8 @@ def run(args: argparse.Namespace) -> None:
         )
     if summary.skipped_unmatched:
         print(
-            f"  Skipped (no manifest match): {len(summary.skipped_unmatched)} "
+            f"  Skipped (no catalogue match): {len(summary.skipped_unmatched)} "
             f"({', '.join(summary.skipped_unmatched)})",
             file=sys.stderr,
         )
-    print(f"  Manifest works still missing: {still_missing}", file=sys.stderr)
+    print(f"  Catalogue works still missing: {still_missing}", file=sys.stderr)

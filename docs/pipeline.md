@@ -73,13 +73,14 @@ Fills the persistent, work-keyed PDF store `data/pdfs/` from open-access
 sources for every work in the deduplicated catalogue; screening never
 gates it. The still-missing works go to collaborators through an
 export/import loop: `fulltext-retrieval-export` writes a handoff bundle
-of the still-missing works that pass a screening-score threshold, since
-collaborator time is the cost worth saving, and `fulltext-retrieval-import` brings the returned
-PDFs back into the store. Only the operator writes the store. See
+of the still-missing works, optionally narrowed by a screening-score
+threshold, since collaborator time is the cost worth saving, and
+`fulltext-retrieval-import` brings the returned PDFs back into the store,
+matching them against the whole catalogue. Only the operator writes the store. See
 [fulltext-retrieval.md](fulltext-retrieval.md) and
 [pdf-store.md](pdf-store.md).
 
-- **Consumes:** deduplicated catalogue; for the export, also the
+- **Consumes:** deduplicated catalogue; for a filtered export, also the
   screening verdicts
 - **Produces:** PDFs in `data/pdfs/`, one provenance record per work
 
@@ -201,7 +202,7 @@ flowchart TD
         DEDUP --> RETR[5 fulltext-retrieval<br/>OA links → Unpaywall]
         RETR --> PDFS[(data/pdfs/<br/>provenance.jsonl)]:::store
         RETR -->|still missing| EXPORT[fulltext-retrieval-export<br/>dois.txt · missing.ris<br/>no-doi.csv · pdf-manifest.csv]
-        SCREEN -->|score ≥ threshold| EXPORT
+        SCREEN -.->|optional: score ≥ threshold| EXPORT
         EXPORT --> H5([Collaborators: fetch PDFs<br/>through their own access,<br/>return the folder as is]):::human
         H5 --> IMPORT[fulltext-retrieval-import<br/>match by embedded DOI]
         IMPORT --> PDFS

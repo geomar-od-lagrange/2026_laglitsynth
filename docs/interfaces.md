@@ -22,14 +22,15 @@ directories instead of mixing results from two corpora.
 
 ### Resolution
 
-`corpus-assemble` and `fulltext-retrieval-export` join the deduplicated
-catalogue against the screening verdicts. Stages 6 and 7 read the corpus
+`corpus-assemble`, and `fulltext-retrieval-export` when given
+`--screening-threshold`, join the deduplicated catalogue against the
+screening verdicts. Stages 6 and 7 read the corpus
 works (stage 6 only those with a PDF); stage 8 joins the corpus works
 against stage 7's verdicts and keeps only `eligible=True` ones. Stage 5
 (`fulltext-retrieval`) joins nothing: it runs over the whole catalogue.
 
-The export's join walks the catalogue and **silently drops** any work with
-no screening verdict (`_active_works` does `if sv is None: continue`).
+The export's join (only with `--screening-threshold`) walks the catalogue
+and **silently drops** any work with no screening verdict (`_active_works` does `if sv is None: continue`).
 `corpus-assemble` exits instead, unless `--allow-unscreened` includes such
 works. Stage 8 exits on a verdict whose `work_id` is not in the corpus.
 
@@ -45,8 +46,10 @@ names another corpus, and stage 6 re-extracts a work whose corpus PDF
 changed.
 
 The screening threshold is a CLI flag (`--screening-threshold`, a `float`)
-on `fulltext-retrieval-export` and `corpus-assemble`; the export
-and the corpus record it in their metas. Screening itself applies no
+on `fulltext-retrieval-export`, where it is optional and narrows the list
+handed to collaborators, and on `corpus-assemble`, where it is required;
+the export and the corpus record it in their metas (`None` for an
+unfiltered export). Screening itself applies no
 threshold and records none.
 
 ## Artifact map
@@ -101,16 +104,18 @@ output.
 | `data/pdfs/provenance.jsonl` | [`PdfProvenanceRecord`](../src/laglitsynth/fulltext_retrieval/models.py) | Per-work store state: where its one PDF came from, or that it is still `missing` (whole-file, last-write-wins, single writer) |
 | `data/fulltext-retrieval/retrieval-meta.json` | [`RetrievalMeta`](../src/laglitsynth/fulltext_retrieval/models.py) | Per-invocation counts: `total_works`, `retrieved_count`, `missing_count`, and `by_source` (a `dict[str, int]` keyed by `PdfSource`) |
 | `data/pdfs/export/{dois.txt,missing.ris,no-doi.csv,pdf-manifest.csv,README.md}` | (plain text / CSV) | Export bundle for a collaborator: still-missing works as DOI links, RIS, the no-DOI worklist, the round-trip stem map, and the instructions; `pack-N/` subdirs hold the same for each slice when `--packs` is given |
-| `data/pdfs/export/export-meta.json` | [`ExportMeta`](../src/laglitsynth/fulltext_retrieval/models.py) | How the bundle was made: git commit, run-id, inputs, threshold, counts, pack sizes |
+| `data/pdfs/export/export-meta.json` | [`ExportMeta`](../src/laglitsynth/fulltext_retrieval/models.py) | How the bundle was made: git commit, run-id, inputs, threshold (`None` when unfiltered), counts, pack sizes |
 
 Stage 5 runs over every work in the `--catalogue`; it reads no screening
 verdicts. `fulltext-retrieval` fills the store automatically from OA URLs and Unpaywall,
 recording a [`PdfProvenanceRecord`](../src/laglitsynth/fulltext_retrieval/models.py)
 per work (`source` one of `oa` / `unpaywall` / `missing`).
-`fulltext-retrieval-export` lists the still-missing selection for a
-collaborator; `fulltext-retrieval-import` ingests their returned PDF folder
-(`source` `zotero-import` / `manual`), matched back to works through the
-export's `pdf-manifest.csv`.
+`fulltext-retrieval-export` lists the catalogue works still without a PDF
+for a collaborator, optionally narrowed by `--screening-threshold`;
+`fulltext-retrieval-import` ingests their returned PDF folder (`source`
+`zotero-desktop` / `browser` / `institutional` / `manual`), matched back to
+works through the whole deduplicated catalogue, so no prior export is
+needed.
 
 ### corpus-assemble *(exists)*
 
@@ -230,14 +235,14 @@ laglitsynth fulltext-retrieval \
 laglitsynth fulltext-retrieval-export \
     [--catalogue data/catalogue-dedup/deduplicated.jsonl] \
     [--screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl] \
-    [--run-id ID] [--screening-threshold 50] [--data-dir DIR] \
+    [--run-id ID] [--screening-threshold FLOAT] [--data-dir DIR] \
     [--export-dir data/pdfs/export/] [--packs 1]
 
 # Stage 5 — fulltext-retrieval-import (ingest a returned PDF folder)
 laglitsynth fulltext-retrieval-import \
     --import-dir PATH \
-    --source zotero-import|manual \
-    [--pdf-manifest data/pdfs/export/pdf-manifest.csv] \
+    --source zotero-desktop|browser|institutional|manual \
+    [--catalogue data/catalogue-dedup/deduplicated.jsonl] \
     [--data-dir DIR] [--overwrite]
 
 # corpus-assemble (selected works + PDF copies into data/corpus/)
@@ -375,11 +380,11 @@ laglitsynth fulltext-retrieval --email user@example.com
 
 # Diversify the still-missing margin via collaborators with library access:
 # export the gap, hand the bundle to a collaborator, import what they return.
-laglitsynth fulltext-retrieval-export
-# ... collaborator resolves data/pdfs/export/dois.txt through their own access ...
+laglitsynth fulltext-retrieval-export --screening-threshold 50
+# ... collaborator runs data/pdfs/export/missing.ris through Zotero desktop ...
 laglitsynth fulltext-retrieval-import \
     --import-dir ~/Downloads/returned-pdfs/ \
-    --source zotero-import
+    --source zotero-desktop
 
 # Assemble the corpus: the one place the screening threshold is applied.
 laglitsynth corpus-assemble --screening-threshold 50

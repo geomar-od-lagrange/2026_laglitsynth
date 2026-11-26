@@ -1,11 +1,14 @@
 """Export the still-missing selection as a collaborator handoff bundle.
 
-``fulltext-retrieval-export`` resolves the screening-gated active set, drops
-works that already have a non-``missing`` provenance record, and writes a
-bundle a collaborator can act on through their own institutional access:
+``fulltext-retrieval-export`` takes the catalogue, optionally narrowed by
+screening score (``--screening-threshold``), drops works that already have a
+non-``missing`` provenance record, and writes a bundle a collaborator can act
+on through their own institutional access:
 
 - ``dois.txt`` — one ``https://doi.org/<doi>`` per line (DOI-bearing works).
-- ``missing.ris`` — one RIS record per missing work (any reference manager).
+- ``missing.ris`` — one RIS record per missing work (any reference manager),
+  carrying the work's stem in ``AN`` and its DOI link (or landing page) in
+  ``UR``.
 - ``pdf-manifest.csv`` — the round-trip key import reads back: columns
   ``work_id``, ``stem``, ``doi``, ``title``, ``year``, ``expected_filename``
   (``<stem>.pdf``).
@@ -15,17 +18,19 @@ bundle a collaborator can act on through their own institutional access:
 - ``README.md`` — what the bundle is, what each file is for, and what to
   send back, filled in from a template with the work count and export date.
 - ``export-meta.json`` — how the bundle was made (``ExportMeta``): git
-  commit, run-id, input paths, threshold, counts, pack sizes.
+  commit, run-id, input paths, threshold (``None`` when unfiltered), counts,
+  pack sizes.
 
 With ``--packs N`` (N > 1) the top-level bundle stays complete and
 ``pack-1/`` … ``pack-N/`` each hold a full bundle for a contiguous,
-near-equal slice of it, for handing to N collaborators. Import reads the
-top-level ``pdf-manifest.csv``, so which pack a folder came back from does
-not matter.
+near-equal slice of it, for handing to N collaborators. Import matches
+against the whole catalogue, so which pack (or export) a folder came back
+from does not matter.
 
 ``--catalogue`` and ``--screening-verdicts`` default to their conventional
 paths under ``--data-dir``; the verdicts path takes the run-id from
-``data/manifest.json`` (``laglitsynth.layout``).
+``data/manifest.json`` (``laglitsynth.layout``). Verdicts are read only with
+``--screening-threshold``.
 """
 
 from __future__ import annotations
@@ -45,7 +50,13 @@ from laglitsynth.fulltext_retrieval.retrieve import _DOI_PREFIX_RE
 from laglitsynth.fulltext_retrieval.store import load_provenance
 from laglitsynth.ids import work_id_to_filename
 from laglitsynth.io import JsonlReadStats, read_jsonl, write_meta
-from laglitsynth.layout import PDF_MANIFEST_FILENAME, export_dir, resolve_screening_inputs
+from laglitsynth.layout import (
+    PDF_MANIFEST_FILENAME,
+    deduplicated_path,
+    export_dir,
+    require_input,
+    resolve_screening_inputs,
+)
 from laglitsynth.manifest import resolve_run_id
 from laglitsynth.models import RunMeta
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
@@ -91,12 +102,23 @@ def _journal_name(work: Work) -> str:
     return ""
 
 
+def _record_url(work: Work) -> str | None:
+    """The URL a reference manager opens: the DOI link, else the landing page."""
+    if work.doi is not None:
+        return _doi_url(work.doi)
+    if work.primary_location is not None:
+        return work.primary_location.landing_page_url
+    return None
+
+
 def _ris_record(work: Work) -> str:
     """Render one RIS record for a work.
 
-    Uses ``JOUR`` as the reference type. Missing fields are omitted (their
-    tags are simply not emitted), per "None means None". Each record ends
-    with the mandatory ``ER  -`` terminator.
+    Uses ``JOUR`` as the reference type, the journal in ``T2`` and the work's
+    stem in ``AN``, which survives an import into Zotero and names the file a
+    PDF found there is copied to. Missing fields are omitted (their tags are
+    simply not emitted), per "None means None". Each record ends with the
+    mandatory ``ER  -`` terminator.
     """
     lines: list[str] = ["TY  - JOUR"]
     if work.title is not None:
@@ -107,9 +129,13 @@ def _ris_record(work: Work) -> str:
         lines.append(f"PY  - {work.publication_year}")
     journal = _journal_name(work)
     if journal:
-        lines.append(f"JO  - {journal}")
+        lines.append(f"T2  - {journal}")
     if work.doi is not None:
         lines.append(f"DO  - {_DOI_PREFIX_RE.sub('', work.doi).strip()}")
+    url = _record_url(work)
+    if url:
+        lines.append(f"UR  - {url}")
+    lines.append(f"AN  - {work_id_to_filename(work.id)}")
     lines.append("ER  - ")
     return "\n".join(lines)
 
@@ -140,8 +166,10 @@ Exported {export_date}. {work_count} works still need a PDF{no_doi_clause}.
 ## Sending PDFs back
 
 Put the PDFs in one folder and send it back as it is. No renaming is needed:
-the import reads each PDF's DOI out of the file itself and matches it to the
-list. Any subset of the works is fine — send back whatever you found.
+the import reads each PDF's DOI out of the file itself and matches it to its
+work. A file named after the `AN` field of `missing.ris` (`W123.pdf`) is
+matched by its name. Any subset of the works is fine — send back whatever
+you found.
 
 If your reference manager can export a CSV with a `filename` and a `doi`
 column for the PDFs, drop it in the same folder; it is used as a fallback
@@ -306,21 +334,28 @@ def build_subparser(
         "--screening-verdicts",
         type=Path,
         default=None,
-        help="Stage 3 verdicts JSONL (default: <data-dir>/screening-abstracts/<run-id>/verdicts.jsonl).",
+        help=(
+            "Stage 3 verdicts JSONL (default: <data-dir>/screening-abstracts/<run-id>/"
+            "verdicts.jsonl). Needs --screening-threshold."
+        ),
     )
     parser.add_argument(
         "--run-id",
         default=None,
         help=(
             "Screening run to read verdicts from (default: the run_id in "
-            "<data-dir>/manifest.json). Unused when --screening-verdicts is given."
+            "<data-dir>/manifest.json). Unused when --screening-verdicts is given. "
+            "Needs --screening-threshold."
         ),
     )
     parser.add_argument(
         "--screening-threshold",
         type=float,
-        default=50.0,
-        help="Relevance score cutoff, 0-100 (default: 50)",
+        default=None,
+        help=(
+            "List only works whose screening score is None or at least this, "
+            "0-100 (default: no filter, every catalogue work without a PDF)."
+        ),
     )
     parser.add_argument(
         "--data-dir",
@@ -356,12 +391,26 @@ def run(args: argparse.Namespace) -> None:
     if packs < 1:
         raise SystemExit("--packs must be at least 1")
 
-    run_id: str | None = (
-        None if args.screening_verdicts is not None else resolve_run_id(data_dir, args.run_id)
-    )
-    catalogue, screening_verdicts = resolve_screening_inputs(
-        data_dir, args.catalogue, args.screening_verdicts, args.run_id
-    )
+    threshold: float | None = args.screening_threshold
+    run_id: str | None = None
+    screening_verdicts: Path | None = None
+    if threshold is None:
+        if args.screening_verdicts is not None or args.run_id is not None:
+            raise SystemExit(
+                "--screening-verdicts and --run-id select screening verdicts, "
+                "which are read only with --screening-threshold"
+            )
+        catalogue = require_input(
+            args.catalogue if args.catalogue is not None else deduplicated_path(data_dir),
+            flag="--catalogue",
+            upstream="catalogue-dedup",
+        )
+    else:
+        if args.screening_verdicts is None:
+            run_id = resolve_run_id(data_dir, args.run_id)
+        catalogue, screening_verdicts = resolve_screening_inputs(
+            data_dir, args.catalogue, args.screening_verdicts, args.run_id
+        )
 
     provenance = load_provenance(data_dir)
     have_pdf = {
@@ -370,7 +419,11 @@ def run(args: argparse.Namespace) -> None:
         if rec.source != PdfSource.missing
     }
 
-    active = list(_active_works(catalogue, screening_verdicts, args.screening_threshold))
+    active = (
+        list(read_jsonl(catalogue, Work))
+        if screening_verdicts is None or threshold is None
+        else list(_active_works(catalogue, screening_verdicts, threshold))
+    )
     selection = [w for w in active if w.id not in have_pdf]
 
     count = write_export(selection, bundle_dir)
@@ -394,8 +447,10 @@ def run(args: argparse.Namespace) -> None:
             git_commit=_git_commit(),
             run_id=run_id,
             catalogue=str(catalogue),
-            screening_verdicts=str(screening_verdicts),
-            screening_threshold=args.screening_threshold,
+            screening_verdicts=(
+                str(screening_verdicts) if screening_verdicts is not None else None
+            ),
+            screening_threshold=threshold,
             active_count=len(active),
             held_count=len(active) - count,
             exported_count=count,

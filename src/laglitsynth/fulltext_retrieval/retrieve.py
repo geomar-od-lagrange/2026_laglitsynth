@@ -50,7 +50,6 @@ _DOI_PREFIX_RE = re.compile(r"^https?://(dx\.)?doi\.org/", re.IGNORECASE)
 _SOURCE_LABELS: dict[PdfSource, str] = {
     PdfSource.oa: "Retrieved (OA)",
     PdfSource.unpaywall: "Retrieved (Unpaywall)",
-    PdfSource.zotero_import: "Imported (Zotero)",
     PdfSource.manual: "Imported (manual)",
     PdfSource.institutional: "Retrieved (institutional)",
     PdfSource.zotero_desktop: "Retrieved (Zotero desktop)",

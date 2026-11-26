@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from laglitsynth.catalogue_fetch.models import Location, Source, Work
+from laglitsynth.cli import main
 from laglitsynth.fulltext_retrieval.export import _active_works, run, split_packs, write_export
 from laglitsynth.fulltext_retrieval.models import (
     EXPORT_TOOL_NAME,
@@ -144,6 +145,38 @@ class TestWriteExport:
         # Never the literal string "None".
         assert "None" not in manifest[0]["title"]
         assert "None" not in manifest[0]["year"]
+
+
+class TestRisRecord:
+    def test_an_ur_and_t2_lines(self, tmp_path: Path) -> None:
+        work = _work_with_journal(
+            "https://openalex.org/W1", doi="https://doi.org/10.1/A", journal="J. Ocean"
+        )
+        write_export([work], tmp_path)
+        lines = (tmp_path / "missing.ris").read_text().splitlines()
+        assert "AN  - W1" in lines
+        assert "UR  - https://doi.org/10.1/A" in lines
+        assert "T2  - J. Ocean" in lines
+        assert not any(line.startswith("JO  -") for line in lines)
+        assert lines[-1] == "ER  - "
+
+    def test_ur_falls_back_to_landing_page_without_doi(self, tmp_path: Path) -> None:
+        work = _work_with_journal("https://openalex.org/W2", doi=None)
+        assert work.primary_location is not None
+        work.primary_location.landing_page_url = "https://example.org/article/2"
+        write_export([work], tmp_path)
+        lines = (tmp_path / "missing.ris").read_text().splitlines()
+        assert "UR  - https://example.org/article/2" in lines
+        assert "AN  - W2" in lines
+        assert not any(line.startswith("DO  -") for line in lines)
+
+    def test_no_ur_without_doi_or_landing_page(self, tmp_path: Path) -> None:
+        work = _make_work("https://openalex.org/W3", doi=None)
+        write_export([work], tmp_path)
+        lines = (tmp_path / "missing.ris").read_text().splitlines()
+        assert not any(line.startswith("UR  -") for line in lines)
+        assert not any(line.startswith("T2  -") for line in lines)
+        assert "AN  - W3" in lines
 
 
 class TestNoDoiCsv:
@@ -288,6 +321,78 @@ class TestRun:
         ids = {r["work_id"] for r in manifest}
         # Only W1: W2 has a PDF, W3 is below threshold.
         assert ids == {"https://openalex.org/W1"}
+
+
+class TestUnfiltered:
+    """Without --screening-threshold the bundle is the whole catalogue's gap."""
+
+    def test_every_catalogue_work_without_a_pdf_is_listed(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "data"
+        works = [
+            _work_with_journal("https://openalex.org/W1", doi="10.1/a"),  # unscreened
+            _work_with_journal("https://openalex.org/W2", doi="10.1/b"),  # held
+            _work_with_journal("https://openalex.org/W3", doi=None),  # missing record
+        ]
+        catalogue_path = deduplicated_path(data_dir)
+        catalogue_path.parent.mkdir(parents=True)
+        _write_works_jsonl(catalogue_path, works)
+        write_provenance(
+            data_dir,
+            {
+                "https://openalex.org/W2": PdfProvenanceRecord(
+                    work_id="https://openalex.org/W2",
+                    stem="W2",
+                    doi="10.1/b",
+                    source=PdfSource.zotero_desktop,
+                    source_url=None,
+                    pdf_path="pdfs/W2.pdf",
+                    content_sha256="x",
+                    obtained_at="2026-01-01T00:00:00+00:00",
+                ),
+                "https://openalex.org/W3": PdfProvenanceRecord(
+                    work_id="https://openalex.org/W3",
+                    stem="W3",
+                    doi=None,
+                    source=PdfSource.missing,
+                    source_url=None,
+                    pdf_path=None,
+                    content_sha256=None,
+                    obtained_at="2026-01-01T00:00:00+00:00",
+                ),
+            },
+        )
+        # No manifest and no verdicts: the unfiltered export needs neither.
+
+        main(["fulltext-retrieval-export", "--data-dir", str(data_dir)])
+
+        rows = _read_manifest(export_dir(data_dir) / PDF_MANIFEST_FILENAME)
+        assert [r["work_id"] for r in rows] == [
+            "https://openalex.org/W1",
+            "https://openalex.org/W3",
+        ]
+        meta = ExportMeta.model_validate_json(
+            (export_dir(data_dir) / "export-meta.json").read_text()
+        )
+        assert meta.screening_threshold is None
+        assert meta.screening_verdicts is None
+        assert meta.run_id is None
+        assert meta.active_count == 3
+        assert meta.held_count == 1
+        assert meta.exported_count == 2
+
+    def test_verdict_flags_without_threshold_exit(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "data"
+        with pytest.raises(SystemExit, match="--screening-threshold"):
+            main(
+                [
+                    "fulltext-retrieval-export",
+                    "--data-dir",
+                    str(data_dir),
+                    "--run-id",
+                    TEST_RUN_ID,
+                ]
+            )
+        assert not export_dir(data_dir).exists()
 
 
 class TestConventionalPaths:

@@ -95,11 +95,11 @@ class TestUpsertLastWriteWins:
         upsert_provenance(
             tmp_path,
             records,
-            _record(source=PdfSource.zotero_import),
+            _record(source=PdfSource.zotero_desktop),
         )
         loaded = load_provenance(tmp_path)
         assert len(loaded) == 1
-        assert loaded["https://openalex.org/W1"].source == PdfSource.zotero_import
+        assert loaded["https://openalex.org/W1"].source == PdfSource.zotero_desktop
 
 
 class TestMissingRecordRoundTrips:

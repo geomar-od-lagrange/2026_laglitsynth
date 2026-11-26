@@ -43,7 +43,7 @@ frequencies) happens before the corpus.
    procedure on their own network, in this order: Zotero desktop
    retrieval on an RIS import of the export, then the Zotero browser
    connector on doi.org tabs, then clicking PDF links by hand. See
-   [pdf-store.md](../docs/pdf-store.md).
+   [pdf-store.md](../../docs/pdf-store.md).
    The export therefore includes an RIS file carrying the work id. There
    is no paid-access fetcher in the CLI, and publisher scraping stays out
    of scope. Every PDF obtained off the central machine comes back through the
@@ -85,7 +85,7 @@ therefore never destroys analysis work, and stale outputs are detectable.
    verdict. It already joins verdicts at read time; what is new is
    refusing verdicts from a different corpus or eligibility criteria. It
    gains a free-text `rationale` field with verbatim context for RQ1.3.
-   This reverses [codebook.md](../docs/codebook.md), where context snippets
+   This reverses [codebook.md](../../docs/codebook.md), where context snippets
    replaced a rationale section.
 4. **synthesis**: one step, replacing the separate quantitative, thematic
    and narrative stages 10–12. Whether the RQ1.3 rationale grouping keeps
@@ -112,17 +112,17 @@ its output. The screening and eligibility XLSX exports are dropped; the
 screening threshold is checked ad hoc on `verdicts.jsonl`. `--pass-all`,
 the `unscreened` sentinel and the retrieval threshold go once retrieval no
 longer needs verdicts. Both feedback loops and the citation-network and
-author-review extensions are removed from [pipeline.md](../docs/pipeline.md):
+author-review extensions are removed from [pipeline.md](../../docs/pipeline.md):
 refining the search, criteria, codebook or vocabulary is ordinary editing
 of the configs followed by a re-run.
 
-[vocabulary.md](../docs/vocabulary.md) (keyword screening, not yet
+[vocabulary.md](../../docs/vocabulary.md) (keyword screening, not yet
 implemented) stays, loses its dependence on adjudication, and is refined
-once the first codebook results exist. [glossary.md](../docs/glossary.md)
+once the first codebook results exist. [glossary.md](../../docs/glossary.md)
 stays the single terminology reference. It redefines *corpus* (now
 assembled before eligibility and including works without a PDF) and drops
 the PRISMA terms the pipeline no longer uses. The
-[roadmap](roadmap.md) gets an entry for this plan, and its items that this
+[roadmap](../roadmap.md) gets an entry for this plan, and its items that this
 plan contradicts are updated.
 
 ## Left to the implementation plan

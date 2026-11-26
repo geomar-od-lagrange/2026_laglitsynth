@@ -10,8 +10,7 @@ TOOL_NAME = "laglitsynth.fulltext_retrieval.retrieve"
 class PdfSource(str, Enum):
     oa = "oa"  # OA URL: OpenAlex location, Semantic Scholar or arXiv
     unpaywall = "unpaywall"  # Unpaywall best_oa_location
-    zotero_import = "zotero-import"  # ingested from a Zotero-exported folder
-    manual = "manual"  # ingested from a plain folder drop
+    manual = "manual"  # imported from a folder obtained any other way
     institutional = "institutional"  # scripted fetch over an institution's network
     zotero_desktop = "zotero-desktop"  # Zotero desktop "Find Available PDF"
     browser = "browser"  # browser session: Zotero connector or a clicked PDF link
@@ -48,11 +47,11 @@ class ExportMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run: RunMeta
     git_commit: str | None  # None outside a git checkout
-    run_id: str | None  # None when --screening-verdicts was passed explicitly
+    run_id: str | None  # None without a threshold or with explicit --screening-verdicts
     catalogue: str
-    screening_verdicts: str
-    screening_threshold: float
-    active_count: int  # works in scope after the screening join
+    screening_verdicts: str | None  # None without --screening-threshold
+    screening_threshold: float | None  # None: every catalogue work is in scope
+    active_count: int  # works in scope: the catalogue, or what the screening join keeps
     held_count: int  # of those, already holding a PDF
     exported_count: int  # active minus held: what the bundle lists
     with_doi_count: int

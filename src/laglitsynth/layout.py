@@ -66,10 +66,6 @@ def export_dir(data_dir: Path) -> Path:
     return data_dir / EXPORT_SUBDIR
 
 
-def pdf_manifest_path(data_dir: Path) -> Path:
-    return export_dir(data_dir) / PDF_MANIFEST_FILENAME
-
-
 def require_input(path: Path, *, flag: str, upstream: str) -> Path:
     """Return ``path`` if it exists; else exit naming the stage that writes it.
 

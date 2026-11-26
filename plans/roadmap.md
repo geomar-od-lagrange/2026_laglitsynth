@@ -100,7 +100,7 @@ Update this file when a plan is written, implemented, or archived.
   injected `httpx.Client` (tested via `httpx.MockTransport`, no network);
   `--email`/`--api-key` with `.env` fallback, `Retry-After` honoured with a
   bounded backoff, `--skip-existing` re-processes only gaps. Removed again
-  by the [pipeline restructure](pipeline-restructure.md).
+  by the [pipeline restructure](done/pipeline-restructure.md).
 
 - [Diversifying full-text retrieval](done/fulltext-retrieval-diversified.md) —
   stage 5 now maintains a persistent, work-keyed PDF store at
@@ -215,19 +215,24 @@ Update this file when a plan is written, implemented, or archived.
   Criteria scope wording is
   [issue #26](https://github.com/geomar-od-lagrange/2026_laglitsynth/issues/26).
 
+- [Pipeline restructure](done/pipeline-restructure.md) — mission statement:
+  acquire, then analyse, meeting at a self-contained corpus
+  ([corpus.md](../docs/corpus.md)); local LLMs, adjudication, abstract
+  lookup and the screening/eligibility XLSX exports are gone. Implemented
+  by [pipeline-restructure-implementation.md](done/pipeline-restructure-implementation.md):
+  one OpenAI-compatible LLM endpoint (decisions for stages 3 and 7, chat
+  for stage 8), `corpus-assemble` as the only place the screening threshold
+  applies, stages 6–8 reading only `data/corpus/` and checking its
+  `corpus_id`, and the collaborator procedure of
+  [pdf-store.md](../docs/pdf-store.md) in the CLI: the export's screening
+  filter is optional and its RIS carries `AN`, `UR` and `T2`, and import
+  matches against the whole catalogue with `--source zotero-desktop |
+  browser | institutional | manual`.
+
 ## In flight
 
-- [Pipeline restructure](pipeline-restructure.md) — mission statement:
-  acquire, then analyse, meeting at a self-contained corpus; local LLMs,
-  adjudication, abstract lookup and the XLSX exports go. The PDF store it
-  builds on is in place as the private `data/` submodule
-  ([pdf-store.md](../docs/pdf-store.md)). Implemented by
-  [pipeline-restructure-implementation.md](pipeline-restructure-implementation.md):
-  eight commits in six slices, from deletions through one OpenAI-compatible
-  LLM endpoint, `corpus-assemble` and stages 6–8 on the corpus, to the docs
-  and, last, the RIS export and catalogue-wide import.
-- [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. Its Ollama parts are obsolete: the [pipeline restructure](pipeline-restructure.md) removed local LLMs, and the runbook's LLM section is now a provider-neutral endpoint section. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate is now planned as the [run manifest](done/run-manifest.md).
-- [Cross-machine + storage convention](../docs/cross-machine.md) — the third follow-up candidate from [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) landed as an authoritative doc: project = working-directory boundary, run-from-root + fixed-`data/` path contract, per-machine `.env`, and the safe sync direction per `data/` subdir (bulk PDFs/TEI union, per-run-id gate outputs authoritative-side-wins, deduplicated spine rsynced once read-only). The Zotero-import open question from [fulltext-retrieval-diversified.md](done/fulltext-retrieval-diversified.md) is withdrawn: import reads identifiers out of the PDF and matches them against `pdf-manifest.csv`, so Zotero's filename convention does not enter the design. The probe script and its note are removed; the reasoning is recorded in [contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md).
+- [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. Its Ollama parts are obsolete: the [pipeline restructure](done/pipeline-restructure.md) removed local LLMs, and the runbook's LLM section is now a provider-neutral endpoint section. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate is now planned as the [run manifest](done/run-manifest.md).
+- [Cross-machine + storage convention](../docs/cross-machine.md) — the third follow-up candidate from [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) landed as an authoritative doc: project = working-directory boundary, run-from-root + fixed-`data/` path contract, per-machine `.env`, and the safe sync direction per `data/` subdir (bulk PDFs/TEI union, per-run-id gate outputs authoritative-side-wins, deduplicated spine rsynced once read-only). The Zotero-import open question from [fulltext-retrieval-diversified.md](done/fulltext-retrieval-diversified.md) is withdrawn: import reads identifiers out of the PDF and matches them against the catalogue, so Zotero's filename convention does not enter the design. The probe script and its note are removed; the reasoning is recorded in [contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md).
 
 ## Queued — ready to plan
 
@@ -236,7 +241,7 @@ Update this file when a plan is written, implemented, or archived.
   tuned against the measured publisher-PDF corpus rather than an invented
   threshold.
 - Retrieval over every OpenAlex location of a work plus Semantic Scholar
-  and arXiv (step 2 of the [pipeline restructure](pipeline-restructure.md)).
+  and arXiv (step 2 of the [pipeline restructure](done/pipeline-restructure.md)).
   `fulltext-retrieval` tries only OpenAlex's best open-access URL and
   Unpaywall; the store already holds PDFs from the other routes, fetched by
   one-off scripts ([pdf-store.md](../docs/pdf-store.md)), so this does not
@@ -285,7 +290,7 @@ dropped and why, so the same idea is not re-proposed from the gap it leaves.
   `--abstracts` overlay on `screening-abstracts` that filled a null
   `Work.abstract` from the sidecar at read time. Backfilled abstracts were
   tested against screening and gave no additional benefit, so the overlay
-  was not built, and the [pipeline restructure](pipeline-restructure.md)
+  was not built, and the [pipeline restructure](done/pipeline-restructure.md)
   deleted the stage. Works without an abstract get a `no-abstract`
   sentinel, which `corpus-assemble` includes so stage 7 judges them on the
   full text.
@@ -293,21 +298,21 @@ dropped and why, so the same idea is not re-proposed from the gap it leaves.
   `validated.jsonl` unchanged died with the stage 4 pass-through it was
   modelled on. Reviewer corrections arrive through the stage 8 XLSX workbook
   instead; stage 9 itself is dropped by the
-  [pipeline restructure](pipeline-restructure.md).
+  [pipeline restructure](done/pipeline-restructure.md).
 - **Multi-run consensus.** Running the LLM stages several times and
   combining the results was planned as an optional robustness check. The
-  [pipeline restructure](pipeline-restructure.md) drops consensus runs, and
+  [pipeline restructure](done/pipeline-restructure.md) drops consensus runs, and
   the plan is deleted.
 - **Stages 10–12 as three stages.** Quantitative, thematic and narrative
   synthesis were specified as separate stages with their own artifacts
   (`statistics.json`, `rationale-taxonomy.json`, `synthesis-draft.md`).
-  The [pipeline restructure](pipeline-restructure.md) replaces them with
+  The [pipeline restructure](done/pipeline-restructure.md) replaces them with
   one planned synthesis step (queued above), whose outputs are designed
   with it.
 - **Shared export-for-human-review helper.** The open question was
   whether the review exports of stages 3, 4, 7 and 9 should share
   scaffolding. Stage 4 and stage 9 are gone, and the
-  [pipeline restructure](pipeline-restructure.md) dropped the screening and
+  [pipeline restructure](done/pipeline-restructure.md) dropped the screening and
   eligibility XLSX exports: verdicts are inspected on their
   `verdicts.jsonl`. `extraction-codebook-export` is the only workbook left,
   so there is nothing to share.

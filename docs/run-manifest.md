@@ -35,8 +35,8 @@ paths are spelled out. Under `<data-dir>/`:
 | `catalogue-dedup` | `catalogue-fetch/*.jsonl` | `catalogue-dedup/deduplicated.jsonl` |
 | `screening-abstracts` | `catalogue-dedup/deduplicated.jsonl` | `screening-abstracts/<run-id>/verdicts.jsonl` |
 | `fulltext-retrieval` | the catalogue | `pdfs/` |
-| `fulltext-retrieval-export` | the catalogue, `screening-abstracts/<run-id>/verdicts.jsonl` | `pdfs/export/` |
-| `fulltext-retrieval-import` | `pdfs/export/pdf-manifest.csv` | `pdfs/` |
+| `fulltext-retrieval-export` | the catalogue, and with `--screening-threshold` `screening-abstracts/<run-id>/verdicts.jsonl` | `pdfs/export/` |
+| `fulltext-retrieval-import` | the catalogue | `pdfs/` |
 | `corpus-assemble` | the catalogue, `screening-abstracts/<run-id>/verdicts.jsonl` and `screening-meta.json`, `pdfs/` | `corpus/` |
 | `fulltext-extraction` | `corpus/` | `fulltext-extraction/extraction.jsonl` |
 | `fulltext-eligibility` | `corpus/`, `fulltext-extraction/extraction.jsonl` and `extraction-meta.json` | `fulltext-eligibility/<run-id>/verdicts.jsonl` |

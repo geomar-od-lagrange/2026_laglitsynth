@@ -11,13 +11,14 @@ separate concern handled by [fulltext-extraction.md](fulltext-extraction.md).
 
 `fulltext-retrieval` works on every work in `--catalogue` (default: the
 deduplicated catalogue); it reads no screening verdicts, so screening and
-retrieval run in either order. The export, below, selects by screening
-score: it joins the catalogue against stage 3's
-verdict sidecar at a caller-supplied `--screening-threshold`, keeping works
-at or above the threshold and works whose score is `None` (the sentinel
-reasons). That join **silently drops** any work absent from the screening
-verdicts file (`_active_works` does `if sv is None: continue`), so confirm
-the verdicts file covers the catalogue before an export.
+retrieval run in either order. The export, below, lists every catalogue
+work without a PDF. With `--screening-threshold` it narrows that list by
+screening score, since collaborator time is the cost worth saving: it joins
+the catalogue against stage 3's verdict sidecar, keeping works at or above
+the threshold and works whose score is `None` (the sentinel reasons). That
+join **silently drops** any work absent from the screening verdicts file
+(`_active_works` does `if sv is None: continue`), so confirm the verdicts
+file covers the catalogue before a filtered export.
 
 ## The persistent PDF store
 
@@ -55,8 +56,7 @@ one PDF came from or that it is still missing. Each line is a
 class PdfSource(str, Enum):
     oa = "oa"                        # OA URL: OpenAlex location, Semantic Scholar or arXiv
     unpaywall = "unpaywall"          # Unpaywall best_oa_location
-    zotero_import = "zotero-import"  # ingested from a Zotero-exported folder
-    manual = "manual"                # ingested from a plain folder drop
+    manual = "manual"                # imported from a folder obtained any other way
     institutional = "institutional"  # scripted fetch over an institution's network
     zotero_desktop = "zotero-desktop"  # Zotero desktop "Find Available PDF"
     browser = "browser"              # browser session: Zotero connector or a clicked PDF link
@@ -78,7 +78,7 @@ class PdfProvenanceRecord(BaseModel):
 The store only cares whether a PDF exists, so `missing` collapses both "no
 source was ever found" and "a download failed." Provenance is work-keyed and
 last-write-wins per work: re-running OA retrieval and then importing a Zotero
-PDF for the same work leaves one record with `source = zotero-import`.
+PDF for the same work leaves one record with `source = zotero-desktop`.
 
 The store is single-writer by design. One operator drives the pipeline and
 is the only process that writes `data/pdfs/`, so `provenance.jsonl` is a
@@ -140,20 +140,26 @@ diversifies retrieval without any scraping.
 
 ### `fulltext-retrieval-export`
 
-Resolves the active selection, subtracts works that already have a
-non-`missing` provenance record, and writes a handoff bundle into
-`--export-dir` (default `data/pdfs/export/`):
+Takes the catalogue (`--catalogue`, default the deduplicated catalogue),
+narrowed by screening score when `--screening-threshold` is given
+(`--screening-verdicts` and `--run-id` pick the verdicts and are refused
+without it), subtracts works that already have a non-`missing` provenance
+record, and writes a handoff bundle into `--export-dir` (default
+`data/pdfs/export/`):
 
 - `dois.txt` — one `https://doi.org/<doi>` per line, for works that have a
   DOI. This is what a collaborator pastes into Zotero's "Add Item by
   Identifier" or a browser.
-- `missing.ris` — one RIS record per missing work (title, authors, year,
-  journal, DOI), for import into any reference manager.
-- `pdf-manifest.csv` — the round-trip key, columns `work_id`, `stem`, `doi`,
-  `title`, `year`, `expected_filename` (`<stem>.pdf`). Import reads
-  `work_id`, `stem`, and `doi` to match returned PDFs back to works; it is
-  written by us, so matching never depends on what a collaborator's tool
-  names a file. `title` and `year` are there so a person can read the list.
+- `missing.ris` — one RIS record per missing work, for import into any
+  reference manager: `TY  - JOUR`, `TI` (title), `AU` (authors), `PY`
+  (year), `T2` (journal), `DO` (DOI), `UR` (`https://doi.org/<doi>`, or
+  `primary_location.landing_page_url` for a work without a DOI) and `AN`
+  (the work's stem). Zotero keeps `AN` on the item, so a PDF it finds is
+  copied out as `<AN>.pdf` (see [pdf-store.md](pdf-store.md#zotero-desktop)).
+  Tags without a value are left out.
+- `pdf-manifest.csv` — the list for people, columns `work_id`, `stem`,
+  `doi`, `title`, `year`, `expected_filename` (`<stem>.pdf`). Import does
+  not read it.
 - `no-doi.csv` — the works with no DOI, with `work_id`, `stem`, `title`,
   `year`, and `expected_filename`. These are the ones a collaborator has to
   search for by title. Always written, header row included, so its absence
@@ -163,8 +169,9 @@ non-`missing` provenance record, and writes a handoff bundle into
   the bundle, because the bundle travels and the repo does not.
 - `export-meta.json` — how the bundle was made, as an
   [`ExportMeta`](../src/laglitsynth/fulltext_retrieval/models.py): git
-  commit, run-id (None when `--screening-verdicts` was given explicitly),
-  the resolved catalogue and verdicts paths, threshold, counts (active,
+  commit, run-id (None without a threshold or when `--screening-verdicts`
+  was given explicitly), the resolved catalogue and verdicts paths (verdicts
+  None when unfiltered), threshold (None when unfiltered), counts (active,
   already held, exported, with DOI), and pack sizes. This is what makes a
   bundle on a shared drive traceable back to the run that produced it.
 
@@ -176,39 +183,43 @@ resolve.
 under the bundle directory, contiguous slices of near-equal size, each a
 complete bundle of its own whose README says which pack it is. One pack
 goes to each collaborator. The top-level bundle stays complete, and import
-reads the top-level `pdf-manifest.csv`, so which pack a folder came back
-from does not matter.
+matches against the whole catalogue, so which pack a folder came back from
+does not matter.
 
 The runner exports the gap when `EXPORT_GAP=1`, straight after stage 5. With
 `STOP_AFTER_STAGE=5 EXPORT_GAP=1`, one invocation of
 [run-pipeline.sh](../scripts/run-pipeline.sh) fetches the catalogue, screens
 it, takes what open access gives, and writes the bundle for everything still
-missing. `EXPORT_GAP` is an environment knob only: the export rewrites
-`pdf-manifest.csv`, which a collaborator may be holding, so it is a one-shot
-action rather than a property of the review config.
+missing; the runner passes `SCREENING_THRESHOLD` as
+`--screening-threshold`. `EXPORT_GAP` is an environment knob only: the
+export rewrites the bundle, which a collaborator may be holding, so it is a
+one-shot action rather than a property of the review config.
 
 ### `fulltext-retrieval-import`
 
 Ingests a returned folder of PDFs into `data/pdfs/`. Takes `--import-dir`
-(the folder a collaborator shipped back) and `--source`
-(`zotero-import` | `manual`); `--pdf-manifest` defaults to the
-`pdf-manifest.csv` of the last export under `--data-dir`. For each PDF it
-resolves a target stem, never guessed, in this order:
+(the folder a collaborator shipped back) and `--source`, the route the
+folder's PDFs came by: `zotero-desktop`, `browser`, `institutional` or
+`manual` (see [pdf-store.md](pdf-store.md#where-the-pdfs-come-from)).
+Returned PDFs are matched against the whole `--catalogue` (default: the
+deduplicated catalogue), not against the last export, so a folder sent
+without a prior export, or a PDF for a work no export listed, still lands.
+For each PDF it resolves a target stem, never guessed, in this order:
 
-1. a self-identifying DOI that appears in the manifest's DOI map, gathered
+1. a self-identifying DOI that appears in the catalogue's DOI map, gathered
    from the Info dictionary, XMP metadata, link annotations on the first two
    pages, and first-page text. Every candidate is collected and the first
-   metadata candidate present in the manifest wins, because a publisher's
+   metadata candidate present in the catalogue wins, because a publisher's
    Info dictionary often carries the journal's DOI rather than the article's.
-   First-page text is accepted only when it names exactly one manifest work:
-   a correction notice or a cited companion paper puts two on page 1, and
-   import reports that and skips rather than guess. Candidates never come
-   from the reference list: in a topically clustered corpus a bibliography is
-   likely to cite other works in the same manifest. (Zotero's "Export Files"
-   names attachments by item title, so filenames cannot be assumed to carry
-   the DOI.)
-2. a filename whose stem matches the manifest directly (the plain-folder-drop
-   case, where the collaborator was asked to name files `<stem>.pdf`);
+   First-page text is accepted only when it names exactly one catalogue
+   work: a correction notice or a cited companion paper puts two on page 1,
+   and import reports that and skips rather than guess. Candidates never come
+   from the reference list: in a topically clustered catalogue a bibliography
+   is likely to cite other works in it. (Zotero's "Export Files" names
+   attachments by item title, so filenames cannot be assumed to carry the
+   DOI.)
+2. a filename whose stem is a catalogue stem (`<stem>.pdf`, the name the
+   RIS `AN` field gives, or a bare folder named that way);
 3. a sidecar `*.csv`/`*.json` the collaborator returned that maps their
    filenames to DOIs.
 
@@ -217,15 +228,15 @@ Each candidate is validated by magic bytes, then deduplicated by
 differs from one already stored for that work is skipped (the existing PDF
 wins) unless `--overwrite` is passed. Matched, new PDFs are copied in and
 their provenance is upserted with the given `--source`. A PDF that resolves
-to no manifest stem, or is not a real PDF, is reported and skipped. Import
-prints a summary — matched and copied, skipped, and how many manifest works
-are still missing after this import. The unmatched residual is a matching
-problem, not the collaborator's: they are never asked to name anything. A
+to no catalogue stem, or is not a real PDF, is reported and skipped. Import
+prints a summary — matched and copied, skipped, and how many catalogue works
+are still without a PDF after this import. The unmatched residual is a
+matching problem, not the collaborator's: they are never asked to name anything. A
 title-matching fallback for PDFs that embed no DOI is the open follow-up —
 [contributor-pdf-matching.md](explorations/contributor-pdf-matching.md)
 records the measurement behind the current matching and what the fallback
-needs. Until it lands, renaming a residual file to its `expected_filename`
-and importing again files it.
+needs. Until it lands, renaming a residual file to `<stem>.pdf` and
+importing again files it.
 
 ## Collaboration model
 

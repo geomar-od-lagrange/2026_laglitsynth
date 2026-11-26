@@ -1,7 +1,7 @@
 # Usability — documentation fixes
 
 Status: the Ollama parts of this plan are obsolete. The
-[pipeline restructure](pipeline-restructure.md) removed local LLMs: every
+[pipeline restructure](done/pipeline-restructure.md) removed local LLMs: every
 LLM stage calls one OpenAI-compatible endpoint, `bake-model`, `num_ctx`
 and `OLLAMA_NUM_PARALLEL` are gone, and `docs/llm-concurrency.md` was
 deleted (concurrency is described in
