@@ -265,6 +265,26 @@ def test_chat_sends_model_messages_and_json_mode_only() -> None:
 
 
 @pytest.mark.parametrize(
+    ("content", "finish_reason", "raw"),
+    [
+        (None, "stop", None),
+        ("", "stop", None),
+        ("  \n", "stop", "  \n"),
+        ("", "length", None),
+        ('{"a": ', "length", '{"a": '),
+        ('{"a": 1}', "content_filter", '{"a": 1}'),
+    ],
+)
+def test_chat_empty_or_unfinished_answer_is_parse_failure(
+    content: str | None, finish_reason: str, raw: str | None
+) -> None:
+    with pytest.raises(LlmFailure) as info:
+        _chat([_mock_openai_response(content, finish_reason)])
+    assert info.value.reason == "llm-parse-failure"
+    assert info.value.raw_response == raw
+
+
+@pytest.mark.parametrize(
     "exc",
     [
         APITimeoutError(request=MagicMock()),

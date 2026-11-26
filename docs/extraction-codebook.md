@@ -103,7 +103,8 @@ non-string value is stringified. `None` passes through unchanged. This
 flattens common type mismatches rather than failing the whole record.
 
 `raw_response` carries the LLM's message text before parsing. Set on
-successful records, on `llm-parse-failure` sentinels (the message) and on
+successful records, on `llm-parse-failure` sentinels (the message, `None`
+when it was empty) and on
 `llm-rejected` sentinels (the error body) so an operator can see what the
 endpoint actually said; `None` on `tei-parse-failure` and `llm-timeout`.
 
@@ -177,7 +178,7 @@ All sentinels set every content field `None`.
 | Reason | Trigger |
 |---|---|
 | `tei-parse-failure` | `sections()` raises `lxml.etree.XMLSyntaxError`, or renders empty. A paper with a PDF but unreadable TEI is an operator-visible bug, unlike a plain absence of full text (which is silently skipped). |
-| `llm-parse-failure` | The LLM response did not validate against the payload schema. |
+| `llm-parse-failure` | The LLM response was empty, stopped with a `finish_reason` other than `stop` (for example `length` when reasoning used up the token budget, or `content_filter`), or did not validate against the payload schema. `raw_response` carries the message, `None` when it was empty. |
 | `llm-timeout` | The OpenAI client raised `APITimeoutError`, `APIConnectionError`, `RateLimitError` or `InternalServerError` after all retries exhausted. The client is constructed with `timeout=600s` and `max_retries=3` so a single hang in a long extraction does not kill the stage. |
 | `llm-rejected` | The endpoint refused the request (`BadRequestError`, or another 4xx that is not fatal), for example a full text longer than the model's context. `raw_response` carries the error body. |
 

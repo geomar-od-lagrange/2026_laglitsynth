@@ -82,12 +82,13 @@ def _write_extractions_jsonl(path: Path, records: list[ExtractedDocument]) -> No
             f.write(r.model_dump_json() + "\n")
 
 
-def _mock_openai_response(content: str) -> MagicMock:
+def _mock_openai_response(content: str | None, finish_reason: str = "stop") -> MagicMock:
     """Build a mock OpenAI chat completion response returning ``content``."""
     message = MagicMock()
     message.content = content
     choice = MagicMock()
     choice.message = message
+    choice.finish_reason = finish_reason
     response = MagicMock()
     response.choices = [choice]
     return response

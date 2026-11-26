@@ -254,6 +254,21 @@ class TestExtractCodebook:
         assert record.reason == "llm-parse-failure"  # type: ignore[attr-defined]
         assert record.raw_response == content  # type: ignore[attr-defined]
 
+    @pytest.mark.parametrize(
+        ("content", "finish_reason"), [("", "stop"), (None, "length"), ("{}", "length")]
+    )
+    def test_empty_or_unfinished_answer_yields_llm_parse_failure(
+        self, ctx: CodebookContext, content: str | None, finish_reason: str
+    ) -> None:
+        client = MagicMock()
+        client.chat.completions.create.return_value = _mock_openai_response(
+            content, finish_reason
+        )
+        record = _call_extract(ctx, client=client)
+        assert record.reason == "llm-parse-failure"  # type: ignore[attr-defined]
+        for name in ctx.payload_field_names:
+            assert getattr(record, name) is None
+
 
 # --- extract_works cascade ---
 

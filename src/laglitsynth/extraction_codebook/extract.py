@@ -128,8 +128,9 @@ def extract_codebook(
     """Call the LLM, validate the payload, compose the full record.
 
     A per-work endpoint failure gives the ``llm-timeout`` or
-    ``llm-rejected`` sentinel; a JSON parse error or ``ValidationError``
-    gives ``llm-parse-failure``. Every sentinel has all content fields
+    ``llm-rejected`` sentinel; an empty or unfinished answer (see
+    ``chat_json``), a JSON parse error or a ``ValidationError`` gives
+    ``llm-parse-failure``. Every sentinel has all content fields
     ``None``.
     """
     prompt = build_user_message(user_text)

@@ -11,7 +11,8 @@ Errors fall in three classes. Transient errors (transport failures, 5xx,
 fail every work the same way (401, 402, 403, 404) exit naming the URL. Any
 other rejection becomes the ``llm-rejected`` sentinel carrying the error
 body, and an unparseable 2xx becomes ``llm-parse-failure`` with the body
-attached.
+attached; so does a chat completion with an empty message or a
+``finish_reason`` other than ``stop``.
 """
 
 from __future__ import annotations
@@ -194,8 +195,10 @@ def chat_json(
     """Send one JSON-mode chat completion and return the message content.
 
     Raises ``LlmFailure`` for per-work failures (``llm-timeout``,
-    ``llm-rejected``) and ``SystemExit`` naming the base URL for errors
-    that would fail every work. ``reasoning_effort`` is sent only when the
+    ``llm-rejected``, and ``llm-parse-failure`` for an empty message or a
+    ``finish_reason`` other than ``stop``, such as ``length`` when reasoning
+    used up the token budget or ``content_filter``) and ``SystemExit``
+    naming the base URL for errors that would fail every work. ``reasoning_effort`` is sent only when the
     endpoint sets one; otherwise the provider default applies.
     """
     extra: dict[str, Any] = {}
@@ -224,7 +227,15 @@ def chat_json(
             raise _fatal(endpoint.base_url, exc.status_code, exc.response.text) from exc
         logger.warning("LLM rejected request for %s: %s", work_id, exc)
         raise LlmFailure("llm-rejected", exc.response.text) from exc
-    return response.choices[0].message.content or "{}"
+    choice = response.choices[0]
+    content: str | None = choice.message.content
+    finish_reason: str | None = choice.finish_reason
+    if finish_reason != "stop" or content is None or not content.strip():
+        logger.warning(
+            "LLM gave no complete answer for %s (finish_reason=%s)", work_id, finish_reason
+        )
+        raise LlmFailure("llm-parse-failure", content or None)
+    return content
 
 
 # --- decisions ---
