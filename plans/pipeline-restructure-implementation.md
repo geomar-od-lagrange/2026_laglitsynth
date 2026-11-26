@@ -75,8 +75,8 @@ and 7 pass `decisions=True`, which adds `--decisions-url`.
 api_key, decisions_url}`. `base_url` is the OpenAI-compatible base
 including `/v1`, exactly what the `openai` SDK takes. `decisions_url`
 defaults to `base_url.rstrip("/") + "/decisions"`, and `--decisions-url`
-overrides it for a provider that serves the endpoint elsewhere (OpenRouter
-serves it only under `/api/alpha/decisions`). `--base-url` and `--model`
+overrides it for a provider that serves the endpoint elsewhere.
+`--base-url` and `--model`
 have no default: argparse `required=True` would ignore `--config`
 defaults, so `resolve_endpoint` exits naming the missing flag instead. The
 key comes from `--api-key`, else `os.environ["LLM_API_KEY"]`, else
@@ -87,13 +87,20 @@ with none, it exits naming `LLM_API_KEY`.
 `chat.completions.create` with `model`, `messages` and
 `response_format={"type": "json_object"}` only. `decisions_client(endpoint)`
 returns an `httpx.Client` with the bearer header, and `decide(client,
-endpoint, *, state, key, question) -> Decision` POSTs to
+endpoint, *, input, name, question) -> Decision` POSTs to
 `endpoint.decisions_url`. `Decision` is `{probability: float | None,
-reason: str | None, raw_response: str | None}`. The request body keeps the
-shape PR #27 shipped: `{model, state, questions: {<key>: {type: "noul",
-instructions, criteria: {true, false}}}}`. The probability is
-`answers.<key>.noul` in [0, 1]. Screening uses key `relevant`, eligibility
-`eligible`.
+reason: str | None, raw_response: str | None}`. The request body is
+OpenAI's Decisions shape, which a LiteLLM proxy validates strictly (extra
+fields are rejected): `{model, input, questions: [{type: "predicate",
+name, instructions}]}`. `instructions` is the criteria YAML's
+`instructions` followed by its `criteria.true` and `criteria.false` texts
+("True if: …", "False if: …"), since a predicate question has no criteria
+field. The response is `{model, answers: [{type, name, probability}],
+usage}`; the probability is that of the answer whose `name` matches, in
+[0, 1]. The endpoint returns no reason, so `reason` stays `None` except
+for sentinels. Screening uses name `relevant`, eligibility `eligible`. PR
+#27's OpenRouter shape (`state`, `noul` questions keyed by name) is
+dropped.
 
 Errors fall in three classes. Transient errors give `llm-timeout` after
 retries: on decisions, transport errors, 5xx and 429 (retried as in
@@ -123,8 +130,8 @@ str | None, raw_response}`, with `relevance_score = round(100 * p)` and
 `EligibilityVerdict` becomes `{work_id, probability: float | None,
 eligible: bool | None, reason: str | None, raw_response}`, with `eligible =
 probability >= 0.5` and `reason` set only for sentinels. Any other cut is
-made ad hoc on `verdicts.jsonl`, the same way as for screening. The state
-sent is the rendered full text
+made ad hoc on `verdicts.jsonl`, the same way as for screening. The
+`input` sent is the rendered full text
 ([`render_fulltext`](../src/laglitsynth/fulltext_eligibility/prompts.py)).
 The eligibility-criteria YAML becomes a `decision` block covering criteria
 1 and 2 only (ocean particle/tracer/object tracking; primary research).
@@ -275,9 +282,13 @@ retrieval → `corpus-assemble` (gated with stage 5) → 6 → 7 → 8.
 ## Design decisions
 
 The decisions URL is derived from `base_url` by default, because the mission
-asks for one API per review and `/v1/decisions` is its stated path. The
-override exists because the only provider used so far serves the endpoint
-off that path; it changes the URL, not the key or the model namespace. A
+asks for one API per review and `/v1/decisions` is its stated path; a
+LiteLLM proxy serves it there. The override exists for a provider that
+serves the endpoint off that path; it changes the URL, not the key or the
+model namespace. The request follows OpenAI's Decisions shape because that
+is what an OpenAI-compatible proxy validates; supporting a second,
+provider-specific shape would mean a per-provider switch the mission rules
+out. A
 wrong URL is found out on the first request, as a 404 exit that names it,
 not as a run full of parse failures. The decisions client stays on `httpx`,
 since the `openai` SDK has no decisions resource; the two clients share only
@@ -369,7 +380,10 @@ s3 commit 5, s4 commit 6, s5 commit 7 and s6 commit 8.
    `--api-key`. `.env.example` gets `LLM_API_KEY` in place of
    `OPENROUTER_API_KEY`. Tests: `tests/test_screening_decisions.py` becomes
    `tests/test_llm.py` (`httpx.MockTransport`), covering the default URL
-   `base_url + "/decisions"` and the body shape, the `--decisions-url`
+   `base_url + "/decisions"` and the body shape (`input`, a `questions`
+   list of one `predicate` with `name` and `instructions` carrying the
+   true/false criteria, no extra fields), the probability taken from the
+   answer with the matching `name`, the `--decisions-url`
    override, exits on 401, 402 and 404 naming the URL, retry then
    `llm-timeout` on 5xx and 429, `llm-rejected` on 400, `llm-parse-failure`
    on a malformed body, `resolve_endpoint` exits naming `--base-url`,
@@ -384,7 +398,7 @@ s3 commit 5, s4 commit 6, s5 commit 7 and s6 commit 8.
    `CFG_LLM_DECISIONS_URL`.
 
 4. Eligibility on the decisions endpoint. Stage 7 calls `decide` with the
-   rendered full text as `state` and key `eligible`. Rewrite the
+   rendered full text as `input` and name `eligible`. Rewrite the
    eligibility criteria YAML as a `decision` block without the methods
    criterion. Change `EligibilityVerdict` as specified, add
    `criteria_sha256`, and delete `_EligibilityPayload` and
