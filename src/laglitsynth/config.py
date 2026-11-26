@@ -96,9 +96,12 @@ def save_resolved_config(
     ``resolve_yaml_arg`` (idempotent for already-inlined snapshots).
     Path values that are not in ``inlines`` are stringified. The
     ``--config`` flag, the dispatch ``run`` callable, the subcommand
-    ``command`` field, and the runtime ``run_id`` are dropped — a
-    rerun from a saved snapshot must always generate a fresh run_id
-    rather than overwrite the original run dir. ``api_key`` is dropped
+    ``command`` field, and the runtime ``run_id`` are dropped — a rerun
+    from a saved snapshot resolves its run_id as any run does (the
+    manifest's or the corpus's, unless ``--run-id`` is passed), so
+    without ``--run-id`` it writes into the original run dir (replacing
+    its output, or continuing it under ``skip_existing``). ``api_key``
+    is dropped
     so a key passed on the command line never lands in the snapshot.
     """
     inlines_set = set(inlines)

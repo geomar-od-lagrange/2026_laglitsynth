@@ -3,8 +3,8 @@
 The LLM stages — [screening-abstracts](screening-abstracts.md),
 [fulltext-eligibility](eligibility.md),
 [extraction-codebook](extraction-codebook.md) — share a sweep-friendly
-config and run-directory model. Each invocation produces a fresh
-self-contained run directory; every parameter that drives the run is
+config and run-directory model. Each invocation writes one
+self-contained run directory, named by its run-id; every parameter that drives the run is
 either a CLI flag, a key in a YAML config file, or both.
 
 ## Run directories
@@ -51,7 +51,14 @@ criteria and codebook are consumed directly. That isn't replay (the endpoint's
 sampling is not pinned, so record-level reproduction is not
 guaranteed), but it is "rerun with the same configuration," and for that
 purpose the shapes are interchangeable. The API key is never part of a
-snapshot: `api_key` is dropped like `run_id` and `config`.
+snapshot: `api_key` is dropped like `run_id` and `config`. Because
+`run_id` is dropped, a rerun resolves it as any run does — the
+manifest's `run_id` for screening, the corpus's `analysis_run_id` for
+eligibility and extraction-codebook — so a rerun without `--run-id`
+writes into the original run directory: it replaces that run's output,
+or, for eligibility and extraction-codebook with `skip_existing: true`
+in the snapshot, continues it. Pass
+`--run-id "$(laglitsynth generate-run-id)"` to keep the original run.
 
 ## CLI-config precedence
 

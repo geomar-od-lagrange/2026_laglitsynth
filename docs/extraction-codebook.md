@@ -354,8 +354,10 @@ prompt can differ record by record.
 
 Edit the YAML and re-run. The dynamically-built record class enforces
 `extra="forbid"` so old `records.jsonl` files fail to load after a
-schema change. Policy: start a fresh run dir (which `--run-id` does by
-default) and re-run. This is green-field prototyping — there is no
+schema change. Policy: re-run into a fresh run dir with
+`--run-id "$(laglitsynth generate-run-id)"` (the default run-id, the
+corpus's `analysis_run_id`, names the existing run, whose records a
+re-run without `--skip-existing` replaces). This is green-field prototyping — there is no
 migration path and no backwards compatibility
 ([AGENTS.md](../AGENTS.md)).
 

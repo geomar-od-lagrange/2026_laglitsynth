@@ -133,7 +133,11 @@ Each run produces three files in `<data-dir>/screening-abstracts/<run-id>/`:
   sees the LLM fingerprint.
 - **`config.yaml`** — fully-resolved CLI+config values for this run,
   excluding `run_id`, `api_key` and `--config` itself. Replay via
-  `--config <run-dir>/config.yaml` (a fresh run-id is generated).
+  `--config <run-dir>/config.yaml`. The run-id is resolved as on any run
+  (the manifest's `run_id` unless `--run-id` is passed), so a replay
+  without `--run-id` writes into the original run's directory and
+  replaces its verdicts; pass `--run-id "$(laglitsynth generate-run-id)"`
+  to keep the original.
 
 ### ScreeningVerdict fields
 
