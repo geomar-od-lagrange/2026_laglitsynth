@@ -121,12 +121,20 @@ how they write. The categories:
   over the old one would leave PDFs of works no longer selected. Never
   assemble on two machines and merge. Its
   `corpus_id` tells both sides whether they hold the same corpus.
-- Bulk, fetch-once, union-safe — the TEI. A TEI file is GROBID's
-  deterministic output for one PDF, keyed by work and never rewritten in
-  place, so it only ever accumulates. Sync it by **union in either
-  direction** (rsync without `--delete`), and prefer to move it **once**
-  rather than round-trip the bulk. Never `rsync --delete` it — a stale
-  side would delete files the other side produced.
+- Bulk, accumulating, newest-extraction-wins — the TEI,
+  `data/fulltext-extraction/`. A TEI file is GROBID's output for one
+  corpus PDF, keyed by work. Stage 6's `--skip-existing` leaves it alone
+  while the work's corpus PDF is unchanged, but a work whose PDF changed
+  in a re-assembly is extracted again into the same `tei/<stem>.tei.xml`,
+  overwriting it, and a new record is appended to `extraction.jsonl`. So
+  a union sync is not safe in either direction: rsync from a machine that
+  extracted against an older corpus copies its old TEI over the new one,
+  which then no longer matches the `content_sha256` of the work's last
+  record. Sync `data/fulltext-extraction/` (the TEI and
+  `extraction.jsonl` together) **one way, from the machine that last ran
+  stage 6 on the current corpus**, and prefer to move it **once** rather
+  than round-trip the bulk. Never `rsync --delete` it — a stale side
+  would delete files the other side produced.
 - Per-run-id, authoritative-side-wins — the gate stages
   ([`screening-abstracts`](interfaces.md#stage-3--screening-abstracts-exists),
   [`fulltext-eligibility`](interfaces.md#stage-7--fulltext-eligibility-exists),
@@ -158,8 +166,8 @@ with `--delete`.
 What makes a wrong-direction sync dangerous is the combination of
 whole-file outputs and `--delete`: rsyncing a stale `data/` over a fresh
 one with `--delete` removes outputs the fresh side produced. The rule is
-blunt and safe: **do not use `rsync --delete` on `data/` subdirs.** Union
-the bulk, and move per-run-id directories and the spine from their
+blunt and safe: **do not use `rsync --delete` on `data/` subdirs.** Move
+the TEI, the per-run-id directories and the spine from their
 authoritative side. For the PDF store specifically, the
 [drop-zone rule](#drop-zone-rule-for-collaborator-pdfs) is the stronger
 guard against exactly this — a single writer (A) means
