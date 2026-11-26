@@ -19,10 +19,12 @@ sweep at a sibling tree. `<stage-subdir>` is hardcoded per stage:
 (see [run-manifest.md](run-manifest.md)); a minted id is a
 `<iso-1s>_<12hex>` in UTC — the ISO timestamp is human-readable and the
 12-hex suffix removes concurrent-job collision risk on NESH or local
-sweeps. PDFs
-and TEIs (under `<data-dir>/fulltext-extraction/tei/` and so on) are
-not run-namespaced; they are a shared input cache populated
-incrementally via the existing `--skip-existing` paths.
+sweeps. The PDF store, the [corpus](corpus.md) and the TEIs (under
+`<data-dir>/fulltext-extraction/tei/`) are not run-namespaced. The
+corpus is rewritten whole by each `corpus-assemble`; the TEIs are a
+shared cache filled incrementally through stage 6's `--skip-existing`.
+Every analysis meta records the `corpus_id` it ran on, so output from
+another corpus is refused rather than mixed in.
 
 ## Two roles for `config.yaml`
 
@@ -30,21 +32,22 @@ A YAML file in this project plays one of two roles depending on where
 it lives.
 
 **Input configs** are version-controlled or sweep-generated YAMLs that
-drive an invocation. They reference the codebook and
-eligibility-criteria YAMLs by path. Use cases: assembling NESH job
+drive an invocation. They reference the criteria and codebook YAMLs by
+path. Use cases: assembling NESH job
 submissions without 200-character `sbatch` strings; running a sweep
 where the only difference between 12 invocations is one parameter;
 shipping a paper's supplementary materials as one config file.
 
 **Run snapshots** are written automatically into every LLM-stage run
-directory. The codebook and eligibility-criteria contents are inlined
-as embedded mappings, so a year from now you can still tell what a
+directory. The criteria and codebook contents the stage read (screening
+criteria for stage 3, eligibility criteria for stage 7, codebook and
+eligibility criteria for stage 8) are inlined as embedded mappings, so a year from now you can still tell what a
 specific run was configured with — even if the upstream YAMLs have
 moved or been edited.
 
 The two share a file format and may even round-trip: feed a run
 snapshot back as `--config <run-dir>/config.yaml` and the inlined
-codebook and eligibility criteria are consumed directly. That isn't replay (the endpoint's
+criteria and codebook are consumed directly. That isn't replay (the endpoint's
 sampling is not pinned, so record-level reproduction is not
 guaranteed), but it is "rerun with the same configuration," and for that
 purpose the shapes are interchangeable. The API key is never part of a

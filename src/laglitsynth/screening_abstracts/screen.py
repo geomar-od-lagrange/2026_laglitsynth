@@ -231,7 +231,7 @@ def run(args: argparse.Namespace) -> None:
 
     # Clean-rerun: truncate any prior verdicts file before streaming
     # append. Resume is explicitly not supported — see
-    # docs/llm-concurrency.md.
+    # docs/interfaces.md.
     if not args.dry_run:
         output_dir.mkdir(parents=True, exist_ok=True)
         save_resolved_config(args, output_dir, inlines=["screening_criteria"])

@@ -1,16 +1,18 @@
 # Full-text retrieval
 
-Stage 5 turns the catalogue into a corpus of PDFs. It maintains a
-persistent, work-keyed PDF store under `data/pdfs/` and three subcommands
-that fill it: automatic retrieval from open-access sources, and an
-export/import loop that lets collaborators contribute PDFs they can reach
-through their own institutional access. Text extraction (parsing PDFs into
-structured sections) is a separate concern handled by
-[fulltext-extraction.md](fulltext-extraction.md).
+Stage 5 acquires PDFs for the catalogue. It maintains a persistent,
+work-keyed PDF store under `data/pdfs/` and three subcommands that fill
+it: automatic retrieval from open-access sources, and an export/import
+loop that lets collaborators contribute PDFs they can reach through their
+own institutional access. The store is the first half's input to
+[`corpus-assemble`](corpus.md), which copies the selected works' PDFs into
+the corpus. Text extraction (parsing PDFs into structured sections) is a
+separate concern handled by [fulltext-extraction.md](fulltext-extraction.md).
 
 `fulltext-retrieval` works on every work in `--catalogue` (default: the
-deduplicated catalogue); it reads no screening verdicts. The export, below,
-still selects by screening score: it joins the catalogue against stage 3's
+deduplicated catalogue); it reads no screening verdicts, so screening and
+retrieval run in either order. The export, below, selects by screening
+score: it joins the catalogue against stage 3's
 verdict sidecar at a caller-supplied `--screening-threshold`, keeping works
 at or above the threshold and works whose score is `None` (the sentinel
 reasons). That join **silently drops** any work absent from the screening

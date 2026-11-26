@@ -226,24 +226,35 @@ Update this file when a plan is written, implemented, or archived.
   eight commits in six slices, from deletions through one OpenAI-compatible
   LLM endpoint, `corpus-assemble` and stages 6–8 on the corpus, to the docs
   and, last, the RIS export and catalogue-wide import.
-- [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate is now planned as the [run manifest](done/run-manifest.md).
+- [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. Its Ollama parts are obsolete: the [pipeline restructure](pipeline-restructure.md) removed local LLMs, and the runbook's LLM section is now a provider-neutral endpoint section. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate is now planned as the [run manifest](done/run-manifest.md).
 - [Cross-machine + storage convention](../docs/cross-machine.md) — the third follow-up candidate from [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) landed as an authoritative doc: project = working-directory boundary, run-from-root + fixed-`data/` path contract, per-machine `.env`, and the safe sync direction per `data/` subdir (bulk PDFs/TEI union, per-run-id gate outputs authoritative-side-wins, deduplicated spine rsynced once read-only). The Zotero-import open question from [fulltext-retrieval-diversified.md](done/fulltext-retrieval-diversified.md) is withdrawn: import reads identifiers out of the PDF and matches them against `pdf-manifest.csv`, so Zotero's filename convention does not enter the design. The probe script and its note are removed; the reasoning is recorded in [contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md).
 
 ## Queued — ready to plan
 
-Title-based import matching for returned PDFs that embed no DOI
-([contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md)),
-tuned against the measured publisher-PDF corpus rather than an invented
-threshold.
+- Title-based import matching for returned PDFs that embed no DOI
+  ([contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md)),
+  tuned against the measured publisher-PDF corpus rather than an invented
+  threshold.
+- Retrieval over every OpenAlex location of a work plus Semantic Scholar
+  and arXiv (step 2 of the [pipeline restructure](pipeline-restructure.md)).
+  `fulltext-retrieval` tries only OpenAlex's best open-access URL and
+  Unpaywall; the store already holds PDFs from the other routes, fetched by
+  one-off scripts ([pdf-store.md](../docs/pdf-store.md)), so this does not
+  block the analysis run.
 
 ## Queued — driven by future stages
 
-- Stages 9–12 (`extraction-adjudication`, `synthesis-quantitative`,
-  `synthesis-thematic`, `synthesis-narrative`). No plans yet.
+- Synthesis: one step replacing the former stages 10–12 (quantitative,
+  thematic, narrative). It aggregates the extraction records into answers
+  to RQ1.1–RQ1.3 and is the only aggregation across papers. Whether the
+  RQ1.3 rationale grouping keeps human labelling is decided when it is
+  planned; it waits for the first codebook results.
 - [Two-pass extraction](../docs/two-pass-extraction.md) for stage 8 —
-  deferred until phase 3 codebook review flags attention-dilution on
-  specific fields. `passage_locations` is captured faithfully by the
-  stage 8 prototype as ground truth for pass-1 calibration.
+  deferred until phase 3 codebook review flags attention dilution on
+  specific fields, or until the `llm-rejected` count shows full texts
+  exceeding the model's context (nothing truncates them).
+  `in_text_locations` is captured by stage 8 as ground truth for pass-1
+  calibration.
 - Agentic reading of a paper — orthogonal to the one-question-per-call
   stages. Chat UIs give the model tools over a PDF (embedding search,
   page/section lookup) so it can follow up instead of answering once. For
@@ -257,31 +268,27 @@ threshold.
   second catalogue source ([wos-starter-api.md](../docs/explorations/wos-starter-api.md)),
   which the diversified-retrieval direction would consume.
 - `ExtractedDocument` quality gate — `extraction_status` enum + metrics.
-  Defer until a stage 9+ consumer arrives — stages 7 and 8 are now
-  full-text-only, so a missing or empty extraction is simply skipped
-  (or recorded as `tei-parse-failure`) rather than routed to a fallback.
-- Shared export-for-human-review helper across stages 3, 4, 9. Exports
-  are XLSX-only now (CSV retired); stages 7 and 8 landed as separate
-  self-contained `export.py` modules by design — the
-  [full-text-only plan](done/fulltext-stages-full-text-only-and-review.md)
-  deliberately declined to force a shared abstraction before stage 9
-  shows what it needs. Each stage emits JSONL today; the open question
-  is whether stages 3, 4, and 9 should share scaffolding once stage 9's
-  reviewer-column ingestion is designed.
+  Defer until a consumer needs it — stages 7 and 8 are full-text-only, so
+  a missing or empty extraction is simply skipped (or recorded as
+  `tei-parse-failure`) rather than routed to a fallback.
+- Refining the [vocabulary](../docs/vocabulary.md) — waits for the first
+  codebook results.
 
 ## Withdrawn
 
 Directions that were considered and dropped. Each entry says what was
 dropped and why, so the same idea is not re-proposed from the gap it leaves.
 
-- **Abstract sidecar into screening.** Stage 2b
-  [`abstract-lookup`](done/doi-abstract-lookup.md) writes an `AbstractRecord`
-  sidecar keyed by work id, and no stage reads it. The planned fix was an
+- **Abstract sidecar into screening, and stage 2b itself.**
+  [`abstract-lookup`](done/doi-abstract-lookup.md) wrote an `AbstractRecord`
+  sidecar keyed by work id that no stage read. The planned fix was an
   `--abstracts` overlay on `screening-abstracts` that filled a null
   `Work.abstract` from the sidecar at read time. Backfilled abstracts were
-  tested against screening and gave no additional benefit, so the overlay is
-  not built and the sidecar stays unconsumed. Whether to delete the stage
-  outright is open.
+  tested against screening and gave no additional benefit, so the overlay
+  was not built, and the [pipeline restructure](pipeline-restructure.md)
+  deleted the stage. Works without an abstract get a `no-abstract`
+  sentinel, which `corpus-assemble` includes so stage 7 judges them on the
+  full text.
 - **Stage 9 as a pass-through.** The design that copied stage 8 records to a
   `validated.jsonl` unchanged died with the stage 4 pass-through it was
   modelled on. Reviewer corrections arrive through the stage 8 XLSX workbook
@@ -291,6 +298,25 @@ dropped and why, so the same idea is not re-proposed from the gap it leaves.
   combining the results was planned as an optional robustness check. The
   [pipeline restructure](pipeline-restructure.md) drops consensus runs, and
   the plan is deleted.
+- **Stages 10–12 as three stages.** Quantitative, thematic and narrative
+  synthesis were specified as separate stages with their own artifacts
+  (`statistics.json`, `rationale-taxonomy.json`, `synthesis-draft.md`).
+  The [pipeline restructure](pipeline-restructure.md) replaces them with
+  one planned synthesis step (queued above), whose outputs are designed
+  with it.
+- **Shared export-for-human-review helper.** The open question was
+  whether the review exports of stages 3, 4, 7 and 9 should share
+  scaffolding. Stage 4 and stage 9 are gone, and the
+  [pipeline restructure](pipeline-restructure.md) dropped the screening and
+  eligibility XLSX exports: verdicts are inspected on their
+  `verdicts.jsonl`. `extraction-codebook-export` is the only workbook left,
+  so there is nothing to share.
+- **Citation-network analysis, author review and the feedback loops.**
+  Optional extensions in the old [pipeline.md](../docs/pipeline.md):
+  citation-graph centrality, a final author-review stage, and loops from
+  screening review back into search or calibration. The restructure
+  removes them: refining the search, criteria, codebook or vocabulary is
+  ordinary editing of the configs followed by a re-run.
 - **Zotero export probe.** Withdrawn with the Zotero-import open question,
   under [Cross-machine + storage convention](#in-flight) above.
 

@@ -50,7 +50,7 @@ flag to pass instead (`… not found; run catalogue-dedup first or pass
 
 ## The run-ids
 
-The two halves of the pipeline have separate run-ids.
+The two halves of the [pipeline](pipeline.md) have separate run-ids.
 
 The screening run-id resolves the same way on every stage that writes or
 reads a `screening-abstracts/<run-id>/` leaf (`screening-abstracts` and the
@@ -65,7 +65,7 @@ The analysis run-id is the leaf of `fulltext-eligibility` and
 `analysis_run_id` in `corpus/corpus-meta.json`, else the stage exits naming
 `corpus-assemble`. `corpus-assemble` keeps that id while the corpus content
 is unchanged and mints a new one when it changes (see
-[interfaces.md](interfaces.md#corpus-assemble-exists)), so a changed corpus
+[corpus.md](corpus.md#the-analysis-run-id)), so a changed corpus
 gets fresh analysis directories and an identical re-assembly lets
 `--skip-existing` resume. `--run-id` on these stages names a variant run on
 the same corpus, for example with other criteria.

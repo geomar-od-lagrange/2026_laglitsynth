@@ -22,7 +22,11 @@ docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0
 GROBID takes ~30–60 seconds to start (up to ~90s on a cold NESH node).
 Health check: `GET http://localhost:8070/api/isalive`.
 See [external-services.md](external-services.md) for the full setup (Apple
-Silicon Rosetta workaround, memory requirements, `docker compose` file).
+Silicon Rosetta workaround, memory requirements, NESH).
+
+The stage reads only the [corpus](corpus.md), so the machines that
+acquire PDFs need no GROBID or Docker. The PDF is the scarce artifact;
+its text can always be re-extracted.
 
 ## Approach: GROBID only
 
@@ -277,52 +281,16 @@ Works whose latest `ExtractedDocument` in `extraction.jsonl` matches the
 current corpus PDF are skipped. See [external-services.md](external-services.md)
 for the macOS/Apple Silicon Rosetta workaround if GROBID fails to start.
 
-## What to build now
+## Limits
 
-- GROBID client (POST PDF, receive TEI XML, write to `tei/`).
-- `ExtractedDocument` / `ExtractionMeta` models and JSONL output.
-- The `fulltext-extraction` CLI subcommand with `--skip-existing`.
-- `TeiDocument` wrapper for downstream TEI access (see
-  [`fulltext_extraction/tei.py`](../src/laglitsynth/fulltext_extraction/tei.py)).
-
-## What to defer
-
-- Alternative extraction tools (PyMuPDF, marker, nougat). Add when GROBID
-  failures on the actual corpus justify it.
-- HTML-to-text for born-HTML papers.
-- LaTeX source parsing for arXiv papers.
-- Parallel GROBID processing. Sequential is sufficient for hundreds of
-  papers.
-- GROBID container lifecycle management. The operator starts GROBID
-  manually; the CLI just checks and uses it.
-
-## Risks
-
-### GROBID fails on a significant fraction of PDFs
-
-Some sub-fields produce PDFs that GROBID handles poorly (scanned older
-papers, unusual layouts, non-standard fonts).
-
-Mitigation: track the failure rate on the actual corpus and decide based
-on observed numbers whether a fallback is needed. If the rate justifies
-it, evaluate PyMuPDF or marker as a fallback and add a second extraction
-path. The `ExtractedDocument` model does not encode the extraction tool —
-widening out is a code change, not a schema change.
-
-### GROBID infrastructure friction
-
-Docker, 2 GB RAM, amd64 emulation, 60-second startup. Acceptable for a
-research tool but requires a machine that can run Docker.
-
-Mitigation: document the setup clearly. Provide a `docker compose` file.
-The retrieval/extraction split means development and testing of other
-pipeline stages can proceed with pre-extracted data — GROBID is only
-needed during the extraction step itself.
-
-### TEI output variance
-
-GROBID's TEI output varies across paper types. The parser must be defensive.
-
-Mitigation: the fallback rules above handle the known failure modes. Test
-the parser against a sample of 10–20 papers from the actual corpus early
-to surface unknown failure modes before processing the full corpus.
+- GROBID is the only extraction tool. There is no fallback (PyMuPDF,
+  marker, nougat), no HTML-to-text for born-HTML papers and no LaTeX
+  parsing for arXiv sources. `ExtractedDocument` does not encode the
+  tool, so adding one is a code change, not a schema change.
+  `ExtractionMeta.failed_count` shows how often GROBID fails on the
+  corpus.
+- PDFs are processed one at a time.
+- The operator starts and stops GROBID; the CLI only checks and uses it.
+- GROBID's TEI varies across paper types. The parser handles the known
+  shapes listed above; other shapes surface downstream as
+  `tei-parse-failure`.

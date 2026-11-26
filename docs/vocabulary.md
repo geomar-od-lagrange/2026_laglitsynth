@@ -2,7 +2,13 @@
 
 A concept-tagged term list for deterministic keyword matching against
 abstracts. Complements LLM screening by providing a fast, auditable,
-independent relevance signal.
+independent relevance signal. Not yet implemented; the term list is
+refined once the first codebook results show which terms the papers
+actually use.
+
+Term frequencies are computed across papers, so vocabulary work belongs
+to the first half of the [pipeline](pipeline.md), before the corpus is
+assembled.
 
 ## Vocabulary format
 
@@ -20,24 +26,30 @@ The full type is `dict[str, list[str]]` — no nesting, no wrapper keys.
 
 ## Building the vocabulary
 
-##### Domain knowledge
+### Domain knowledge
 
 The project team brainstorms terms for each concept group. The codebook
 categories (integration scheme, time-step strategy, interpolation method,
 sub-discipline) provide the tag vocabulary. This covers the core terms.
 
-##### Term extraction from the existing corpus
+### Term extraction from the catalogue
 
-Run term-frequency analysis over screened abstracts. High-frequency
+Run term-frequency analysis over the screened abstracts. High-frequency
 domain-specific terms not yet in the vocabulary are candidates for addition.
 
-##### Existing controlled vocabularies
+### Codebook results
+
+The values and context snippets in the extraction records show the terms
+papers use for their numerical choices. Terms that recur there and are
+missing from the vocabulary are candidates for addition.
+
+### Existing controlled vocabularies
 
 AGU/EGU index terms, OceanParcels documentation glossary, numerical-methods
 textbook indices. These fill gaps in the long tail.
 
-The vocabulary grows iteratively. Start with domain knowledge, expand as
-adjudication reveals gaps.
+The vocabulary grows by editing the YAML: start with domain knowledge and
+add terms as the catalogue and the codebook results reveal gaps.
 
 ## Matching
 

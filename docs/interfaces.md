@@ -1,24 +1,24 @@
 # Interface contracts
 
 Cross-cutting view of the pipeline's artifacts, CLI commands, and Pydantic
-models. Makes the input/output chain across all 12 stages explicit so that
-each stage can be implemented independently.
+models: the input/output chain from catalogue fetch through the
+[corpus](corpus.md) to codebook extraction.
 
 ## Design principle: flag, don't filter
 
 Gate stages (3, 7) write verdict sidecars but never copy or split Work
-records. The deduplicated catalogue (`data/catalogue-dedup/deduplicated.jsonl`) is
-the single source of Work records for the entire pipeline. Downstream
-stages determine their active work set at read time by joining the
-catalogue against upstream verdicts and thresholds.
+records. Before the corpus, the deduplicated catalogue
+(`data/catalogue-dedup/deduplicated.jsonl`) is the single source of Work
+records; `corpus-assemble` copies the selected ones into
+`data/corpus/works.jsonl`, which is the single source for stages 6–8.
+Stages determine their active work set at read time by joining those
+works against upstream verdicts.
 
-This means re-thresholding (e.g. changing the screening threshold from 50
-to 40) does not require re-running the LLM or re-splitting files. The
-scores already exist in the verdict sidecar. Downstream stages re-run
-with `--skip-existing` and only process newly-included works.
-
-See [retuning-propagation.md](../plans/done/retuning-propagation.md) for the
-full design rationale.
+Changing the screening threshold therefore needs no LLM re-run: the
+scores are already in the verdict sidecar, and re-assembling the corpus
+applies the new cut. A corpus whose membership changes gets a new
+`corpus_id` and a new analysis run-id, so stages 7 and 8 start fresh
+directories instead of mixing results from two corpora.
 
 ### Resolution
 
@@ -58,7 +58,7 @@ passed explicitly to override. The screening run-id leaf comes from
 
 | Path | Model | Description |
 |---|---|---|
-| `data/manifest.json` | [`RunManifest`](../src/laglitsynth/manifest.py) | The review's queries and shared run-id; written once by `manifest-init` |
+| `data/manifest.json` | [`RunManifest`](../src/laglitsynth/manifest.py) | The review's queries and screening run-id; written once by `manifest-init` |
 
 ### Stage 1 — catalogue-fetch *(exists)*
 
@@ -132,7 +132,8 @@ without a PDF), sorted by work id and joined with newlines, so it changes
 only with membership or PDF bytes. `analysis_run_id` is kept from the
 previous `corpus-meta.json` while `corpus_id` is unchanged and minted
 afresh otherwise. The readers for stages 6–8 are in
-[`corpus/load.py`](../src/laglitsynth/corpus/load.py).
+[`corpus/load.py`](../src/laglitsynth/corpus/load.py). See
+[corpus.md](corpus.md).
 
 ### Stage 6 — fulltext-extraction
 
@@ -171,27 +172,15 @@ it is full-text-only, so eligible works without an `ExtractedDocument` are
 skipped (no record row, no count). Every processed work produces exactly
 one record; sentinel records carry `None` in all content fields and a
 `reason` from the vocabulary in
-[extraction-codebook.md](extraction-codebook.md). Stages 10–12
-read `records.jsonl` directly. The optional `review.xlsx` is a human
+[extraction-codebook.md](extraction-codebook.md). The planned synthesis
+step reads `records.jsonl` directly. The optional `review.xlsx` is a human
 spot-check artifact written by `extraction-codebook-export`.
 
-### Stage 10 — synthesis-quantitative
+### Synthesis *(planned)*
 
-| Path | Model | Description |
-|---|---|---|
-| `data/synthesis-quantitative/statistics.json` | `SynthesisStatistics` (new) | Counts, proportions, breakdowns |
-
-### Stage 11 — synthesis-thematic
-
-| Path | Model | Description |
-|---|---|---|
-| `data/synthesis-thematic/rationale-taxonomy.json` | `RationaleTaxonomy` (new) | Themed categories with quotations |
-
-### Stage 12 — synthesis-narrative
-
-| Path | Model | Description |
-|---|---|---|
-| `data/synthesis-narrative/synthesis-draft.md` | (markdown) | Narrative keyed to research questions |
+One step aggregates the extraction records into answers to the research
+questions. Its outputs, models and CLI are not designed yet; see
+[pipeline.md](pipeline.md#synthesis).
 
 ## CLI contract
 
@@ -306,11 +295,10 @@ stage exits naming the missing flag), `--api-key` falls back to
 `config.yaml`; stages 3 and 7 also take `--decisions-url` (default
 `<base-url>/decisions`), stage 8 `--reasoning-effort` (`low`, `medium`,
 `high`; unset sends none). `--concurrency` (default `1`) sets the number of
-in-flight LLM requests. See [llm-concurrency.md](llm-concurrency.md).
+in-flight LLM requests; see [LLM concurrency](#llm-concurrency).
 
-Stages 1 and 3 use positional arguments; the rest use keyword flags.
-Stages 1 and 3 should be harmonized to keyword flags when updated. No
-backwards compatibility constraints ([AGENTS.md](../AGENTS.md)).
+Stages 1 and 3 take their main input (the query, the catalogue) as a
+positional argument; the rest use keyword flags.
 
 ### Configuration: flags first, `.env` fallback for credentials
 
@@ -327,25 +315,35 @@ scripts ([scripts/run-pipeline.sh](../scripts/run-pipeline.sh),
 email as `--flag "$VAR"`; they never pass the LLM key as a flag, so it stays
 out of the process list.
 
-### Planned subcommands
+### LLM concurrency
 
-```sh
-# Stage 10 — synthesis-quantitative
-laglitsynth synthesis-quantitative \
-    --data-dir data/ \
-    --output-dir data/synthesis-quantitative/
+Stages 3, 7 and 8 share one helper,
+[`map_concurrent`](../src/laglitsynth/concurrency.py): a
+`ThreadPoolExecutor` of `--concurrency` workers, each making one LLM
+request per work. Only the main thread appends to the output JSONL, so
+there is no lock or shared file handle. At `--concurrency 1` no pool is
+created and works run one after another. The useful value depends on the
+provider's rate limits; a 429 is retried and then recorded as
+`llm-timeout`.
 
-# Stage 11 — synthesis-thematic
-laglitsynth synthesis-thematic \
-    --data-dir data/ \
-    --output-dir data/synthesis-thematic/
+Rows land in this order: sentinels that need no request (stage 3's
+`no-abstract`) in input order, then the LLM-backed rows in completion
+order. Every consumer joins on `work_id`, so the order carries no
+meaning.
 
-# Stage 12 — synthesis-narrative
-laglitsynth synthesis-narrative \
-    --statistics data/synthesis-quantitative/statistics.json \
-    --taxonomy data/synthesis-thematic/rationale-taxonomy.json \
-    --output-dir data/synthesis-narrative/
-```
+Stage 3 truncates its `verdicts.jsonl` at the start of a run and has no
+resume mode: a killed run is re-run from scratch, and the partial file
+is still valid JSONL. Stages 7 and 8 resume with `--skip-existing`:
+within the run-id directory they load the existing sidecar, skip the
+`work_id`s already in it and append the rest, refusing when the recorded
+`prompt_sha256` or `corpus_id` differs from the current run. Without
+`--skip-existing` they truncate as stage 3 does.
+
+The runner passes `LLM_CONCURRENCY` (default `1`) to stage 3,
+`ELIGIBILITY_CONCURRENCY` (default `LLM_CONCURRENCY`) to stage 7 and
+`EXTRACTION_CONCURRENCY` (default `1`) to stage 8; the review config
+sets the first and last as `concurrency.llm` and
+`concurrency.extraction`.
 
 ### End-to-end sequence
 
@@ -397,34 +395,11 @@ laglitsynth fulltext-eligibility
 laglitsynth extraction-codebook
 ```
 
-#### STOP HERE — stages 10–12 are not yet implemented
-
-Stages 10–12 (quantitative synthesis, thematic synthesis, narrative
-synthesis) are specified in
-[pipeline.md](pipeline.md) but not yet built. Users running an
-end-to-end pipeline stop after stage 8.
-
-```sh
-# 10. Synthesis: quantitative
-laglitsynth synthesis-quantitative \
-    --data-dir data/ \
-    --output-dir data/synthesis-quantitative/
-
-# 11. Synthesis: thematic
-laglitsynth synthesis-thematic \
-    --data-dir data/ \
-    --output-dir data/synthesis-thematic/
-
-# 12. Synthesis: narrative
-laglitsynth synthesis-narrative \
-    --statistics data/synthesis-quantitative/statistics.json \
-    --taxonomy data/synthesis-thematic/rationale-taxonomy.json \
-    --output-dir data/synthesis-narrative/
-```
+The sequence ends at stage 8: synthesis is planned but not built.
 
 ## Shared meta shapes
 
-Two shared Pydantic models live in [`src/laglitsynth/models.py`](../src/laglitsynth/models.py) and are nested inside every `*Meta` class.
+Two shared Pydantic models live in [`src/laglitsynth/models.py`](../src/laglitsynth/models.py): `RunMeta` is nested in every `*Meta` class, `LlmMeta` in those of the LLM stages.
 
 ### `RunMeta`
 
@@ -442,7 +417,8 @@ class RunMeta(BaseModel):
 ### `LlmMeta`
 
 LLM configuration carried by `ScreeningMeta`, `EligibilityMeta`, and
-`ExtractionCodebookMeta`. Enables reproducibility checks across runs.
+`ExtractionCodebookMeta`, and copied into `CorpusMeta.screening_llm`.
+Enables reproducibility checks across runs.
 
 ```python
 class LlmMeta(BaseModel):
@@ -450,10 +426,12 @@ class LlmMeta(BaseModel):
     model: str                 # model name sent to the endpoint
     base_url: str              # OpenAI-compatible base, including /v1
     decisions_url: str | None  # decisions endpoint; None for chat stages
+    reasoning_effort: str | None  # stage 8's --reasoning-effort; None when none was sent
     prompt_sha256: str         # 64 hex chars
 ```
 
-No temperature or seed is sent, so none is recorded.
+No temperature or seed is sent, so none is recorded; sampling is the
+provider's default. The API key is never recorded.
 
 Per stage, the hash input is:
 
@@ -468,40 +446,33 @@ Per stage, the hash input is:
 | Category | Policy | Models |
 |---|---|---|
 | OpenAlex-sourced | `extra="ignore"` — upstream may add fields | `Work`, `Author`, `Authorship`, `Institution`, `Source`, `Location`, `OpenAccess`, `Biblio`, `TopicHierarchy`, `Topic`, `Keyword` |
-| Internally owned | `extra="forbid"` — unexpected fields are bugs | All `*Meta`, `RunMeta`, `LlmMeta`, `ScreeningVerdict`, `DroppedRecord`, `PdfProvenanceRecord`, `PdfSource`, `ExtractedDocument`, `Section`, `Figure`, `Citation`, `BibReference`, `EligibilityVerdict`, `ExtractionRecord` |
+| Internally owned | `extra="forbid"` — unexpected fields are bugs | All `*Meta`, `RunMeta`, `LlmMeta`, `RunManifest`, `ScreeningVerdict`, `DroppedRecord`, `PdfProvenanceRecord`, `CorpusPdf`, `ExtractedDocument`, `Section`, `Figure`, `Citation`, `BibReference`, `EligibilityVerdict`, `ExtractionRecord` |
 
 ## Model dependency graph
 
-### Existing models
+### Models
 
 | Model | Module | Used by stages |
 |---|---|---|
-| [`RunMeta`](../src/laglitsynth/models.py) | `laglitsynth.models` | All `*Meta` |
-| [`LlmMeta`](../src/laglitsynth/models.py) | `laglitsynth.models` | `ScreeningMeta`, `EligibilityMeta`, `ExtractionCodebookMeta` |
-| [`Work`](../src/laglitsynth/catalogue_fetch/models.py) | `laglitsynth.catalogue_fetch.models` | 1, 2, 3 |
+| [`RunMeta`](../src/laglitsynth/models.py) | `laglitsynth.models` | All `*Meta`, `RunManifest` |
+| [`LlmMeta`](../src/laglitsynth/models.py) | `laglitsynth.models` | `ScreeningMeta`, `EligibilityMeta`, `ExtractionCodebookMeta`, `CorpusMeta` (as `screening_llm`) |
+| [`RunManifest`](../src/laglitsynth/manifest.py) | `laglitsynth.manifest` | `manifest-init`; read by 3, the export and `corpus-assemble` |
+| [`Work`](../src/laglitsynth/catalogue_fetch/models.py) | `laglitsynth.catalogue_fetch.models` | 1, 2, 3, 5, `corpus-assemble`, 7, 8 |
 | [`FetchMeta`](../src/laglitsynth/catalogue_fetch/models.py) | `laglitsynth.catalogue_fetch.models` | 1 |
-| [`ScreeningVerdict`](../src/laglitsynth/screening_abstracts/models.py) | `laglitsynth.screening_abstracts.models` | 3 |
-| [`ScreeningMeta`](../src/laglitsynth/screening_abstracts/models.py) | `laglitsynth.screening_abstracts.models` | 3 |
 | [`DroppedRecord`](../src/laglitsynth/catalogue_dedup/models.py) | `laglitsynth.catalogue_dedup.models` | 2 |
-| [`DeduplicationMeta`](../src/laglitsynth/catalogue_dedup/models.py) | `laglitsynth.catalogue_dedup.models` | 2 |
-| [`PdfSource`](../src/laglitsynth/fulltext_retrieval/models.py) | `laglitsynth.fulltext_retrieval.models` | 5 |
-| [`PdfProvenanceRecord`](../src/laglitsynth/fulltext_retrieval/models.py) | `laglitsynth.fulltext_retrieval.models` | 5 |
-| [`RetrievalMeta`](../src/laglitsynth/fulltext_retrieval/models.py) | `laglitsynth.fulltext_retrieval.models` | 5 |
-| [`ExtractedDocument`](../src/laglitsynth/fulltext_extraction/models.py) | `laglitsynth.fulltext_extraction.models` | 6, 7, 8 |
-| [`ExtractionMeta`](../src/laglitsynth/fulltext_extraction/models.py) | `laglitsynth.fulltext_extraction.models` | 6 |
+| [`DeduplicationMeta`](../src/laglitsynth/catalogue_dedup/models.py), [`SampleMeta`](../src/laglitsynth/catalogue_dedup/models.py) | `laglitsynth.catalogue_dedup.models` | 2 |
+| [`ScreeningVerdict`](../src/laglitsynth/screening_abstracts/models.py) | `laglitsynth.screening_abstracts.models` | 3, the export, `corpus-assemble` |
+| [`ScreeningMeta`](../src/laglitsynth/screening_abstracts/models.py) | `laglitsynth.screening_abstracts.models` | 3, `corpus-assemble` |
+| [`PdfSource`](../src/laglitsynth/fulltext_retrieval/models.py) (enum), [`PdfProvenanceRecord`](../src/laglitsynth/fulltext_retrieval/models.py) | `laglitsynth.fulltext_retrieval.models` | 5, `corpus-assemble` |
+| [`RetrievalMeta`](../src/laglitsynth/fulltext_retrieval/models.py), [`ExportMeta`](../src/laglitsynth/fulltext_retrieval/models.py) | `laglitsynth.fulltext_retrieval.models` | 5 |
+| [`CorpusPdf`](../src/laglitsynth/corpus/models.py), [`CorpusMeta`](../src/laglitsynth/corpus/models.py) | `laglitsynth.corpus.models` | `corpus-assemble`, 6, 7, 8 |
+| [`ExtractedDocument`](../src/laglitsynth/fulltext_extraction/models.py), [`ExtractionMeta`](../src/laglitsynth/fulltext_extraction/models.py) | `laglitsynth.fulltext_extraction.models` | 6, 7, 8 |
 | [`Section`](../src/laglitsynth/fulltext_extraction/tei.py), [`Figure`](../src/laglitsynth/fulltext_extraction/tei.py), [`Citation`](../src/laglitsynth/fulltext_extraction/tei.py), [`BibReference`](../src/laglitsynth/fulltext_extraction/tei.py) | `laglitsynth.fulltext_extraction.tei` | 7, 8 (lazy views over TEI) |
-| [`EligibilityVerdict`](../src/laglitsynth/fulltext_eligibility/models.py) | `laglitsynth.fulltext_eligibility.models` | 7 |
-| [`EligibilityMeta`](../src/laglitsynth/fulltext_eligibility/models.py) | `laglitsynth.fulltext_eligibility.models` | 7 |
-| `ExtractionRecord` (dynamic; [`build_record_model`](../src/laglitsynth/extraction_codebook/codebook.py)) | `laglitsynth.extraction_codebook.codebook` | 8, 10, 11 |
+| [`DecisionQuestion`](../src/laglitsynth/prompts.py) | `laglitsynth.prompts` | 3, 7 (the criteria YAML's `decision` block) |
+| [`EligibilityVerdict`](../src/laglitsynth/fulltext_eligibility/models.py), [`EligibilityMeta`](../src/laglitsynth/fulltext_eligibility/models.py) | `laglitsynth.fulltext_eligibility.models` | 7, 8 |
+| `ExtractionRecord` (dynamic; [`build_record_model`](../src/laglitsynth/extraction_codebook/codebook.py)) | `laglitsynth.extraction_codebook.codebook` | 8, the codebook export |
 | [`ExtractionCodebookMeta`](../src/laglitsynth/extraction_codebook/models.py) | `laglitsynth.extraction_codebook.models` | 8 |
 | [`CodebookSpec`](../src/laglitsynth/extraction_codebook/codebook.py) | `laglitsynth.extraction_codebook.codebook` | 8 (codebook YAML schema) |
-
-### Models not yet defined
-
-| Model | Planned module | Stage |
-|---|---|---|
-| `SynthesisStatistics` | `laglitsynth.synthesis_quantitative.models` | 10 |
-| `RationaleTaxonomy` | `laglitsynth.synthesis_thematic.models` | 11 |
 
 ### Per-stage import summary
 
@@ -511,32 +482,13 @@ Per stage, the hash input is:
 | 2. catalogue-dedup | Work | Work, DroppedRecord, DeduplicationMeta |
 | 3. screening-abstracts | Work | ScreeningVerdict, ScreeningMeta |
 | 5. fulltext-retrieval | Work | PdfProvenanceRecord, RetrievalMeta |
-| 6. fulltext-extraction | (PDFs) | ExtractedDocument, ExtractionMeta |
-| 7. fulltext-eligibility | Work + ScreeningVerdict (inline join), ExtractedDocument | EligibilityVerdict, EligibilityMeta |
-| 8. extraction-codebook | Work + EligibilityVerdict (inline join), ExtractedDocument | ExtractionRecord, ExtractionCodebookMeta |
-| 10. synthesis-quantitative | ExtractionRecord (via resolve) | SynthesisStatistics |
-| 11. synthesis-thematic | ExtractionRecord (via resolve) | RationaleTaxonomy |
-| 12. synthesis-narrative | SynthesisStatistics, RationaleTaxonomy | (markdown) |
+| corpus-assemble | Work, ScreeningVerdict, ScreeningMeta, PdfProvenanceRecord | Work, ScreeningVerdict, CorpusPdf, CorpusMeta |
+| 6. fulltext-extraction | CorpusPdf, CorpusMeta | ExtractedDocument, ExtractionMeta |
+| 7. fulltext-eligibility | Work, CorpusPdf, CorpusMeta, ExtractedDocument, ExtractionMeta | EligibilityVerdict, EligibilityMeta |
+| 8. extraction-codebook | Work, CorpusPdf, CorpusMeta, EligibilityVerdict, EligibilityMeta, ExtractedDocument, ExtractionMeta | ExtractionRecord, ExtractionCodebookMeta |
 
 ## Gaps
 
-### No plan exists
-
-- Stage 10 (quantitative synthesis) — aggregation logic, output schema.
-- Stage 11 (thematic synthesis) — clustering approach, human review
-  workflow, taxonomy schema.
-- Stage 12 (narrative synthesis) — template structure, evidence-grounding
-  mechanism, output format.
-
-### No model definition exists
-
-- `SynthesisStatistics` — depends on which breakdowns are needed (by
-  sub-discipline, by year, by source basis).
-- `RationaleTaxonomy` — depends on how thematic clusters are represented
-  (category label, supporting quotes, paper references).
-
-### Resolve module
-
-Stage 7, stage 8 and `fulltext-retrieval-export` each perform an inline join
-of the deduplicated catalogue against upstream verdict sidecars. This logic
-is duplicated per module.
+Synthesis has no plan, no models and no CLI yet. Its design decides the
+aggregations for RQ1.1 and RQ1.2 and whether the RQ1.3 rationale grouping
+keeps human labelling.

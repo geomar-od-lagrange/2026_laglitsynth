@@ -60,7 +60,7 @@ laglitsynth screening-abstracts input.jsonl ... --dry-run --max-records 20
 | `--decisions-url` | Decisions endpoint (default: `<base-url>/decisions`). |
 | `--max-records` | Process only the first N works. Useful with `--dry-run`. |
 | `--dry-run` | Print verdicts to stderr without writing any output files. |
-| `--concurrency` | In-flight LLM requests (default: `1`). See [llm-concurrency.md](llm-concurrency.md). |
+| `--concurrency` | In-flight LLM requests (default: `1`). See [interfaces.md](interfaces.md#llm-concurrency). |
 
 The resolved output directory is `<data-dir>/screening-abstracts/<run-id>/`.
 See [configs.md](configs.md) for the config-file precedence rule and the
@@ -157,8 +157,12 @@ Each run produces three files in `<data-dir>/screening-abstracts/<run-id>/`:
 
 Every sentinel has `relevance_score=null`.
 
-The stage writes scores only; it applies no threshold. Which scores count
-as relevant is decided downstream on `verdicts.jsonl`.
+The stage writes scores only; it applies no threshold.
+[`corpus-assemble`](corpus.md) applies the review's screening threshold,
+keeping works at or above it and every sentinel; the threshold is chosen
+by looking at the scores in `verdicts.jsonl`. A killed run leaves a valid
+partial `verdicts.jsonl`; the stage has no resume mode, so it is re-run
+from scratch.
 
 ### ScreeningMeta fields
 

@@ -1,209 +1,186 @@
 # Pipeline
 
-Combined pipeline design, synthesized from proposals A, B, and C. Uses C's
-backbone (split synthesis stages) with additions from the comparative review:
-deduplication and eligibility as distinct stages.
+The pipeline has two halves that meet at one on-disk artifact, the
+[corpus](corpus.md). The first half finds the literature and acquires
+the PDFs; the second half analyses the papers in the corpus and reads
+nothing else. Acquisition runs on several machines operated by
+collaborators with different institutional access; the corpus is its
+durable product, and the analysis built on it may change while the
+corpus stays the base.
 
-Stages 1–3 operate on the **catalogue** (metadata + abstracts, no full text).
-Stage 5 retrieves PDFs; stage 6 extracts structured text from them. From
-stage 6 onward we work with the **corpus**. Stage 4 is not implemented;
-stages are still referenced by their original numbers throughout the pipeline.
+This is a literature overview in the natural sciences. Conventions from
+stricter traditions (adjudication, consensus runs, dual screening,
+reviewer workbooks per gate) stay out unless they earn their keep here.
+Refining the search, the criteria, the codebook or the vocabulary is
+ordinary editing of the configs followed by a re-run.
+
+Stages keep their original numbers. Numbers 4 and 9 are unused.
 
 ## Stages
 
-| # | Stage | Domain |
+| # | Stage | Half |
 |---|---|---|
-| 1 | [catalogue-fetch](#1-catalogue-fetch) | catalogue |
-| 2 | [catalogue-dedup](#2-catalogue-dedup) | catalogue |
-| 3 | [screening-abstracts](#3-screening-abstracts) | catalogue |
-| 5 | [fulltext-retrieval](#5-fulltext-retrieval) | catalogue → corpus |
-| 6 | [fulltext-extraction](#6-fulltext-extraction) | corpus |
-| 7 | [fulltext-eligibility](#7-fulltext-eligibility) | corpus |
-| 8 | [extraction-codebook](#8-extraction-codebook) | corpus |
-| 10 | [synthesis-quantitative](#10-synthesis-quantitative) | synthesis |
-| 11 | [synthesis-thematic](#11-synthesis-thematic) | synthesis |
-| 12 | [synthesis-narrative](#12-synthesis-narrative) | synthesis |
+| 1 | [catalogue-fetch](#1-catalogue-fetch) | identify and acquire |
+| 2 | [catalogue-dedup](#2-catalogue-dedup) | identify and acquire |
+| 3 | [screening-abstracts](#3-screening-abstracts) | identify and acquire |
+| 5 | [fulltext-retrieval](#5-fulltext-retrieval) | identify and acquire |
+| — | [corpus-assemble](#corpus-assemble) | the meeting point |
+| 6 | [fulltext-extraction](#6-fulltext-extraction) | analyse |
+| 7 | [fulltext-eligibility](#7-fulltext-eligibility) | analyse |
+| 8 | [extraction-codebook](#8-extraction-codebook) | analyse |
+| — | [synthesis](#synthesis) (planned) | analyse |
+
+## First half: identify and acquire
+
+Stages 1–3 operate on the **catalogue**: metadata and abstracts, no
+full text. Stage 5 fills the PDF store. Screening and retrieval are
+independent of each other: either can run first, or both in parallel.
 
 ### 1. catalogue-fetch
 
-Queries OpenAlex using the search strategy and retrieves validated
-bibliographic records. The output is intentionally broad — it captures the
-full relevant search space before any screening. Multiple searches may be
-needed to cover different sub-disciplines (initially targeting water parcels,
-tracers, and objects, but the search space may expand as vocabulary
-discovery reveals additional groupings).
+Queries OpenAlex with the search strategy and stores validated
+bibliographic records. The output is intentionally broad: it captures
+the relevant search space before any screening. Several queries may be
+needed to cover different sub-disciplines. See
+[catalogue-fetch.md](catalogue-fetch.md).
 
 - **Consumes:** OpenAlex API, search strategy
-- **Produces:** retrieved catalogue — unscreened work records
+- **Produces:** retrieved catalogue, one file per query
 
 ### 2. catalogue-dedup
 
-Removes duplicate records from the retrieved catalogue. Duplicates arise when
-multiple keyword searches return overlapping result sets, or when the same
-work appears under different OpenAlex IDs. Deduplication operates on metadata
-(DOI, title, authors) before any screening effort is spent.
+Removes duplicate records that arise when queries overlap or when the
+same work appears under different OpenAlex IDs. Matches on OpenAlex ID,
+DOI, and title + author + year. See [catalogue-dedup.md](catalogue-dedup.md).
 
 - **Consumes:** retrieved catalogue
 - **Produces:** deduplicated catalogue
 
 ### 3. screening-abstracts
 
-Applies a local LLM to score each abstract for relevance, assigning a verdict
-and confidence score. The stage flags rather than filters: it writes one
-`ScreeningVerdict` per work to a sidecar (covering every work, retained and
-rejected alike) and never removes records from the catalogue, so borderline
-cases stay auditable. Downstream stages join the verdict against the
-catalogue and apply their own threshold.
+Asks a decisions model, for each abstract, whether the work is relevant
+to the review, and stores the probability as a 0–100 relevance score.
+The stage flags rather than filters: it writes one `ScreeningVerdict`
+per work and applies no threshold. See
+[screening-abstracts.md](screening-abstracts.md).
 
-- **Consumes:** deduplicated catalogue
+- **Consumes:** deduplicated catalogue, screening criteria
 - **Produces:** per-work `ScreeningVerdict` sidecar (`verdicts.jsonl`)
 
 ### 5. fulltext-retrieval
 
-Retrieves PDFs via open-access sources, DOI resolution, preprint servers,
-or manual batch download. The output is PDFs on disk and a retrieval
-status record per work. Papers not retrievable are flagged as
-abstract-only. Full text is essential for RQ1.1 (Reproducibility),
-RQ1.2 (Prevalence), and RQ1.3 (Rationale). Numerical choices are
-rarely stated in abstracts.
+Fills the persistent, work-keyed PDF store `data/pdfs/` from open-access
+sources for every work in the deduplicated catalogue; screening never
+gates it. The still-missing works go to collaborators through an
+export/import loop: `fulltext-retrieval-export` writes a handoff bundle
+of the still-missing works that pass a screening-score threshold, since
+collaborator time is the cost worth saving, and `fulltext-retrieval-import` brings the returned
+PDFs back into the store. Only the operator writes the store. See
+[fulltext-retrieval.md](fulltext-retrieval.md) and
+[pdf-store.md](pdf-store.md).
 
-- **Consumes:** deduplicated catalogue (every work; no screening join)
-- **Produces:** PDFs on disk, retrieval status records (per-work retrieval
-  outcome and source)
+- **Consumes:** deduplicated catalogue; for the export, also the
+  screening verdicts
+- **Produces:** PDFs in `data/pdfs/`, one provenance record per work
+
+## corpus-assemble
+
+Selects the works for analysis and copies their PDFs into the
+self-contained `data/corpus/`. It is the only place the screening
+threshold is applied. Works without a score are included, because
+stage 7 still judges them on the full text, and works without a PDF are
+included too. The corpus records a content-based `corpus_id` that every
+analysis output carries. See [corpus.md](corpus.md).
+
+- **Consumes:** deduplicated catalogue, screening verdicts, screening
+  threshold, PDF store
+- **Produces:** `data/corpus/`
+
+## Second half: analyse
+
+### One branch per paper
+
+Once the corpus is assembled, each paper moves through analysis
+independently. No analysis stage looks across papers, and no per-paper
+record is rewritten from cross-paper results. Synthesis, at the end, is
+the only aggregation. Cross-paper work (deduplication, import matching,
+vocabulary term frequencies) happens before the corpus.
 
 ### 6. fulltext-extraction
 
-Parses retrieved PDFs into structured sections (title + body text per
-section). GROBID is the extraction tool. The extraction is decoupled from
-retrieval so that PDFs can also be consumed directly by other tools (e.g.
-a long-context LLM reviewing a raw PDF). Not all downstream stages require
-structured sections — some may work with the PDF directly.
+Parses the corpus PDFs into structured sections with GROBID and keeps
+the TEI XML as the canonical artifact. GROBID belongs to this half
+because the PDF is the scarce artifact and its text can always be
+re-extracted, so acquisition machines need no Docker. See
+[fulltext-extraction.md](fulltext-extraction.md).
 
-- **Consumes:** PDFs from stage 5
-- **Produces:** full-text corpus — structured section text per work
+- **Consumes:** corpus PDFs
+- **Produces:** TEI per work and an `ExtractedDocument` index
 
 ### 7. fulltext-eligibility
 
-Full-text assessment of whether each work meets the review's eligibility
-criteria. Distinct from screening (which uses only title and abstract).
-Reading the full text may reveal that a paper is not actually about
-computational Lagrangian methods, or that it is a review/meta-analysis
-rather than primary research. The stage is **full-text-only**: it assesses
-only works that have a usable `ExtractedDocument`, skipping (not flagging)
-works without full text, and records a `tei-parse-failure` sentinel when
-the TEI is malformed or renders empty. See [eligibility.md](eligibility.md)
-for the verdict shape and sentinel reasons.
+A cheap full-text pass in front of codebook extraction. A decisions
+model answers one yes/no question per paper on the rendered full text:
+does it track particles, tracers or objects in an ocean flow field, and
+is it primary research? Papers without a methods description stay in;
+they count as non-reproducible for RQ1.1. The stage is full-text-only:
+works without a current extraction are skipped, not flagged. See
+[eligibility.md](eligibility.md).
 
-- **Consumes:** deduplicated catalogue, stage 3 screening verdict sidecar,
-  screening threshold, full-text corpus, eligibility criteria (defined in
-  the protocol)
+- **Consumes:** corpus works, extractions, eligibility criteria
 - **Produces:** per-work `EligibilityVerdict` sidecar
 
 ### 8. extraction-codebook
 
-An LLM processes each paper against the codebook, extracting: sub-discipline
-tags (e.g. water parcels, tracers, objects — not a fixed set), numerical integration scheme,
-time-step strategy, interpolation method, reproducibility indicators (code
-and method availability), and context snippets for numerical choices.
-Like stage 7, it is **full-text-only**: it extracts only eligible works
-that have a usable `ExtractedDocument`, skipping (not flagging) those
-without full text, and records a sentinel `reason` when the TEI is
-malformed/empty or the LLM response fails to validate. See
-[extraction-codebook.md](extraction-codebook.md) for the record shape and
-sentinel reasons, and [codebook.md](codebook.md) for the seed field list.
+An LLM fills the codebook for each eligible paper: sub-discipline tags,
+numerical integration scheme, time-step strategy, interpolation method,
+reproducibility indicators, the stated rationale for numerical choices,
+and a verbatim context snippet for each value. Like stage 7 it is
+full-text-only. It refuses eligibility verdicts made on another corpus
+or with other criteria. See [extraction-codebook.md](extraction-codebook.md)
+and [codebook.md](codebook.md).
 
-- **Consumes:** deduplicated catalogue, stage 7 eligibility verdict sidecar,
-  full-text corpus, codebook
-- **Produces:** extraction records — one structured record per paper
+- **Consumes:** corpus works, eligibility verdicts, extractions,
+  codebook
+- **Produces:** one `ExtractionRecord` per processed paper
 
-### 10. synthesis-quantitative
+### Synthesis
 
-Validated extraction records are aggregated to produce quantitative answers to
-RQ1.1 (Reproducibility) and RQ1.2 (Prevalence): fraction of papers providing
-reproducible detail, distribution of each numerical choice, breakdowns by
-sub-discipline.
+Planned, not built. One step aggregates the extraction records into
+answers to the research questions: quantitative summaries for RQ1.1
+(reproducibility) and RQ1.2 (prevalence), and a grouping of the stated
+rationales for RQ1.3. Whether the rationale grouping keeps human
+labelling is decided when synthesis is designed.
 
-- **Consumes:** validated extraction records
-- **Produces:** `statistics.json` — tabulated counts, proportions, breakdowns
-
-### 11. synthesis-thematic
-
-The stated rationales for numerical choices — a free-text field in the
-codebook — are gathered and thematically clustered to address RQ1.3
-(Rationale). An LLM assists in grouping rationales into a rationale taxonomy
-(e.g., computational cost, accuracy requirements, code availability,
-convention), but **final taxonomy labels are assigned and reviewed by a
-human**. No team member currently claims qualitative-analysis expertise;
-external consultation may be needed before this stage runs on real data.
-
-- **Consumes:** validated extraction records
-- **Produces:** `rationale-taxonomy.json` — coded categories with supporting
-  quotations and paper references
-
-### 12. synthesis-narrative
-
-Statistics and rationale taxonomy are combined into a structured narrative
-addressing each research question. RQ1.1 and RQ1.2 get quantitative
-summaries; RQ1.3 gets qualitative findings. Gaps and limitations (unretrieved
-papers, low-confidence extraction records) are explicitly flagged.
-
-- **Consumes:** `statistics.json`, `rationale-taxonomy.json`
-- **Produces:** `synthesis-draft.md` — structured narrative keyed to research
-  questions, with evidence references
+- **Consumes:** extraction records
+- **Produces:** to be designed
 
 ## Human spot-checking
 
-Stage 8 (extraction-codebook) produces an XLSX review workbook for human
-spot-checking (`extraction-codebook-export`). The workbook samples a random
-subset (`--n-subset` / `--subset-seed`) and gives each work its own tab as the
-working surface, with an Index sheet for navigation; the JSONL sidecars
-remain the machine-readable form. Screening and eligibility verdicts are
-inspected directly on their `verdicts.jsonl`.
+`extraction-codebook-export` writes an XLSX workbook for spot-checking
+stage 8: a random subset (`--n-subset` / `--subset-seed`), one tab per
+work with each codebook field's value and context, and an Index sheet
+for navigation. It is read-only; nothing flows back into the data.
+Screening and eligibility verdicts are inspected directly on their
+`verdicts.jsonl`. The screening threshold is chosen by looking at the
+screening scores before `corpus-assemble`.
 
 ## Shared resources
 
 ### Vocabulary
 
 A concept-tagged term list ([vocabulary.md](vocabulary.md)) for
-deterministic keyword matching against text. Useful in multiple contexts:
-keyword-based screening alongside LLM screening, locating methods sections
-during [two-pass extraction](two-pass-extraction.md), and refining the
-search strategy. Not a pipeline stage — a helper resource available to any
-stage that needs term matching.
-
-## Optional extensions
-
-These are not core pipeline stages but may be added if they prove valuable.
-
-### Search–screening feedback loop
-
-Human review of screening verdicts feeds back to refine the search strategy
-(stage 1) or screening calibration (stage 3). Useful when systematic misses
-or false positives reveal gaps in the search strategy. Requires convergence
-criteria to avoid endless iteration.
-
-### Citation-network analysis
-
-The citation graph embedded in the work records can identify foundational
-methodological papers (high centrality within the corpus) and reveal whether
-numerical choices propagate by citation inheritance or arise independently.
-Results would feed into quantitative synthesis (stage 10) as contextual
-annotations on prevalence findings. Uses co-citation analysis and
-bibliographic coupling.
-
-### Author review
-
-An explicit final stage where the human authors read the synthesis draft,
-verify claims against source records, and finalise the manuscript sections.
-Modelled as a pipeline stage (rather than an implicit post-pipeline activity)
-to make the scholarly accountability step visible.
+deterministic keyword matching against text, usable alongside LLM
+screening, for locating methods sections in
+[two-pass extraction](two-pass-extraction.md), and for refining the
+search strategy. Not a pipeline stage and not yet implemented.
 
 ## Pipeline flowchart
 
-Rounded yellow nodes are human steps, blue nodes run a local LLM, grey
-cylinders are data on disk. Dashed nodes are designed but not implemented.
-Of the human steps, only the PDF handoff loop writes back into the data;
-the XLSX review workbook is a read-only surface.
+Rounded yellow nodes are human steps, blue nodes call the review's LLM
+endpoint, grey cylinders are data on disk. Dashed nodes are planned but
+not built. Only the collaborator PDF loop writes back into the data;
+the XLSX workbook is a read-only surface.
 
 ```mermaid
 flowchart TD
@@ -217,33 +194,31 @@ flowchart TD
     INIT --> FETCH
     OA[(OpenAlex)]:::store --> FETCH
 
-    FETCH[1 catalogue-fetch<br/>one run per query]
-    FETCH --> DEDUP[2 catalogue-dedup<br/>id / DOI / title+year]
-    DEDUP --> SCREEN[3 screening-abstracts]:::llm
-    SCREEN --> H3([Reviewer: inspect scores<br/>flag, don't filter]):::human
+    subgraph ACQ [Identify and acquire]
+        FETCH[1 catalogue-fetch<br/>one run per query]
+        FETCH --> DEDUP[2 catalogue-dedup<br/>id / DOI / title+year]
+        DEDUP --> SCREEN[3 screening-abstracts<br/>decisions]:::llm
+        DEDUP --> RETR[5 fulltext-retrieval<br/>OA links → Unpaywall]
+        RETR --> PDFS[(data/pdfs/<br/>provenance.jsonl)]:::store
+        RETR -->|still missing| EXPORT[fulltext-retrieval-export<br/>dois.txt · missing.ris<br/>no-doi.csv · pdf-manifest.csv]
+        SCREEN -->|score ≥ threshold| EXPORT
+        EXPORT --> H5([Collaborators: fetch PDFs<br/>through their own access,<br/>return the folder as is]):::human
+        H5 --> IMPORT[fulltext-retrieval-import<br/>match by embedded DOI]
+        IMPORT --> PDFS
+        SCREEN --> H3([Reviewer: inspect scores,<br/>choose the threshold]):::human
+    end
 
-    DEDUP --> RETR[5 fulltext-retrieval<br/>OA links → Unpaywall]
-    RETR --> PDFS[(data/pdfs/<br/>provenance.jsonl)]:::store
-    SCREEN -->|score ≥ threshold| EXPORT
-    RETR -->|still missing| EXPORT[fulltext-retrieval-export<br/>dois.txt · missing.ris<br/>no-doi.csv · pdf-manifest.csv]
-    EXPORT --> H5([Collaborators: fetch PDFs<br/>through institutional access,<br/>return the folder as is]):::human
-    H5 --> IMPORT[fulltext-retrieval-import<br/>match by embedded DOI]
-    IMPORT --> PDFS
-    IMPORT -->|unmatched residual| TM[title-based matching]:::planned
-    TM -.-> IMPORT
+    PDFS --> CORPUS
+    SCREEN --> CORPUS
+    H3 --> CORPUS[corpus-assemble<br/>threshold applied here]
+    CORPUS --> CDIR[(data/corpus/<br/>works · verdicts · PDF copies)]:::store
 
-    PDFS --> GROBID[6 fulltext-extraction<br/>GROBID]
-    GROBID --> ELIG[7 fulltext-eligibility]:::llm
-    ELIG --> H7([Reviewer: check<br/>inclusion verdicts]):::human
-
-    ELIG -->|eligible| CODE[8 extraction-codebook]:::llm
-    CODE --> CX[extraction-codebook-export<br/>XLSX sample]
-    CX --> H8([Reviewer: verify values<br/>against context excerpts]):::human
-
-    CODE -.-> QS[10 synthesis-quantitative]:::planned
-    CODE -.-> TS[11 synthesis-thematic]:::planned
-    TS -.-> H11([Reviewer: assign<br/>taxonomy labels]):::human
-    QS -.-> NARR[12 synthesis-narrative]:::planned
-    H11 -.-> NARR
-    NARR -.-> H12([Authors: verify claims,<br/>finalise manuscript]):::human
+    subgraph ANA [Analyse — one branch per paper]
+        CDIR --> GROBID[6 fulltext-extraction<br/>GROBID]
+        GROBID --> ELIG[7 fulltext-eligibility<br/>decisions]:::llm
+        ELIG -->|eligible| CODE[8 extraction-codebook<br/>chat]:::llm
+        CODE --> CX[extraction-codebook-export<br/>XLSX sample]
+        CX --> H8([Reviewer: verify values<br/>against context excerpts]):::human
+        CODE -.-> SYN[synthesis]:::planned
+    end
 ```

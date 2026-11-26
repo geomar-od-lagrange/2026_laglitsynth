@@ -3,17 +3,22 @@
 A general pattern for extracting structured data from long documents with
 LLMs. Validated in a prior prototype
 ([litrag](https://github.com/willirath/litrag)) and applicable to several
-pipeline stages (eligibility assessment, data extraction, thematic
-synthesis).
+pipeline stages (eligibility assessment, data extraction, synthesis). The
+pipeline does not use it yet: stages 7 and 8 send the whole rendered full
+text in one request.
 
 ## The problem
 
 Full scientific papers are 5k-15k words. Asking an LLM to read an entire
 paper and fill a structured schema in one shot has two failure modes:
 
-- **Context limits.** Smaller local models (e.g. llama3.2:3b with 4k context)
-  simply cannot fit a full paper plus prompt plus output. litrag found that
-  only ~3 chunks (~2700 tokens of paper text) fit alongside the prompt.
+- **Context limits.** A model whose context is smaller than the paper
+  plus prompt plus output cannot take it in one call. litrag, with a 3b
+  model and 4k context, found that only ~3 chunks (~2700 tokens of paper
+  text) fit alongside the prompt. The pipeline does not truncate: a full
+  text longer than the model's context is rejected by the endpoint and
+  recorded as `llm-rejected`, and the `llm_rejected_count` in the stage
+  meta shows how often that happens.
 - **Attention dilution.** Even models with sufficient context windows perform
   worse on structured extraction from long inputs. The signal (e.g. "we used
   4th-order Runge-Kutta with a 6-hour time step") is a few sentences buried
@@ -56,9 +61,8 @@ validation error appended to the prompt.
 
 ### Stage 7 (eligibility assessment)
 
-Pass 1: locate the methods/approach section. Pass 2: determine whether the
-paper describes computational Lagrangian methods (yes/no with evidence
-quote).
+Pass 1: locate the methods/approach section. Pass 2: ask the eligibility
+question on those passages.
 
 ### Stage 8 (data extraction)
 
@@ -66,22 +70,21 @@ Pass 1: locate passages describing numerical methods, time-stepping,
 interpolation, software tools. Pass 2: extract codebook fields from those
 passages.
 
-### Stage 11 (thematic synthesis)
+### Synthesis
 
-Pass 1: retrieve rationale passages across the corpus for a given numerical
-choice. Pass 2: cluster or summarize the rationales.
+Pass 1: select the rationale passages for a given numerical choice from
+the extraction records. Pass 2: group or summarize the rationales.
 
 ## Validate-and-retry loop
 
-The laglitsynth filter (stage 3) already uses JSON-mode structured output
-with graceful handling of parse failures. The same pattern extends to
-extraction:
+Stage 8 already requests JSON-mode output and records a response that
+fails validation as `llm-parse-failure`. A retry extends that:
 
 1. Define extraction schema as a Pydantic model.
 2. Request JSON-mode output from the LLM.
 3. Validate through `Model.model_validate_json(response)`.
 4. On `ValidationError`, retry once with the error message in the prompt.
-5. On second failure, log and mark the record as `extraction_failed`.
+5. On second failure, record the `llm-parse-failure` sentinel.
 
 litrag's gist generator used a fixed 4-section template
 (Contributions / Methods / Results / Limitations) and this worked reliably.

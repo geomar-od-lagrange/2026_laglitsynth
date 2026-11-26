@@ -101,7 +101,7 @@ the stage to run first. See [run-manifest.md](run-manifest.md) for the layout.
 
 `catalogue-sample` writes a seeded random sample of a catalogue as a
 catalogue of its own, for running the downstream stages on a subset
-before committing to the whole corpus:
+before committing to the whole catalogue:
 
 ```
 laglitsynth catalogue-sample --n 500 --seed 42

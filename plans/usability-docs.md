@@ -1,5 +1,17 @@
 # Usability — documentation fixes
 
+Status: the Ollama parts of this plan are obsolete. The
+[pipeline restructure](pipeline-restructure.md) removed local LLMs: every
+LLM stage calls one OpenAI-compatible endpoint, `bake-model`, `num_ctx`
+and `OLLAMA_NUM_PARALLEL` are gone, and `docs/llm-concurrency.md` was
+deleted (concurrency is described in
+[interfaces.md](../docs/interfaces.md#llm-concurrency)). Obsolete: runbook
+steps 1–5 and the Ollama half of step 11, the Reproducibility subsections
+on temperature and seed, the "No `--concurrency` flag" one-liner, the
+model-pull hints, and the README's Ollama section. The GROBID steps, the
+per-stage prerequisite links and the remaining README hygiene items still
+apply.
+
 ## Goal
 
 Close the documentation gap a manual user hits when running stages 1–8
@@ -52,7 +64,7 @@ Single runbook a manual user reads before stages 3, 6, 7, 8. Sequence:
 2. **Start Ollama with `OLLAMA_NUM_PARALLEL` set** — explicit warning
    that the env var is read at `ollama serve` start time and exporting
    it later is a silent no-op (per
-   [`llm-concurrency.md`](../docs/llm-concurrency.md) L25–32).
+   the deleted `llm-concurrency.md` L25–32).
 3. **Pull the models** — `gemma3:4b` for stages 3 and 7,
    `llama3.1:8b` (or larger) for stage 8 with the empty-JSON warning
    from
@@ -121,7 +133,7 @@ Specific edits:
   "Prerequisites" block linking to `external-services.md`; add a
   one-liner "**No `--concurrency` flag.** Stage 7 calls Ollama
   sequentially regardless of `OLLAMA_NUM_PARALLEL`. See
-  [llm-concurrency.md](../docs/llm-concurrency.md)." (closes
+  llm-concurrency.md." (closes
   [O5](../docs/explorations/usability-review.md) doc-side).
 - [`docs/extraction-codebook.md`](../docs/extraction-codebook.md) —
   same prerequisites + concurrency note as eligibility; add the
@@ -285,7 +297,7 @@ network-namespace workaround that's known to work."
   [`docs/explorations/nesh-ollama.md`](../docs/explorations/nesh-ollama.md),
   [`docs/explorations/nesh-grobid.md`](../docs/explorations/nesh-grobid.md),
   [`docs/grobid-lessons.md`](../docs/grobid-lessons.md),
-  [`docs/llm-concurrency.md`](../docs/llm-concurrency.md),
+  `docs/llm-concurrency.md` (deleted),
   [`scripts/nesh-pipeline.sbatch`](../scripts/nesh-pipeline.sbatch).
 - Roadmap: [`plans/roadmap.md`](roadmap.md) — add this plan as
   in-flight; archive when each commit lands.

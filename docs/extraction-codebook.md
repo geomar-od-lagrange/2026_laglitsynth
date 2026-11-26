@@ -11,17 +11,16 @@ an eligible work without a usable full-text extraction is not processed
 (no record row, no count), because the codebook fields turn on
 numerical-method detail abstracts do not carry.
 
-This is the first real run of phase 2 of the codebook: a best-guess
-schema populated by the LLM against real papers. Records feed stages
-10–12 (synthesis). Schema churn is
-expected once phase 3 human review begins.
+This is phase 2 of the [codebook](codebook.md): a best-guess schema
+populated by the LLM against real papers. Records feed the planned
+synthesis step. Schema churn is expected in phase 3 human review.
 
 ## Prerequisites
 
 An OpenAI-compatible chat endpoint and its key as `LLM_API_KEY`; see
 [external-services.md](external-services.md#llm-endpoint).
 
-## Prototype scope
+## Scope
 
 A single LLM call per paper over the flattened full-text body. Same
 flag-don't-filter pattern as [eligibility](eligibility.md): structured
@@ -29,7 +28,7 @@ JSON output, Pydantic validation, one record per processed work,
 sentinel `reason` for skips.
 
 The seed codebook fields — identification, numerical choices,
-reproducibility indicators, extraction metadata — are defined in
+reproducibility indicators, rationale, extraction metadata — are defined in
 [codebook.md](codebook.md). That document is the authoritative field
 list and is not duplicated here. The shipped YAML transcription lives
 at
@@ -41,10 +40,8 @@ every content field is `str | None`, and premature enumeration is
 avoided on purpose.
 
 The [two-pass extraction](two-pass-extraction.md) pattern is the
-deferred alternative: it becomes targeted work once phase 3 review
-identifies which fields are worst-hit. The prototype uses a single
-pass so end-to-end flow through stages 10–12 exists before optimising
-any one component.
+alternative for papers or fields a single pass handles badly; phase 3
+review and the `llm-rejected` count show whether it is needed.
 
 ## Input
 
@@ -158,8 +155,8 @@ See [configs.md](configs.md) for the run-id directory model and
 `config.yaml` semantics. Filename note: stage 6 already writes
 `extraction.jsonl` (different directory, different schema). This
 stage uses `records.jsonl` to match the conceptual record name and to
-avoid the collision. There is no derived convenience file; stage 9
-and stages 10–12 read `records.jsonl` directly.
+avoid the collision. There is no derived convenience file; the review
+export and the planned synthesis read `records.jsonl` directly.
 
 ## Per-work flow
 
@@ -279,7 +276,7 @@ to run (see [run-manifest.md](run-manifest.md)).
   request's `reasoning_effort` and recorded in `meta.llm`. Unset (the
   default), no effort is sent and the provider's default applies.
 - `--concurrency`: number of in-flight LLM requests (default: `1`).
-  See [llm-concurrency.md](llm-concurrency.md).
+  See [interfaces.md](interfaces.md#llm-concurrency).
 
 ### Model sizing
 
@@ -405,16 +402,13 @@ all-works scan); unset or `>=` the record count emits the full set in
 record order. A record whose `work_id` is absent from the catalogue
 raises a `ValueError` naming the offending id.
 
-## What to defer
+## Not done here
 
-- Two-pass retrieval per [two-pass-extraction.md](two-pass-extraction.md).
-  Trigger is phase 3 review flagging attention dilution on specific
-  fields.
-- Retry-with-error-in-prompt on `llm-parse-failure`. Cheap; add when
-  failure rate warrants.
-- Enum consolidation. Free text first; categories land at phase 3
-  after human review clusters the LLM's actual vocabulary.
-- Multi-run consensus. Single call per paper for now.
-- Branching on `ExtractedDocument.extraction_status`. Malformed or
-  empty TEI records a `tei-parse-failure` sentinel; re-evaluate if
-  phase 3 surfaces silent bad records.
+- Two-pass retrieval ([two-pass-extraction.md](two-pass-extraction.md)).
+  The whole rendered text goes into one call.
+- Retry with the validation error in the prompt. An unparseable response
+  is recorded as `llm-parse-failure`.
+- Enum consolidation. Every field is free text; categories come out of
+  phase 3 review of the LLM's actual vocabulary.
+- An extraction quality gate. Malformed or empty TEI records a
+  `tei-parse-failure` sentinel; there is no other check on the TEI.

@@ -1,9 +1,8 @@
 # PDF store
 
 `data/pdfs/` holds at most one PDF per work in the deduplicated catalogue.
-It is the input to corpus assembly in
-[pipeline-restructure.md](../plans/pipeline-restructure.md). Current
-counts per source:
+`corpus-assemble` copies the selected works' PDFs from it into the
+[corpus](corpus.md). Current counts per source:
 
 ```sh
 grep -o '"source":"[^"]*"' data/pdfs/provenance.jsonl | sort | uniq -c

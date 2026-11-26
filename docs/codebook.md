@@ -1,13 +1,14 @@
 # Codebook development
 
 The codebook defines what to extract from each paper and how. It is the
-schema for stage 8 (data extraction) and the input to stages 10–12
-(synthesis). The codebook does not exist yet — it must be built
-iteratively from the actual corpus. The seed codebook below is a
-hypothesis about what to extract, tested by early extraction runs. The
+schema for stage 8 (data extraction), whose records feed the planned
+synthesis step. The shipped codebook,
+[`examples/codebooks/lagrangian-oceanography.yaml`](../examples/codebooks/lagrangian-oceanography.yaml),
+transcribes the seed fields below. The seed codebook is a hypothesis
+about what to extract, tested by extraction runs on the corpus. The
 extract–review–revise loop (phase 3) is the mechanism for convergence;
-fields will be added, removed, split, or merged as the actual corpus
-reveals what matters.
+fields are added, removed, split, or merged as the corpus reveals what
+matters.
 
 ## Approach: LLM-first pilot, human-tuned later
 
@@ -37,10 +38,10 @@ water parcels, tracers, objects) and varying in documentation quality. The LLM
 fills all codebook fields. Output is a JSONL of extraction records — one
 per paper.
 
-This is not a one-off experiment. It is the first real run of stage 8. The
-extraction records flow into stages 10–12 and produce (likely poor) synthesis
-output. The value is that the full pipeline stands end to end, even if the
-results are unvalidated.
+This is not a one-off experiment. It is the first real run of stage 8, and
+its extraction records are what synthesis will be designed against. The
+value is that the pipeline stands end to end, even if the results are
+unvalidated.
 
 No human review happens in this phase. The extraction records are artifacts
 to be reviewed later, not ground truth.
@@ -70,8 +71,11 @@ the codebook itself. Possible problems:
 
 After review, revise the codebook and re-run extraction. The
 extract–review–revise loop converges when the human reviewer stops finding
-schema problems (correctness and completeness errors are expected and
-handled by adjudication, stage 9).
+schema problems. Correctness and completeness errors are expected; they
+are fixed by improving the codebook and the prompt and re-running, not by
+correcting records by hand. The reviewer works from the
+`extraction-codebook-export` workbook
+([extraction-codebook.md](extraction-codebook.md#review-export)).
 
 ## Seed codebook fields
 
@@ -83,11 +87,12 @@ Derived from the research questions and domain terms in the
 Every extracted value is paired with a verbatim context snippet from the
 source paper. The context snippet preserves the interpretive context that
 a bare value loses: surrounding sentences that explain, qualify, or
-constrain the value. This pattern replaces a separate "method details"
-section — context snippets make human review possible without re-reading
-whole papers. The stated reasons behind numerical choices get their own
-`rationale` field (RQ1.3), because they are spread across a paper rather
-than attached to one value.
+constrain the value. Context snippets make human review possible without
+re-reading whole papers. They do not replace a rationale: the stated
+reasons behind numerical choices get their own free-text `rationale`
+field (RQ1.3), with its own verbatim context, because those reasons are
+spread across a paper rather than attached to one value, and synthesis
+groups them across papers.
 
 In the tables below, each value field has a companion `*_context` field
 of type `str or None`. The context is a short verbatim excerpt from the
@@ -157,12 +162,12 @@ not state the information, both the value and context are `None`.
 ### Value + context snippet as default field structure
 
 Every extracted value is paired with a verbatim context snippet from the
-source paper. This replaces the earlier approach of a separate "method
-details" section; the stated reasons behind numerical choices are the one
-exception and keep a `rationale` field of their own. Context snippets are cheap to store and
-solve two problems at once: they make human adjudication possible without
-re-reading whole papers, and they preserve the interpretive context that
-bare values lose. Reporting quality is not assessed as a separate
+source paper. Context snippets are cheap to store and solve two problems
+at once: they make human review possible without re-reading whole
+papers, and they preserve the interpretive context that bare values
+lose. Snippets attach to one value each, so they cannot carry the
+reasons a paper gives for its numerical choices; those go into the
+`rationale` field, the input RQ1.3 needs. Reporting quality is not assessed as a separate
 dimension — it is inferred from field completeness (how many fields have
 values) combined with the context snippets (which show what the paper
 actually said).
@@ -215,20 +220,14 @@ paper may describe.
 ### The seed codebook is a hypothesis
 
 The seed codebook will be wrong. Fields will be added, removed, split, or
-merged during phase 3. The Pydantic model for the extraction record must
-be updated to match. This is fine — the project has no backwards
-compatibility constraints. The codebook is discovered through extraction
-runs, not designed from first principles. Each extract–review–revise
-cycle tests the current codebook against the actual corpus and revises
-it based on what the papers contain.
+merged during phase 3. The Pydantic model for the extraction record
+follows automatically: stage 8 builds it from the codebook YAML at
+startup ([`build_record_model`](../src/laglitsynth/extraction_codebook/codebook.py)),
+so a field change is a YAML edit and a re-run. The codebook is discovered
+through extraction runs, not designed from first principles. Each
+extract–review–revise cycle tests the current codebook against the
+corpus and revises it based on what the papers contain.
 
-## What this plan does not cover
-
-- The Pydantic model for the extraction record. That is defined when the
-  codebook stabilises after phase 3.
-- The LLM prompt for extraction. That is part of the stage 8 plan, not the
-  codebook plan.
-- Adjudication workflow (stage 9). Adjudication consumes the codebook but
-  does not change it.
-- Enumeration of allowed values for enum fields. That is the output of
-  phase 3, not an input.
+The system prompt lives in the same YAML; see
+[extraction-codebook.md](extraction-codebook.md#codebook-yaml). Allowed
+values for enum fields are an output of phase 3, not an input.

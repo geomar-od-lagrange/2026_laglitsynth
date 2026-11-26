@@ -1,7 +1,8 @@
 # Lagrangian Oceanography Literature Synthesis
 
-Tools for conducting structured literature reviews — from keyword search to
-citation analysis to structured synthesis.
+Tools for conducting structured literature reviews — from keyword search
+and PDF acquisition to a self-contained corpus, and from the corpus to
+structured extraction per paper.
 
 ## Setup
 
@@ -49,10 +50,12 @@ All tools are accessed via the `laglitsynth` CLI:
 laglitsynth --help
 ```
 
-Stages 1, 2, 3, 5, 6, 7, 8 are implemented; stage 4 was deleted in the
-verdicts-only cutover. Stages 9–12 are specified in
-[`docs/pipeline.md`](docs/pipeline.md) but not yet implemented. Each
-implemented stage has its own doc under [`docs/`](docs/).
+The pipeline has two halves that meet at the corpus
+([`docs/pipeline.md`](docs/pipeline.md)): stages 1, 2, 3 and 5 find the
+literature and acquire PDFs, `corpus-assemble` writes the self-contained
+`data/corpus/`, and stages 6, 7 and 8 analyse the papers in it. Stage
+numbers 4 and 9 are unused. A final synthesis step is planned but not
+built. Each stage has its own doc under [`docs/`](docs/).
 
 - Stage 1 — `laglitsynth catalogue-fetch` — search OpenAlex by keyword and
   store validated bibliographic records as JSONL. See
@@ -69,17 +72,19 @@ implemented stage has its own doc under [`docs/`](docs/).
   `fulltext-retrieval-import` to diversify the still-missing margin through
   collaborators' institutional access. See
   [`docs/fulltext-retrieval.md`](docs/fulltext-retrieval.md).
-- Stage 6 — `laglitsynth fulltext-extraction` — parse retrieved PDFs into
-  structured section text via GROBID. See
+- `laglitsynth corpus-assemble` — apply the screening threshold and copy
+  the selected works, their verdicts and their PDFs into `data/corpus/`,
+  the only input of stages 6–8. See [`docs/corpus.md`](docs/corpus.md).
+- Stage 6 — `laglitsynth fulltext-extraction` — parse the corpus PDFs
+  into structured section text via GROBID. See
   [`docs/fulltext-extraction.md`](docs/fulltext-extraction.md).
-- Stage 7 — `laglitsynth fulltext-eligibility` — join the catalogue against
-  the screening verdicts, then assess full-text eligibility with a
-  decisions model on the rendered full text, emitting an `EligibilityVerdict` sidecar. See
-  [`docs/eligibility.md`](docs/eligibility.md).
-- Stage 8 — `laglitsynth extraction-codebook` — join the catalogue against
-  the eligibility verdicts, then extract structured codebook records
-  (numerical choices, reproducibility indicators, sub-discipline tags) with
-  an LLM. See
+- Stage 7 — `laglitsynth fulltext-eligibility` — assess each corpus work
+  on its full text with a decisions model, emitting an
+  `EligibilityVerdict` sidecar. See [`docs/eligibility.md`](docs/eligibility.md).
+- Stage 8 — `laglitsynth extraction-codebook` — for the eligible corpus
+  works, extract structured codebook records (numerical choices,
+  reproducibility indicators, stated rationale, sub-discipline tags) with
+  an LLM; `extraction-codebook-export` writes a review workbook. See
   [`docs/extraction-codebook.md`](docs/extraction-codebook.md).
 
 ## Running the pipeline
@@ -175,7 +180,7 @@ The job header requests `--partition=base --cpus-per-task=4 --mem=32G
 The sbatch header's 2 h is smoke-sized. For a real corpus run,
 override `N` and `--time`. `LLM_CONCURRENCY` (default `1`) sets the
 in-flight requests of the LLM stages; see
-[docs/llm-concurrency.md](docs/llm-concurrency.md).
+[docs/interfaces.md](docs/interfaces.md#llm-concurrency).
 
 ```bash
 sbatch \
@@ -191,12 +196,13 @@ Notes:
   (dispatching through `laglitsynth.concurrency.map_concurrent`); the
   runner forwards `LLM_CONCURRENCY` as that flag to stages 3 and 7, and
   `EXTRACTION_CONCURRENCY` (default `1`) to stage 8.
-- Each stage's output is truncated at run start, so a wall-clock kill
-  mid-stage means re-running that stage from scratch on the next
-  submission. If you expect a tight budget, prefer running with
-  `STOP_AFTER_STAGE=6` first to land catalogue + retrieval +
-  extraction (which are cheap to redo with `--skip-existing`), then
-  submit a second job with stages 7..8.
+- The runner starts each LLM stage's output afresh (stage 6 runs with
+  `--skip-existing`), so a wall-clock kill mid-stage means re-running
+  that LLM stage on the next submission. If you
+  expect a tight budget, run with `STOP_AFTER_STAGE=6` first to land
+  catalogue, retrieval, corpus and extraction, then submit a second job
+  with stages 7..8. By hand, stages 7 and 8 resume a killed run with
+  `--skip-existing`.
 
 ### Reviewer export
 
@@ -210,7 +216,7 @@ reproducible random sample.
 # Stage 8 — codebook extraction records (needs the run's --codebook)
 laglitsynth extraction-codebook-export \
     --records data/run/extraction-codebook/<run-id>/records.jsonl \
-    --catalogue data/run/catalogue-dedup/deduplicated.jsonl \
+    --catalogue data/run/corpus/works.jsonl \
     --n-subset 30 --subset-seed 1
 ```
 
@@ -268,6 +274,10 @@ tuning and macOS workarounds.
 
 - [`docs/`](docs/) — component documentation
 - [`docs/pipeline.md`](docs/pipeline.md) — end-to-end pipeline overview
+- [`docs/corpus.md`](docs/corpus.md) — the corpus where the two halves
+  meet: contents, assembly, identity, the analysis run-id
+- [`docs/interfaces.md`](docs/interfaces.md) — artifacts, CLI contract,
+  models
 - [`docs/run-manifest.md`](docs/run-manifest.md) — `data/manifest.json`, the
   run-id, and the fixed `data/` layout every stage reads from
 - [`docs/pdf-store.md`](docs/pdf-store.md) — the PDF store in the `data/`

@@ -2,8 +2,11 @@
 
 The pipeline runs across more than one machine: a laptop for the light,
 interactive stages; the [NESH HPC cluster](external-services.md#nesh-hpc-cluster)
-for the GPU- and storage-heavy stages; and one or more collaborators'
-machines for full-text retrieval behind their own institutional access.
+for GROBID and the storage-heavy analysis stages; and one or more
+collaborators' machines for full-text retrieval behind their own
+institutional access. The two halves of the [pipeline](pipeline.md) meet
+at the self-contained [corpus](corpus.md), so a machine running the
+analysis half needs `data/corpus/` and nothing else from the first half.
 This document states the conventions that make that work — the project
 boundary, the path contract, per-machine credentials, and the safe
 direction to sync each `data/` subdir. It is the written form of the
@@ -67,15 +70,16 @@ The stage graph suggests a natural split across machines:
 
 - Laptop — [`catalogue-fetch`](interfaces.md#stage-1--catalogue-fetch-exists),
   [`catalogue-dedup`](interfaces.md#stage-2--catalogue-dedup-exists), and
-  [`screening-abstracts`](interfaces.md#stage-3--screening-abstracts-exists)
-  (or screening against a tunneled GPU). Light data, interactive work.
-- NESH — the GPU- and storage-heavy stages
+  [`screening-abstracts`](interfaces.md#stage-3--screening-abstracts-exists),
+  which calls the review's hosted LLM endpoint. Light data, interactive
+  work.
+- NESH — the analysis half
   ([`fulltext-extraction`](interfaces.md#stage-6--fulltext-extraction),
   [`fulltext-eligibility`](interfaces.md#stage-7--fulltext-eligibility-exists),
   [`extraction-codebook`](interfaces.md#stage-8--extraction-codebook-exists)),
-  and ideally the corpus itself so the PDFs and TEI never have to come
-  home. Keeping the bulk where the disk is is as much the reason to use
-  NESH as the inference is. See the
+  which needs GROBID and disk for the corpus copies and the TEI, so the
+  bulk never has to come home. The LLM stages reach the hosted endpoint
+  through the cluster's proxy. See the
   [NESH section of external-services.md](external-services.md#nesh-hpc-cluster)
   for the batch setup.
 - Collaborators — full-text
@@ -110,6 +114,13 @@ how they write. The categories:
   private `data/` submodule ([pdf-store.md](pdf-store.md)): A commits and
   pushes after retrieval or import, other machines `git pull` inside
   `data/`.
+- Rewritten whole — the corpus, `data/corpus/`. `corpus-assemble`
+  replaces it in one step on the machine that holds the store and the
+  screening verdicts. Move it from there as a unit: remove the far
+  side's old `data/corpus/` first and copy the new one in, since a copy
+  over the old one would leave PDFs of works no longer selected. Never
+  assemble on two machines and merge. Its
+  `corpus_id` tells both sides whether they hold the same corpus.
 - Bulk, fetch-once, union-safe — the TEI. A TEI file is GROBID's
   deterministic output for one PDF, keyed by work and never rewritten in
   place, so it only ever accumulates. Sync it by **union in either
@@ -137,9 +148,9 @@ how they write. The categories:
 The spine — the deduplicated catalogue and its siblings under
 [`data/catalogue-dedup/`](../data) (`deduplicated.jsonl`, `dropped.jsonl`,
 the meta) — is machine-independent, small, and has no run-id. Rsync it
-once, early, and treat it as read-only on the downstream machines; every
-later stage joins against `deduplicated.jsonl`, so it must be identical
-everywhere. The stage-1 (`catalogue-fetch`) and stage-5
+once, early, and treat it as read-only on the downstream machines; the
+first-half stages and `corpus-assemble` read `deduplicated.jsonl`, so it
+must be identical everywhere they run. The stage-1 (`catalogue-fetch`) and stage-5
 (`fulltext-retrieval`) record files are likewise run-id-less whole-file
 outputs; sync them deliberately from the side that produced them, never
 with `--delete`.

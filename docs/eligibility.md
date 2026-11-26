@@ -11,9 +11,10 @@ that it is a review article rather than primary research.
 An OpenAI-compatible endpoint and its key as `LLM_API_KEY`; see
 [external-services.md](external-services.md#llm-endpoint).
 
-## Prototype scope
+## Scope
 
-One decision per paper on the decisions endpoint, with the rendered full
+A cheap full-text pass in front of [codebook extraction](extraction-codebook.md):
+one decision per paper on the decisions endpoint, with the rendered full
 text as `input`. Same flag-don't-filter pattern as
 [`screening-abstracts`](screening-abstracts.md): the probability is
 stored, verdicts live in a sidecar keyed by `work_id`. This stage is **full-text-only** — a work without a usable
@@ -26,6 +27,11 @@ through, not to be the final filter. Both must hold:
 1. The paper describes a computation that tracks particles, tracers, or
    objects in an ocean flow field.
 2. The paper is primary research (not a review, editorial, or commentary).
+
+Whether the paper describes its numerical methods is not a criterion: a
+paper without a methods description stays in and counts as
+non-reproducible for RQ1.1. Both criteria overlap abstract screening, so
+the share of works this stage excludes shows whether it earns its place.
 
 ## Input
 
@@ -240,7 +246,7 @@ to run (see [run-manifest.md](run-manifest.md)).
 - `--decisions-url`: the decisions endpoint (default:
   `<base-url>/decisions`).
 - `--concurrency`: number of in-flight LLM requests (default: `1`).
-  See [llm-concurrency.md](llm-concurrency.md).
+  See [interfaces.md](interfaces.md#llm-concurrency).
 
 ## Request
 

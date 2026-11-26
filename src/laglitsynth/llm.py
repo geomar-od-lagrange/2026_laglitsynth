@@ -128,7 +128,7 @@ def add_endpoint_args(parser: argparse.ArgumentParser, *, decisions: bool) -> No
         "--concurrency",
         type=int,
         default=1,
-        help="In-flight LLM requests (default: 1). See docs/llm-concurrency.md.",
+        help="In-flight LLM requests (default: 1). See docs/interfaces.md.",
     )
 
 
