@@ -221,7 +221,11 @@ Update this file when a plan is written, implemented, or archived.
   acquire, then analyse, meeting at a self-contained corpus; local LLMs,
   adjudication, abstract lookup and the XLSX exports go. The PDF store it
   builds on is in place as the private `data/` submodule
-  ([pdf-store.md](../docs/pdf-store.md)). The implementation plan is next.
+  ([pdf-store.md](../docs/pdf-store.md)). Implemented by
+  [pipeline-restructure-implementation.md](pipeline-restructure-implementation.md):
+  eight commits in six slices, from deletions through one OpenAI-compatible
+  LLM endpoint, `corpus-assemble` and stages 6–8 on the corpus, to the docs
+  and, last, the RIS export and catalogue-wide import.
 - [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate is now planned as the [run manifest](done/run-manifest.md).
 - [Cross-machine + storage convention](../docs/cross-machine.md) — the third follow-up candidate from [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) landed as an authoritative doc: project = working-directory boundary, run-from-root + fixed-`data/` path contract, per-machine `.env`, and the safe sync direction per `data/` subdir (bulk PDFs/TEI union, per-run-id gate outputs authoritative-side-wins, deduplicated spine rsynced once read-only). The Zotero-import open question from [fulltext-retrieval-diversified.md](done/fulltext-retrieval-diversified.md) is withdrawn: import reads identifiers out of the PDF and matches them against `pdf-manifest.csv`, so Zotero's filename convention does not enter the design. The probe script and its note are removed; the reasoning is recorded in [contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md).
 
