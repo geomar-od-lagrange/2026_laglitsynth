@@ -4,6 +4,17 @@ description: |
   computational Lagrangian oceanography. Used by stage-3 abstract
   screening as the predicate question sent to the decisions endpoint.
 # Scope wording is tracked in issue #26.
+#
+# Known weakness: this asks whether the abstract shows the work tracking
+# particles. When an abstract doesn't name its method (e.g. a larval
+# connectivity or migration study), the model answers "false" with high
+# confidence, so a low score doesn't mean "confidently out" and the
+# threshold can't be read as a recall guarantee. A recall-oriented
+# variant asks the inverse, e.g. "Could the full text use or develop
+# Lagrangian particle tracking in an ocean flow? Answer false only if the
+# abstract makes clear it does not." Re-screen with that wording and
+# compare both against full-text eligibility verdicts before relying on
+# a threshold.
 decision:
   instructions: >-
     Is this work relevant to Lagrangian particle tracking in oceanography?

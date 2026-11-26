@@ -237,6 +237,13 @@ Update this file when a plan is written, implemented, or archived.
 
 ## Queued — ready to plan
 
+- Recall-oriented abstract screening: the screening question asks whether
+  the abstract shows particle tracking, so a low score doesn't mean
+  "confidently out" (see the comment in
+  [the screening criteria](../examples/screening-criteria/lagrangian-oceanography.yaml)).
+  Re-screen with an inverted wording and measure both against full-text
+  eligibility verdicts on every PDF before choosing a threshold. Scope
+  wording is issue #26.
 - Title-based import matching for returned PDFs that embed no DOI
   ([contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md)),
   tuned against the measured publisher-PDF corpus rather than an invented
