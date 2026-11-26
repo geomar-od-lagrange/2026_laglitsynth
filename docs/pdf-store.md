@@ -39,8 +39,7 @@ obtained through GEOMAR and Kiel University subscriptions. Setup is in the
 `laglitsynth fulltext-retrieval` covers only part of `oa` (OpenAlex's best
 open-access URL) and `unpaywall`. The rest of `oa` and all of
 `institutional` came from one-off scripts outside the CLI. Zotero desktop
-reaches publishers that refuse scripted requests, notably Wiley-hosted
-journals (AGU, ASLO), MDPI, IEEE and Taylor & Francis.
+and the browser reach publishers that refuse scripted requests.
 
 Conference abstracts (EGU, AGU, AVISO/OSTST meeting abstracts) are not
 pursued: there is no paper behind them.
@@ -100,9 +99,9 @@ Afterwards, copy each item's child PDF to `<AN>.pdf`.
 
 Zotero 7 (10.0.9) runs "Find Available PDF" as one serial queue. Two of
 its requests leave out `noRetryOnThrottle`: the landing-page request and
-the download of a PDF found on that page. A 429 with `Retry-After: 900`
-then holds the whole queue for 15 min, again and again. With the patch,
-the queue parks only the throttling site and carries on.
+the download of a PDF found on that page. A 429 with a `Retry-After`
+header then holds the whole queue for that long, again and again. With
+the patch, the queue parks only the throttling site and carries on.
 
 Paste it into Tools → Developer → Run JavaScript after every start and
 before the lookup. A queue that already hangs needs a restart; a new
