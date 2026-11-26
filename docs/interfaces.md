@@ -313,7 +313,7 @@ Every parameter is a CLI flag on the stage tool. For credential flags
 when the flag is omitted, and emits a one-line stderr notice
 (`Loaded <KEY> from .env`). The explicit flag always wins; the `.env` read is
 never silent. The LLM stages' `--api-key` falls back to `LLM_API_KEY` in
-the environment first, then in `.env`. All other run-affecting parameters
+the environment first, then in `.env` (announced the same way). All other run-affecting parameters
 (`--base-url`, `--grobid-url`, model names, thresholds) are CLI-only. The
 driver script [scripts/run-pipeline.sh](../scripts/run-pipeline.sh) exports
 each `.env` variable that the environment leaves unset or empty, so an

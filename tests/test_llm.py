@@ -370,13 +370,24 @@ def test_key_from_environment_before_dotenv(
 
 
 def test_key_from_dotenv_when_environment_unset(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     (tmp_path / ".env").write_text("LLM_API_KEY=from-dotenv\n", encoding="utf-8")
     args = _parse(["--base-url", _BASE, "--model", "m"], decisions=False)
     assert resolve_endpoint(args).api_key == "from-dotenv"
+    assert "Loaded LLM_API_KEY from .env" in capsys.readouterr().err
+
+
+def test_key_from_environment_is_not_announced(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LLM_API_KEY", "from-env")
+    args = _parse(["--base-url", _BASE, "--model", "m"], decisions=False)
+    assert resolve_endpoint(args).api_key == "from-env"
+    assert capsys.readouterr().err == ""
 
 
 def test_flag_key_wins_over_environment(monkeypatch: pytest.MonkeyPatch) -> None:

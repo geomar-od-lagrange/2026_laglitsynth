@@ -20,6 +20,7 @@ import argparse
 import json
 import logging
 import os
+import sys
 import time
 from typing import Any
 
@@ -136,6 +137,8 @@ def add_endpoint_args(parser: argparse.ArgumentParser, *, decisions: bool) -> No
 def resolve_endpoint(args: argparse.Namespace) -> LlmEndpoint:
     """Build the endpoint from parsed args; exit naming whatever is missing.
 
+    The API key is ``--api-key``, else ``$LLM_API_KEY``, else
+    ``LLM_API_KEY`` in ``.env``; the ``.env`` read is announced on stderr.
     The decisions URL is resolved only when the stage registered
     ``--decisions-url``; it defaults to ``<base-url>/decisions``. The
     reasoning effort is read only when the stage registered
@@ -147,7 +150,11 @@ def resolve_endpoint(args: argparse.Namespace) -> LlmEndpoint:
     model: str | None = args.model
     if not model:
         raise SystemExit("--model is required")
-    api_key: str | None = args.api_key or os.environ.get(API_KEY_VAR) or load_env_var(API_KEY_VAR)
+    api_key: str | None = args.api_key or os.environ.get(API_KEY_VAR)
+    if not api_key:
+        api_key = load_env_var(API_KEY_VAR)
+        if api_key:
+            print(f"Loaded {API_KEY_VAR} from .env", file=sys.stderr)
     if not api_key:
         raise SystemExit(
             f"no API key: pass --api-key, export {API_KEY_VAR} or add {API_KEY_VAR}=... to .env"

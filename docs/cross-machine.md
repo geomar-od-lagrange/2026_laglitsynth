@@ -38,7 +38,8 @@ make this load-bearing:
   the repo root.
 - `.env` is read from the current directory by
   [`load_env_var`](../src/laglitsynth/dotenv.py) (`Path(".env")`), as a
-  fallback for `--api-key` / `--email` when the flag is omitted.
+  fallback for `--api-key` / `--email` when the flag (and, for the LLM
+  stages, the `LLM_API_KEY` environment variable) is absent.
 
 Stage outputs store **repo-relative** paths — for example a
 `PdfProvenanceRecord`'s `pdf_path` is `pdfs/<stem>.pdf` under `data/`,
@@ -60,7 +61,8 @@ machine by design. `.env` is also a credentials file and has no place in
 a synced data tree. Keep it out of any rsync of `data/` (it lives at the
 repo root, not under `data/`, so a `data/`-scoped sync already excludes
 it); when setting up a new machine, write a fresh `.env` there. The
-explicit `--api-key` / `--email` flags always win over `.env`, and the
+explicit `--api-key` / `--email` flags always win over `.env` (as does an
+exported `LLM_API_KEY` for the LLM stages), and the
 `.env` read is announced on stderr (`Loaded <KEY> from .env`), never
 silent — see [interfaces.md](interfaces.md#configuration-flags-first-env-fallback-for-credentials).
 
