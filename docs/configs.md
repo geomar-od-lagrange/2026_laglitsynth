@@ -42,10 +42,11 @@ moved or been edited.
 
 The two share a file format and may even round-trip: feed a run
 snapshot back as `--config <run-dir>/config.yaml` and the inlined
-codebook is consumed directly. That isn't replay (LLM stochasticity
-makes record-level reproduction impossible at `temperature=0.8`), but
-it is "rerun with the same configuration," and for that purpose the
-shapes are interchangeable.
+codebook is consumed directly. That isn't replay (the endpoint's
+sampling is not pinned, so record-level reproduction is not
+guaranteed), but it is "rerun with the same configuration," and for that
+purpose the shapes are interchangeable. The API key is never part of a
+snapshot: `api_key` is dropped like `run_id` and `config`.
 
 ## CLI-config precedence
 
@@ -86,7 +87,9 @@ Only `query` is required; every other field is optional. An absent
 optional field means "fall back to the runner's built-in default" — it
 is not invented at validation time (None means None). The committed
 default is [examples/reviews/lagrangian-oceanography.yaml](../examples/reviews/lagrangian-oceanography.yaml),
-the smoke-run config; it leaves `screening_threshold` unset.
+the smoke-run config; it leaves `screening_threshold`, the LLM endpoint
+URLs and the models unset and names no provider. The API key is not a
+review-config field: it is `LLM_API_KEY` in the environment or `.env`.
 
 ### The `review-config` subcommand
 
@@ -105,6 +108,8 @@ The stable, documented name set is:
 | `CFG_ELIGIBILITY_CRITERIA` | `eligibility_criteria` |
 | `CFG_CODEBOOK` | `codebook` |
 | `CFG_SCREENING_THRESHOLD` | `screening_threshold` |
+| `CFG_LLM_BASE_URL` | `llm_base_url` |
+| `CFG_LLM_DECISIONS_URL` | `llm_decisions_url` |
 | `CFG_SCREENING_MODEL` / `CFG_ELIGIBILITY_MODEL` / `CFG_EXTRACTION_MODEL` | `models.{screening,eligibility,extraction}` |
 | `CFG_LLM_CONCURRENCY` / `CFG_EXTRACTION_CONCURRENCY` | `concurrency.{llm,extraction}` |
 
@@ -125,7 +130,11 @@ through this same mechanism (`N` maps to `CFG_MAX_RECORDS`). The
 screening threshold has no built-in default: when the run reaches stage
 7 (or stage 5 with `EXPORT_GAP=1`), the runner exits unless
 `SCREENING_THRESHOLD` is set in the environment or `screening_threshold`
-in the config. See
+in the config. The LLM endpoint has no default either: from stage 3 on the
+runner requires `LLM_BASE_URL` (env or `llm_base_url`), `LLM_API_KEY`
+(env or the sourced `.env`) and the model of every stage it reaches, and
+exits naming whichever is missing. `LLM_DECISIONS_URL` is passed to stage
+3 as `--decisions-url` when set; the key is never passed as a flag. See
 [README.md](../README.md#running-the-pipeline) for the invocation.
 
 ## Quick recipes

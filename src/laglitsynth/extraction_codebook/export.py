@@ -188,7 +188,7 @@ def build_work_sheet(
     each row pairs the extracted value with its verbatim ``*_context``.
     ``criterion`` is the
     codebook system prompt, embedded verbatim. ``llm_meta`` carries the
-    model/temperature/prompt_sha256 from ``ExtractionCodebookMeta.llm``; it is
+    model/base_url/prompt_sha256 from ``ExtractionCodebookMeta.llm``; it is
     ``None`` when no meta file was found, in which case the fingerprint cells
     are left blank.
     """
@@ -297,9 +297,8 @@ def build_work_sheet(
 
     llm_rows: list[tuple[str, object]] = [
         ("reason", record.reason or ""),
-        ("seed", record.seed),
         ("llm_model", llm_meta.model if llm_meta else ""),
-        ("llm_temperature", llm_meta.temperature if llm_meta else None),
+        ("llm_base_url", llm_meta.base_url if llm_meta else ""),
         ("llm_prompt_sha256", llm_meta.prompt_sha256 if llm_meta else ""),
         ("llm_raw_response", record.raw_response or ""),
     ]

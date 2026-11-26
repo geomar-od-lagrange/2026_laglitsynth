@@ -20,6 +20,8 @@ from laglitsynth.extraction_codebook.export import (
     sample_records,
     short_work_id,
 )
+from laglitsynth.extraction_codebook.models import ExtractionCodebookMeta
+from laglitsynth.models import LlmMeta, RunMeta
 
 from conftest import _make_work
 
@@ -56,7 +58,6 @@ def _make_record(ctx: CodebookContext, work_id: str, **values: Any) -> BaseModel
     return ctx.record_model(
         work_id=work_id,
         reason=None,
-        seed=1,
         raw_response='{"x": "y"}',
         **payload_fields,
     )
@@ -179,22 +180,52 @@ def test_llm_details_block_rows(tmp_path: Path) -> None:
         tmp_path, [work], [record]
     )
 
+    meta_path = tmp_path / "extraction-codebook-meta.json"
+    meta_path.write_text(
+        ExtractionCodebookMeta(
+            run=RunMeta(tool="t", run_at="2026-01-01T00:00:00+00:00", validation_skipped=0),
+            llm=LlmMeta(
+                model="chatter",
+                base_url="https://llm.example.org/v1",
+                decisions_url=None,
+                prompt_sha256="a" * 64,
+            ),
+            input_catalogue="c",
+            input_eligibility_verdicts="v",
+            input_extractions="e",
+            input_count=1,
+            full_text_count=1,
+            skipped_count=0,
+            llm_parse_failure_count=0,
+        ).model_dump_json()
+    )
+
     export_review_xlsx(
-        records_path, catalogue_path, output_path, ctx=alt_ctx, n_subset=None
+        records_path,
+        catalogue_path,
+        output_path,
+        ctx=alt_ctx,
+        n_subset=None,
+        meta_path=meta_path,
     )
     ws = load_workbook(output_path)["W1"]
 
     # reviewer_remarks on row 15, blank row, LLM header on row 17.
     assert ws["A17"].value == "LLM details (expand to peek)"
-    labels = [ws.cell(row=r, column=1).value for r in range(18, 18 + 6)]
-    assert labels == [
+    rows = {
+        ws.cell(row=r, column=1).value: ws.cell(row=r, column=2).value
+        for r in range(18, 18 + 5)
+    }
+    assert list(rows) == [
         "reason",
-        "seed",
         "llm_model",
-        "llm_temperature",
+        "llm_base_url",
         "llm_prompt_sha256",
         "llm_raw_response",
     ]
+    assert rows["llm_model"] == "chatter"
+    assert rows["llm_base_url"] == "https://llm.example.org/v1"
+    assert ws.cell(row=23, column=1).value is None
 
 
 # ── overview / Index sheet ──────────────────────────────────────────────────

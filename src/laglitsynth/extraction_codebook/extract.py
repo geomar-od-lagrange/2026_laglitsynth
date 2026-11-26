@@ -12,7 +12,6 @@ import argparse
 import hashlib
 import json
 import logging
-import random
 import sys
 import time
 from collections.abc import Iterable, Iterator
@@ -22,7 +21,7 @@ from pathlib import Path
 from typing import cast
 
 from lxml import etree
-from openai import APIConnectionError, APITimeoutError, OpenAI
+from openai import OpenAI
 from pydantic import BaseModel, ValidationError
 
 from laglitsynth.catalogue_fetch.models import Work
@@ -56,16 +55,22 @@ from laglitsynth.layout import (
     extractions_path,
     require_input,
 )
+from laglitsynth.llm import (
+    LlmEndpoint,
+    LlmFailure,
+    add_endpoint_args,
+    chat_client,
+    chat_json,
+    resolve_endpoint,
+)
 from laglitsynth.manifest import resolve_run_id
-from laglitsynth.models import LlmMeta, RunMeta
+from laglitsynth.models import RunMeta
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CODEBOOK = Path("examples/codebooks/lagrangian-oceanography.yaml")
 
-_TEMPERATURE = 0.8
 _LLM_TIMEOUT_SECONDS = 600
-_LLM_MAX_RETRIES = 3
 
 
 def _sentinel_record(
@@ -77,15 +82,15 @@ def _sentinel_record(
 ) -> ExtractionRecordProto:
     """Build a sentinel record: identification set, every content field None.
 
-    ``raw_response`` is passed through on ``llm-parse-failure`` so an
-    operator can see what the LLM actually said; left ``None`` on
-    sentinels emitted without an LLM call (``tei-parse-failure``).
+    ``raw_response`` is passed through on ``llm-parse-failure`` and
+    ``llm-rejected`` so an operator can see what the endpoint said; left
+    ``None`` on sentinels emitted without a response (``tei-parse-failure``,
+    ``llm-timeout``).
     """
     payload_fields = {name: None for name in ctx.payload_field_names}
     record = ctx.record_model(
         work_id=work_id,
         reason=reason,
-        seed=None,
         raw_response=raw_response,
         **payload_fields,
     )
@@ -97,37 +102,25 @@ def extract_codebook(
     user_text: str,
     *,
     client: OpenAI,
-    model: str,
+    endpoint: LlmEndpoint,
     ctx: CodebookContext,
 ) -> ExtractionRecordProto:
     """Call the LLM, validate the payload, compose the full record.
 
-    On JSON parse error or ``ValidationError`` returns a
-    ``reason="llm-parse-failure"`` sentinel with ``seed=None`` and
-    every content field ``None``.
+    A per-work endpoint failure gives the ``llm-timeout`` or
+    ``llm-rejected`` sentinel; a JSON parse error or ``ValidationError``
+    gives ``llm-parse-failure``. Every sentinel has all content fields
+    ``None``.
     """
-    seed = random.randint(0, 2**31 - 1)
     prompt = build_user_message(user_text)
     try:
-        response = client.chat.completions.create(
-            model=model,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": ctx.system_prompt},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=_TEMPERATURE,
-            seed=seed,
+        content = chat_json(
+            client, endpoint, work_id=work_id, system=ctx.system_prompt, user=prompt
         )
-    except (APITimeoutError, APIConnectionError) as exc:
-        logger.warning("LLM timeout for %s: %s", work_id, exc)
+    except LlmFailure as exc:
         return _sentinel_record(
-            work_id,
-            reason="llm-timeout",
-            ctx=ctx,
-            raw_response=None,
+            work_id, reason=exc.reason, ctx=ctx, raw_response=exc.raw_response
         )
-    content = response.choices[0].message.content or "{}"
     try:
         payload = ctx.payload_model.model_validate_json(content)
     except (ValidationError, ValueError) as exc:
@@ -142,7 +135,6 @@ def extract_codebook(
     record = ctx.record_model(
         work_id=work_id,
         reason=None,
-        seed=seed,
         raw_response=content,
         **payload.model_dump(),
     )
@@ -199,7 +191,7 @@ def extract_works(
     extraction_output_dir: Path,
     *,
     client: OpenAI,
-    model: str,
+    endpoint: LlmEndpoint,
     max_records: int | None,
     ctx: CodebookContext,
     skip_ids: set[str] | None = None,
@@ -221,7 +213,7 @@ def extract_works(
 
     def _call_one(work: Work) -> ExtractionRecordProto:
         return _extract_one(
-            work, extractions, extraction_output_dir, client, model, ctx
+            work, extractions, extraction_output_dir, client, endpoint, ctx
         )
 
     yield from map_concurrent(_call_one, eligible, max_workers=concurrency)
@@ -232,7 +224,7 @@ def _extract_one(
     extractions: dict[str, ExtractedDocument],
     extraction_output_dir: Path,
     client: OpenAI,
-    model: str,
+    endpoint: LlmEndpoint,
     ctx: CodebookContext,
 ) -> ExtractionRecordProto:
     # Full text or nothing: the eligible set is already gated on extraction
@@ -265,7 +257,7 @@ def _extract_one(
         work.id,
         rendered,
         client=client,
-        model=model,
+        endpoint=endpoint,
         ctx=ctx,
     )
 
@@ -333,16 +325,7 @@ def build_subparser(
             f"directly (default: {DEFAULT_CODEBOOK})."
         ),
     )
-    parser.add_argument(
-        "--model",
-        default="llama3.1:8b",
-        help="Model name (default: llama3.1:8b)",
-    )
-    parser.add_argument(
-        "--base-url",
-        default="http://localhost:11434",
-        help="LLM server base URL, without /v1 (default: http://localhost:11434)",
-    )
+    add_endpoint_args(parser, decisions=False)
     parser.add_argument(
         "--max-records",
         type=int,
@@ -358,15 +341,6 @@ def build_subparser(
         "--dry-run",
         action="store_true",
         help="Print summaries to stderr without writing output",
-    )
-    parser.add_argument(
-        "--concurrency",
-        type=int,
-        default=1,
-        help=(
-            "In-flight LLM requests (default: 1). "
-            "See docs/llm-concurrency.md."
-        ),
     )
     register_config_arg(parser)
     parser.set_defaults(run=run)
@@ -393,6 +367,7 @@ def run(args: argparse.Namespace) -> None:
         flag="--extractions",
         upstream="fulltext-extraction",
     )
+    endpoint = resolve_endpoint(args)
 
     output_dir: Path = data_dir / EXTRACTION_CODEBOOK_SUBDIR / args.run_id
     records_path = output_dir / "records.jsonl"
@@ -455,7 +430,7 @@ def run(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
 
-    print(f"Extracting {total} works with model {args.model}", file=sys.stderr)
+    print(f"Extracting {total} works with model {endpoint.model}", file=sys.stderr)
     if not args.dry_run:
         print(f"Output dir: {output_dir}", file=sys.stderr)
 
@@ -467,12 +442,7 @@ def run(args: argparse.Namespace) -> None:
     if not args.dry_run and not args.skip_existing and records_path.exists():
         records_path.unlink()
 
-    client = OpenAI(
-        base_url=f"{args.base_url}/v1",
-        api_key="ollama",
-        timeout=_LLM_TIMEOUT_SECONDS,
-        max_retries=_LLM_MAX_RETRIES,
-    )
+    client = chat_client(endpoint, _LLM_TIMEOUT_SECONDS)
 
     t0 = time.monotonic()
     index = 0
@@ -483,7 +453,7 @@ def run(args: argparse.Namespace) -> None:
         extractions,
         extraction_output_dir,
         client=client,
-        model=args.model,
+        endpoint=endpoint,
         max_records=args.max_records,
         ctx=ctx,
         skip_ids=skip_ids,
@@ -521,12 +491,14 @@ def run(args: argparse.Namespace) -> None:
         1 for r in all_records if r.reason == "llm-parse-failure"
     )
     llm_timeout_count = sum(1 for r in all_records if r.reason == "llm-timeout")
+    llm_rejected_count = sum(1 for r in all_records if r.reason == "llm-rejected")
 
     print(
         f"\nDone in {elapsed:.1f}s: {full_text_count} extracted, "
         f"{skipped_count} skipped, "
         f"{llm_parse_failure_count} llm-parse-failure, "
-        f"{llm_timeout_count} llm-timeout.",
+        f"{llm_timeout_count} llm-timeout, "
+        f"{llm_rejected_count} llm-rejected.",
         file=sys.stderr,
     )
 
@@ -538,11 +510,7 @@ def run(args: argparse.Namespace) -> None:
         run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
         validation_skipped=stats.skipped,
     )
-    llm_meta = LlmMeta(
-        model=args.model,
-        temperature=_TEMPERATURE,
-        prompt_sha256=prompt_sha256,
-    )
+    llm_meta = endpoint.llm_meta(prompt_sha256)
     write_meta(
         meta_path,
         ExtractionCodebookMeta(
@@ -556,6 +524,7 @@ def run(args: argparse.Namespace) -> None:
             skipped_count=skipped_count,
             llm_parse_failure_count=llm_parse_failure_count,
             llm_timeout_count=llm_timeout_count,
+            llm_rejected_count=llm_rejected_count,
         ),
     )
     print(f"Run dir: {output_dir}", file=sys.stderr)

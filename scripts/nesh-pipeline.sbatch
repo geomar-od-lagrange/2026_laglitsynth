@@ -19,7 +19,7 @@
 #   - Repo cloned under $WORK (the fast per-user scratch; $HOME is small
 #     and backed up). Default REPO_DIR is $WORK/2026_laglitsynth;
 #     override via the env var if you clone elsewhere.
-#   - $REPO_DIR/.env with OPENALEX_API_KEY and UNPAYWALL_EMAIL.
+#   - $REPO_DIR/.env with OPENALEX_API_KEY, UNPAYWALL_EMAIL and LLM_API_KEY.
 #   - `singularity` module available; `pixi` on PATH.
 #
 # Usage:
@@ -33,7 +33,7 @@
 # config sets screening_threshold. The default config leaves it unset.
 #
 # The job drives the runner through env overrides (QUERY, N,
-# STOP_AFTER_STAGE, SCREENING_THRESHOLD, *_MODEL, …), which win over the
+# STOP_AFTER_STAGE, SCREENING_THRESHOLD, LLM_BASE_URL, *_MODEL, …), which win over the
 # config under the runner's env > config > default precedence. With no
 # REVIEW_CONFIG the runner uses its default config
 # (examples/reviews/lagrangian-oceanography.yaml). To drive a different
@@ -58,7 +58,7 @@ cd "$REPO_DIR"
 mkdir -p logs
 
 [[ -f .env ]] || {
-    echo "Missing $REPO_DIR/.env (OPENALEX_API_KEY, UNPAYWALL_EMAIL)" >&2
+    echo "Missing $REPO_DIR/.env (OPENALEX_API_KEY, UNPAYWALL_EMAIL, LLM_API_KEY)" >&2
     exit 2
 }
 set -a

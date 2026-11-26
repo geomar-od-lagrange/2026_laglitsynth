@@ -8,7 +8,8 @@ that it is a review article rather than primary research.
 
 ## Prerequisites
 
-See [external-services.md](external-services.md) for Ollama setup.
+An OpenAI-compatible endpoint and its key as `LLM_API_KEY`; see
+[external-services.md](external-services.md#llm-endpoint).
 
 ## Prototype scope
 
@@ -74,7 +75,6 @@ class EligibilityVerdict(BaseModel):
     work_id: str
     eligible: bool | None              # None for sentinel-reason skips
     reason: str | None                 # LLM free-text or sentinel
-    seed: int | None                   # Ollama seed used; None for sentinels
     raw_response: str | None           # LLM's raw message content; None when no call was made
 ```
 
@@ -85,14 +85,14 @@ called or its output could not be parsed. See
 [Sentinel reasons](#sentinel-reasons) below.
 
 `raw_response` captures the LLM's message text before parsing. Present
-on successful verdicts and on `llm-parse-failure` sentinels (so a
-reviewer can see what the model actually said); `None` on the
-`tei-parse-failure` sentinel that did not call the LLM.
+on successful verdicts, on `llm-parse-failure` sentinels (the message)
+and on `llm-rejected` sentinels (the error body); `None` on
+`tei-parse-failure` and `llm-timeout`.
 
 The LLM's response is validated through a private
 [`_EligibilityPayload`](../src/laglitsynth/fulltext_eligibility/models.py)
 pydantic submodel. A `mode="before"` validator drops unknown keys
-(LLMs at `temperature > 0` sprinkle extras) and coerces a `reason`
+(LLMs sprinkle extras) and coerces a `reason`
 returned as a list into a `" / "`-joined string.
 
 ### EligibilityMeta
@@ -111,20 +111,21 @@ class EligibilityMeta(BaseModel):
     tei_parse_failure_count: int
     llm_parse_failure_count: int
     llm_timeout_count: int
+    llm_rejected_count: int
     criterion: str        # the eligibility-criteria system prompt, verbatim
 ```
 
 `run` and `llm` are the shared reproducibility nests from
 [`src/laglitsynth/models.py`](../src/laglitsynth/models.py) — they
 carry `tool`, `tool_version`, `run_at`, `validation_skipped`, `model`,
-`temperature`, and `prompt_sha256`. `prompt_sha256` covers the loaded
+`base_url`, `decisions_url`, and `prompt_sha256`. `prompt_sha256` covers the loaded
 eligibility-criteria system prompt and `USER_TEMPLATE`, so any prompt
 change shifts the hash.
 
 `input_count` is the number of works that reached the stage (had a
 full-text extraction) — works skipped for lack of full text are neither
 counted nor flagged. Per-sentinel counts (`tei_parse_failure_count`,
-`llm_parse_failure_count`, `llm_timeout_count`) let operators diagnose a
+`llm_parse_failure_count`, `llm_timeout_count`, `llm_rejected_count`) let operators diagnose a
 run without re-reading `verdicts.jsonl`. There is no `no_source_count`
 or `by_source_basis` — with full-text the only basis, a per-basis
 breakdown carries no information. `criterion` records the criteria
@@ -160,7 +161,7 @@ work:
 
 ## Sentinel reasons
 
-All sentinels set `eligible=None` and `seed=None`. Downstream consumers
+All sentinels set `eligible=None`. Downstream consumers
 join the catalogue against `verdicts.jsonl` filtering for `eligible is True`,
 so sentinel records are naturally excluded from the active work set.
 
@@ -168,7 +169,12 @@ so sentinel records are naturally excluded from the active work set.
 |---|---|
 | `tei-parse-failure` | `sections()` raises `lxml.etree.XMLSyntaxError`, or renders empty. A paper with a PDF but unreadable TEI is an operator-visible bug, unlike a plain absence of full text (which is silently skipped). |
 | `llm-parse-failure` | The LLM returned output that could not be parsed into `{"eligible": bool, "reason": str}`. |
-| `llm-timeout` | The OpenAI client raised `APITimeoutError` / `APIConnectionError` after all retries exhausted. The OpenAI client is constructed with `timeout=300s` and `max_retries=3` so a single hang on a long full-text prompt does not kill the stage. |
+| `llm-timeout` | The OpenAI client raised `APITimeoutError`, `APIConnectionError`, `RateLimitError` or `InternalServerError` after all retries exhausted. The client is constructed with `timeout=300s` and `max_retries=3` so a single hang on a long full-text prompt does not kill the stage. |
+| `llm-rejected` | The endpoint refused the request (`BadRequestError`, or another 4xx that is not fatal), for example a full text longer than the model's context. `raw_response` carries the error body. |
+
+Errors that fail every work the same way (`AuthenticationError`,
+`PermissionDeniedError`, `NotFoundError`, a 402) make the stage exit
+naming the base URL.
 
 There is no `no-source` sentinel: a work without full text is simply not
 processed, not flagged.
@@ -197,7 +203,7 @@ laglitsynth fulltext-eligibility \
     [--eligibility-criteria examples/eligibility-criteria/lagrangian-oceanography.yaml] \
     [--config <run-dir>/config.yaml] \
     [--skip-existing] [--max-records N] [--dry-run] \
-    [--model gemma3:4b] [--base-url http://localhost:11434] \
+    --base-url URL --model MODEL [--api-key KEY] \
     [--concurrency 1]
 ```
 
@@ -242,9 +248,12 @@ to run (see [run-manifest.md](run-manifest.md)).
   any downstream analysis.
 - `--max-records`: process only the first N works from the catalogue.
 - `--dry-run`: print verdicts to stderr without writing any output.
-- `--model`, `--base-url`: the model and the LLM server it is called on
-  (`--base-url` without `/v1`). The full rendered text is sent; a text
-  longer than the model's context is the server's to reject.
+- `--base-url`, `--model`: the OpenAI-compatible base URL (including
+  `/v1`) and the model. Both required. The full rendered text is sent; a
+  text longer than the model's context is the endpoint's to reject, which
+  gives `llm-rejected`.
+- `--api-key`: the key; falls back to `LLM_API_KEY` in the environment,
+  then in `.env`. Never written to `config.yaml`.
 - `--concurrency`: number of in-flight LLM requests (default: `1`).
   Stage 7's prompts are less prefill-heavy than stage 8's, so it can
   tolerate higher concurrency than stage 8 on the same GPU.
@@ -275,9 +284,9 @@ User: full_text:
 <rendered text>
 ```
 
-`response_format={"type": "json_object"}`, `temperature=0.8`, per-call
-random seed recorded on the verdict. Same shape as
-[`screening-abstracts`](screening-abstracts.md).
+The request carries `model`, `messages` and
+`response_format={"type": "json_object"}` only; no temperature or seed
+is sent.
 
 ## What to defer
 

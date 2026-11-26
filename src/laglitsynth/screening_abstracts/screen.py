@@ -1,24 +1,25 @@
-"""LLM-based abstract screening."""
+"""Abstract screening on the decisions endpoint.
+
+Each work's title/authors/year/abstract listing is sent as the ``input``
+of one decision whose predicate question comes from the screening-criteria
+YAML's ``decision`` block. The answer's probability that the work is
+relevant is stored as ``relevance_score = round(100 * p)``.
+"""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import logging
-import random
 import sys
 import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
-from openai import APIConnectionError, APITimeoutError, OpenAI
-
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.concurrency import map_concurrent
-from laglitsynth.config import register_config_arg, resolve_yaml_arg, save_resolved_config
-from laglitsynth.dotenv import load_env_var
+from laglitsynth.config import register_config_arg, save_resolved_config
 from laglitsynth.io import (
     JsonlReadStats,
     append_jsonl,
@@ -31,36 +32,35 @@ from laglitsynth.layout import (
     require_input,
     warn_existing_run_dir,
 )
-from laglitsynth.manifest import resolve_run_id
-from laglitsynth.models import LlmMeta, RunMeta
-from laglitsynth.prompts import DecisionQuestion, load_decision_question, load_system_prompt
-from laglitsynth.screening_abstracts.decisions import (
-    DEFAULT_DECISIONS_URL,
-    classify_decision,
+from laglitsynth.llm import (
+    LlmEndpoint,
+    add_endpoint_args,
+    decide,
     decisions_client,
+    resolve_endpoint,
 )
+from laglitsynth.manifest import resolve_run_id
+from laglitsynth.models import RunMeta
+from laglitsynth.prompts import DecisionQuestion, load_decision_question
 from laglitsynth.screening_abstracts.models import TOOL_NAME, ScreeningMeta, ScreeningVerdict
-
-BACKENDS = ("ollama", "decisions")
 
 DEFAULT_SCREENING_CRITERIA = Path(
     "examples/screening-criteria/lagrangian-oceanography.yaml"
 )
 
+# Answer name of the screening predicate question.
+QUESTION_NAME = "relevant"
+
 logger = logging.getLogger(__name__)
 
-# Marker for the work-listing render fed as the user message. Folded into
-# prompt_sha256 (mirroring stage 7's USER_TEMPLATE) so the hash pins both
-# the loaded system prompt and the shape of the user render.
+# Marker for the work-listing render sent as the decision input. Folded
+# into prompt_sha256 so the hash pins both the question and the shape of
+# the input.
 USER_TEMPLATE = "title/authors/year/abstract"
-
-_TEMPERATURE = 0.8
-_LLM_TIMEOUT_SECONDS = 60
-_LLM_MAX_RETRIES = 3
 
 
 def format_screening_input(work: Work) -> str:
-    """Render the title/authors/year/abstract block fed to the LLM.
+    """Render the title/authors/year/abstract block sent as the input.
 
     Title and publication_year render as ``<unknown>`` when None;
     an empty author list renders as ``<unknown>``. The abstract is
@@ -83,78 +83,8 @@ def format_screening_input(work: Work) -> str:
     )
 
 
-def classify_abstract(
-    work_id: str,
-    formatted_input: str,
-    system_prompt: str,
-    *,
-    model: str,
-    base_url: str,
-    client: OpenAI,
-) -> ScreeningVerdict:
-    """Call the LLM, validate the payload, compose the verdict.
-
-    ``system_prompt`` is the loaded screening-criteria prompt (contract +
-    relevance criterion) sent as the system message; ``formatted_input`` is
-    the work listing sent verbatim as the user message.
-
-    On JSON parse error returns a ``reason="llm-parse-failure"``
-    sentinel with ``seed=None`` and the raw response attached so an
-    operator can see what the LLM actually said. On
-    ``APITimeoutError`` / ``APIConnectionError`` after all retries
-    are exhausted returns a ``reason="llm-timeout"`` sentinel.
-    """
-    seed = random.randint(0, 2**31 - 1)
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": formatted_input},
-            ],
-            temperature=_TEMPERATURE,
-            seed=seed,
-        )
-    except (APITimeoutError, APIConnectionError) as exc:
-        logger.warning("LLM timeout for %s: %s", work_id, exc)
-        return ScreeningVerdict(
-            work_id=work_id,
-            relevance_score=None,
-            reason="llm-timeout",
-            seed=None,
-            raw_response=None,
-        )
-    content = response.choices[0].message.content or "{}"
-    try:
-        parsed = json.loads(content)
-        score = parsed["relevance_score"]
-        reason = parsed["reason"]
-        return ScreeningVerdict(
-            work_id=work_id,
-            relevance_score=int(score),
-            reason=str(reason),
-            seed=seed,
-            raw_response=content,
-        )
-    except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
-        logger.warning("LLM parse failure for %s: %s", work_id, exc)
-        return ScreeningVerdict(
-            work_id=work_id,
-            relevance_score=None,
-            reason="llm-parse-failure",
-            seed=None,
-            raw_response=content,
-        )
-
-
 def _no_abstract_verdict(work_id: str) -> ScreeningVerdict:
-    return ScreeningVerdict(
-        work_id=work_id,
-        relevance_score=None,
-        reason="no-abstract",
-        seed=None,
-    )
+    return ScreeningVerdict(work_id=work_id, relevance_score=None, reason="no-abstract")
 
 
 def _load_works(input_path: Path, max_records: int | None) -> list[Work]:
@@ -170,16 +100,15 @@ def decide_works(
     input_path: Path,
     question: DecisionQuestion,
     *,
-    model: str,
-    url: str,
-    api_key: str,
+    endpoint: LlmEndpoint,
     max_records: int | None,
     concurrency: int = 1,
 ) -> Iterator[ScreeningVerdict]:
-    """Yield a verdict per input work from a decisions model.
+    """Yield a verdict per input work.
 
-    Same shape as ``screen_works``: ``no-abstract`` sentinels first, then
-    decisions in completion order through ``map_concurrent``.
+    Works without an abstract yield a ``no-abstract`` sentinel first, with
+    no request. The others are decided through ``map_concurrent`` with
+    ``concurrency`` workers and yielded in completion order.
     """
     works = _load_works(input_path, max_records)
     with_abstract: list[Work] = []
@@ -190,17 +119,23 @@ def decide_works(
         else:
             with_abstract.append(work)
 
-    client = decisions_client(api_key)
+    client = decisions_client(endpoint)
     try:
 
         def _decide_one(work: Work) -> ScreeningVerdict:
-            return classify_decision(
-                work.id,
-                format_screening_input(work),
-                question,
-                model=model,
-                url=url,
-                client=client,
+            decision = decide(
+                client,
+                endpoint,
+                input=format_screening_input(work),
+                name=QUESTION_NAME,
+                question=question,
+            )
+            score = None if decision.probability is None else round(100 * decision.probability)
+            return ScreeningVerdict(
+                work_id=work.id,
+                relevance_score=score,
+                reason=decision.reason,
+                raw_response=decision.raw_response,
             )
 
         yield from map_concurrent(_decide_one, with_abstract, max_workers=concurrency)
@@ -208,63 +143,12 @@ def decide_works(
         client.close()
 
 
-def screen_works(
-    input_path: Path,
-    system_prompt: str,
-    *,
-    model: str,
-    base_url: str,
-    max_records: int | None,
-    concurrency: int = 1,
-) -> Iterator[ScreeningVerdict]:
-    """Yield a verdict per input work.
-
-    LLM calls are dispatched through ``map_concurrent`` with
-    ``concurrency`` workers (default 1, giving sequential dispatch).
-    Works without an abstract yield a ``no-abstract`` sentinel immediately;
-    abstract-backed verdicts are yielded in completion order.
-    """
-    client = OpenAI(
-        base_url=f"{base_url}/v1",
-        api_key="ollama",
-        timeout=_LLM_TIMEOUT_SECONDS,
-        max_retries=_LLM_MAX_RETRIES,
-    )
-
-    works: list[Work] = []
-    for idx, work in enumerate(read_jsonl(input_path, Work)):
-        if max_records is not None and idx >= max_records:
-            break
-        works.append(work)
-
-    # Sentinels first (no LLM call); collect works that need an LLM call.
-    llm_works: list[Work] = []
-    for work in works:
-        if work.abstract is None:
-            logger.warning("Skipping work %s: no abstract", work.id)
-            yield _no_abstract_verdict(work.id)
-        else:
-            llm_works.append(work)
-
-    def _call_one(work: Work) -> ScreeningVerdict:
-        return classify_abstract(
-            work.id,
-            format_screening_input(work),
-            system_prompt,
-            model=model,
-            base_url=base_url,
-            client=client,
-        )
-
-    yield from map_concurrent(_call_one, llm_works, max_workers=concurrency)
-
-
 def build_subparser(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> argparse.ArgumentParser:
     parser = subparsers.add_parser(
         "screening-abstracts",
-        help="Score JSONL works for abstract relevance with an LLM.",
+        help="Score JSONL works for abstract relevance on the decisions endpoint.",
     )
     parser.add_argument(
         "input",
@@ -278,9 +162,9 @@ def build_subparser(
         type=Path,
         default=DEFAULT_SCREENING_CRITERIA,
         help=(
-            f"Screening-criteria YAML carrying a 'system_prompt' field (the "
-            f"classifier contract + relevance criterion). On reload from a "
-            f"saved snapshot, the inlined mapping is consumed directly "
+            f"Screening-criteria YAML carrying a 'decision' block (the "
+            f"relevance question). On reload from a saved snapshot, the "
+            f"inlined mapping is consumed directly "
             f"(default: {DEFAULT_SCREENING_CRITERIA})."
         ),
     )
@@ -295,39 +179,7 @@ def build_subparser(
         default=None,
         help="Run identifier (default: the run_id in <data-dir>/manifest.json).",
     )
-    parser.add_argument(
-        "--backend",
-        choices=BACKENDS,
-        default="ollama",
-        help=(
-            "ollama: chat completion against --base-url (default). decisions: a "
-            "hosted decisions model via --decisions-url, asking the criteria "
-            "file's 'decision' question; needs --api-key."
-        ),
-    )
-    parser.add_argument(
-        "--model",
-        default="gemma3:4b",
-        help="Model name for the chosen backend (default: gemma3:4b)",
-    )
-    parser.add_argument(
-        "--api-key",
-        default=None,
-        help=(
-            "API key for --backend decisions (falls back to OPENROUTER_API_KEY "
-            "in .env). Unused by the chat backend."
-        ),
-    )
-    parser.add_argument(
-        "--decisions-url",
-        default=DEFAULT_DECISIONS_URL,
-        help=f"Decisions endpoint for --backend decisions (default: {DEFAULT_DECISIONS_URL})",
-    )
-    parser.add_argument(
-        "--base-url",
-        default="http://localhost:11434",
-        help="Chat-backend API base URL, without /v1 (default: http://localhost:11434)",
-    )
+    add_endpoint_args(parser, decisions=True)
     parser.add_argument(
         "--max-records",
         type=int,
@@ -338,15 +190,6 @@ def build_subparser(
         "--dry-run",
         action="store_true",
         help="Print verdicts to stderr without writing output",
-    )
-    parser.add_argument(
-        "--concurrency",
-        type=int,
-        default=1,
-        help=(
-            "In-flight LLM requests (default: 1). "
-            "See docs/llm-concurrency.md."
-        ),
     )
     register_config_arg(parser)
     parser.set_defaults(run=run)
@@ -361,49 +204,28 @@ def run(args: argparse.Namespace) -> None:
         flag="the input path",
         upstream="catalogue-dedup",
     )
+    endpoint = resolve_endpoint(args)
+    # Pass the un-resolved spec so a missing block names the file.
+    try:
+        question = load_decision_question(args.screening_criteria)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
-    backend: str = args.backend
-    api_key: str | None = None
-    if backend == "decisions":
-        api_key = args.api_key if args.api_key is not None else load_env_var("OPENROUTER_API_KEY")
-        if api_key is None:
-            raise SystemExit(
-                "--backend decisions needs an API key: pass --api-key or add "
-                "OPENROUTER_API_KEY=... to .env"
-            )
     output_dir: Path = data_dir / SCREENING_SUBDIR / args.run_id
     verdicts_path = output_dir / "verdicts.jsonl"
     meta_path = output_dir / "screening-meta.json"
     if not args.dry_run:
         warn_existing_run_dir(output_dir, "verdicts.jsonl")
 
-    # The chat backend hashes the system prompt, the decisions backend the
-    # question; both fold in the user-render marker so the digest pins the
-    # shape of the state.
-    system_prompt = ""
-    question: DecisionQuestion | None = None
-    criteria_spec = resolve_yaml_arg(args.screening_criteria)
-    if backend == "decisions":
-        # Pass the un-resolved spec so a missing block names the file.
-        try:
-            question = load_decision_question(args.screening_criteria)
-        except ValueError as exc:
-            raise SystemExit(str(exc)) from exc
-        criterion = question.render()
-        hashed = question.canonical_json()
-        temperature: float | None = None
-    else:
-        system_prompt = load_system_prompt(criteria_spec)
-        criterion = system_prompt
-        hashed = system_prompt
-        temperature = _TEMPERATURE
-    prompt_sha256 = hashlib.sha256((hashed + "\n" + USER_TEMPLATE).encode("utf-8")).hexdigest()
-    llm_meta = LlmMeta(model=args.model, temperature=temperature, prompt_sha256=prompt_sha256)
+    prompt_sha256 = hashlib.sha256(
+        (question.canonical_json() + "\n" + USER_TEMPLATE).encode("utf-8")
+    ).hexdigest()
+    llm_meta = endpoint.llm_meta(prompt_sha256)
 
     stats = JsonlReadStats()
     total = sum(1 for _ in read_jsonl(args.input, Work, stats))
 
-    print(f"Screening {total} works with {backend} model {args.model}", file=sys.stderr)
+    print(f"Screening {total} works with model {endpoint.model}", file=sys.stderr)
     if not args.dry_run:
         print(f"Output dir: {output_dir}", file=sys.stderr)
 
@@ -415,13 +237,9 @@ def run(args: argparse.Namespace) -> None:
         save_resolved_config(args, output_dir, inlines=["screening_criteria"])
         verdicts_path.unlink(missing_ok=True)
 
-    def _build_meta(
-        *,
-        scored: int,
-        skipped: int,
-        parse_failures: int,
-        timeouts: int,
-    ) -> ScreeningMeta:
+    counts = {"llm-parse-failure": 0, "llm-timeout": 0, "llm-rejected": 0}
+
+    def _build_meta(*, scored: int, skipped: int) -> ScreeningMeta:
         return ScreeningMeta(
             run=RunMeta(
                 tool=TOOL_NAME,
@@ -433,57 +251,34 @@ def run(args: argparse.Namespace) -> None:
             input_count=total,
             scored_count=scored,
             skipped_count=skipped,
-            llm_parse_failure_count=parse_failures,
-            llm_timeout_count=timeouts,
-            criterion=criterion,
+            llm_parse_failure_count=counts["llm-parse-failure"],
+            llm_timeout_count=counts["llm-timeout"],
+            llm_rejected_count=counts["llm-rejected"],
         )
 
-    # Write meta upfront so a mid-run reader sees prompt + LLM
-    # fingerprint. Counts start at zero and get rewritten at the end.
+    # Write meta upfront so a mid-run reader sees the LLM fingerprint.
+    # Counts start at zero and get rewritten at the end.
     if not args.dry_run:
-        write_meta(
-            meta_path,
-            _build_meta(scored=0, skipped=0, parse_failures=0, timeouts=0),
-        )
+        write_meta(meta_path, _build_meta(scored=0, skipped=0))
 
     t0 = time.monotonic()
     scored_count = 0
     skipped_count = 0
-    llm_parse_failure_count = 0
-    llm_timeout_count = 0
     index = 0
 
-    verdicts: Iterator[ScreeningVerdict]
-    if backend == "decisions":
-        assert question is not None and api_key is not None
-        verdicts = decide_works(
-            args.input,
-            question,
-            model=args.model,
-            url=args.decisions_url,
-            api_key=api_key,
-            max_records=args.max_records,
-            concurrency=args.concurrency,
-        )
-    else:
-        verdicts = screen_works(
-            args.input,
-            system_prompt,
-            model=args.model,
-            base_url=args.base_url,
-            max_records=args.max_records,
-            concurrency=args.concurrency,
-        )
-
-    for verdict in verdicts:
+    for verdict in decide_works(
+        args.input,
+        question,
+        endpoint=endpoint,
+        max_records=args.max_records,
+        concurrency=args.concurrency,
+    ):
         index += 1
 
         if verdict.relevance_score is None:
             skipped_count += 1
-            if verdict.reason == "llm-parse-failure":
-                llm_parse_failure_count += 1
-            elif verdict.reason == "llm-timeout":
-                llm_timeout_count += 1
+            if verdict.reason in counts:
+                counts[verdict.reason] += 1
             print(
                 f"  [{index}/{total}] skipped ({verdict.reason})"
                 f" — {verdict.work_id[-12:]}",
@@ -508,13 +303,5 @@ def run(args: argparse.Namespace) -> None:
     )
 
     if not args.dry_run:
-        write_meta(
-            meta_path,
-            _build_meta(
-                scored=scored_count,
-                skipped=skipped_count,
-                parse_failures=llm_parse_failure_count,
-                timeouts=llm_timeout_count,
-            ),
-        )
+        write_meta(meta_path, _build_meta(scored=scored_count, skipped=skipped_count))
         print(f"Run dir: {output_dir}", file=sys.stderr)

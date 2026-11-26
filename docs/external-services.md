@@ -1,100 +1,31 @@
 # External services setup
 
-Runbook for the external services the pipeline depends on: **Ollama**
-(LLM inference for stages 3, 7, 8), **GROBID** (PDF extraction for
-stage 6), and optionally **OpenRouter** (hosted decisions models for
-stage 3). Read this before running any LLM or full-text stage. The
-[NESH HPC cluster](#nesh-hpc-cluster) section at the bottom covers
-batch operation on Kiel's GPU cluster.
+Runbook for the external services the pipeline depends on: an
+**OpenAI-compatible LLM endpoint** (stages 3, 7, 8) and **GROBID** (PDF
+extraction for stage 6). Read this before running any LLM or full-text
+stage. The [NESH HPC cluster](#nesh-hpc-cluster) section at the bottom
+covers batch operation on Kiel's cluster.
 
-## OpenRouter (optional, stage 3)
+## LLM endpoint
 
-`screening-abstracts --backend decisions` sends each abstract to a hosted
-decisions model through OpenRouter instead of Ollama. It needs only an
-API key: put `OPENROUTER_API_KEY=...` in `.env` (see
-[.env.example](../.env.example)) or pass `--api-key`. No server to run,
-no model to pull. Available decisions models are listed by
-`curl 'https://openrouter.ai/api/v1/models?output_modalities=decisions'`;
-pass one as `--model`, e.g. `typesafe/jev-1.14`. Usage and cost show up on
-the OpenRouter dashboard; the per-request cost is returned in each
-response's `usage.cost`. See
-[screening-abstracts.md](screening-abstracts.md#backends).
+Every LLM stage talks to one OpenAI-compatible endpoint, set per review.
+The stages take the same flags:
 
-## Ollama
+- `--base-url` — the OpenAI-compatible base URL, including `/v1`. Required.
+- `--model` — the model name. Required.
+- `--api-key` — the key. Without it a stage reads `LLM_API_KEY` from the
+  environment, then from `.env` (see [.env.example](../.env.example)), and
+  exits naming `LLM_API_KEY` when none is set. The key is never written to
+  a run's `config.yaml`, and the runner never passes it as a flag.
+- `--decisions-url` (stage 3) — the decisions endpoint, default
+  `<base-url>/decisions`, for a provider that serves it elsewhere.
 
-### Install
-
-**Linux** — extract the full tarball, not just the binary. The
-`lib/ollama/` subtree carries bundled CUDA libraries that Ollama needs
-for GPU discovery:
-
-```bash
-OLLAMA_DIR="$HOME/.local/share/ollama-install"
-mkdir -p "$OLLAMA_DIR"
-curl -fSL https://ollama.com/download/ollama-linux-amd64.tar.zst \
-    | zstd -d | tar xf - -C "$OLLAMA_DIR"
-export PATH="$OLLAMA_DIR/bin:$PATH"
-```
-
-**macOS** — the Homebrew cask is the simplest path:
-
-```bash
-brew install --cask ollama
-```
-
-Alternatively download from <https://ollama.com/download>.
-
-### Start Ollama
-
-`OLLAMA_NUM_PARALLEL` must be set **before** `ollama serve` is called.
-Exporting it in a separate shell or after the process starts is a silent
-no-op — Ollama reads it exactly once at startup. See
-[llm-concurrency.md](llm-concurrency.md) for the relationship between
-the server cap and the `--concurrency` flag on stages 3, 7, and 8.
-
-```bash
-OLLAMA_NUM_PARALLEL=2 ollama serve
-```
-
-For a single-user local run with no parallelism the default
-(`OLLAMA_NUM_PARALLEL=1`) is fine; increase it when you also raise
-`--concurrency` on a stage.
-
-### Pull the models
-
-Stage 3 (`screening-abstracts`) and stage 7 (`fulltext-eligibility`)
-use `gemma3:4b` by default. Stage 8 (`extraction-codebook`) uses
-`llama3.1:8b` by default. Pull both before running the pipeline:
-
-```bash
-ollama pull gemma3:4b
-ollama pull llama3.1:8b
-```
-
-`gemma3:4b` is unsuitable for the full codebook payload in stage 8 —
-it returns empty JSON. See [extraction-codebook.md](extraction-codebook.md)
-for model-sizing guidance.
-
-### Remote Ollama via SSH tunnel
-
-Point any stage at a remote Ollama with `--base-url http://localhost:11434`
-(the default) after opening an SSH tunnel:
-
-```bash
-ssh -L 11434:localhost:11434 user@remote-host
-```
-
-For a two-hop setup where Ollama runs on an internal node not directly
-reachable from your laptop, chain a forward tunnel from your machine to
-the login node and a reverse tunnel from the compute node back:
-
-```
-local:11434 --(ssh -L)--> login-node:11434 <--(ssh -R)-- compute-node:11434
-```
-
-The NESH section below shows the concrete `srun` invocation. The full
-investigation is in
-[explorations/nesh-ollama.md](explorations/nesh-ollama.md).
+Stage 3 sends OpenAI's Decisions request shape to the decisions URL;
+stages 7 and 8 send JSON-mode chat completions to the base URL, with no
+temperature or seed. A wrong URL or key shows up on the first request: HTTP
+401, 402, 403 and 404 make the stage exit naming the URL. See
+[screening-abstracts.md](screening-abstracts.md#errors-and-retries) for the
+sentinel each other error gives.
 
 ## GROBID
 
@@ -185,55 +116,8 @@ NESH (Kiel University HPC) uses Singularity rather than Docker and
 requires a proxy for internet access from compute nodes. The production
 batch wrapper is `scripts/nesh-pipeline.sbatch`: it runs on the `base`
 partition, starts GROBID, and reaches the LLM endpoint through the proxy;
-it runs no Ollama. This section documents the key invocations for users
+it runs no LLM server. This section documents the key invocations for users
 writing their own sbatch scripts.
-
-### Ollama on NESH
-
-The full tarball install is mandatory on NESH. The plain binary (without
-`lib/ollama/`) causes Ollama to fall back to CPU silently:
-
-```bash
-OLLAMA_DIR="$HOME/.local/share/ollama-install"
-mkdir -p "$OLLAMA_DIR"
-curl -fSL https://ollama.com/download/ollama-linux-amd64.tar.zst \
-    | zstd -d | tar xf - -C "$OLLAMA_DIR"
-```
-
-NESH's `tar` (GNU tar 1.30) does not support `--zstd`; pipe through the
-standalone `zstd -d` instead.
-
-On compute nodes, set the proxy before `ollama pull`:
-
-```bash
-export https_proxy=http://10.0.7.235:3128
-export http_proxy=http://10.0.7.235:3128
-```
-
-Start Ollama and open the reverse tunnel back to the login node:
-
-```bash
-"$OLLAMA_DIR/bin/ollama" serve &
-sleep 5
-"$OLLAMA_DIR/bin/ollama" pull gemma3:4b
-ssh -o StrictHostKeyChecking=no \
-    -R 11434:localhost:11434 \
-    -N "$LOGIN_HOST"
-```
-
-`LOGIN_HOST` must be the specific login node your outer SSH session
-landed on (not the load-balancer alias). The outer session is:
-
-```bash
-ssh -A -L 11434:localhost:11434 user@nesh-login.rz.uni-kiel.de \
-    "LOGIN_HOST=\$(hostname) && export LOGIN_HOST && srun --pty \
-     --partition=gpu --constraint=V100 --gpus-per-node=1 \
-     --export=ALL bash -c '<compute-node script>'"
-```
-
-See [explorations/nesh-ollama.md](explorations/nesh-ollama.md) for the
-full PoC script, timing benchmarks, and the explanation of why the
-reverse tunnel is needed.
 
 ### GROBID on NESH (Singularity)
 

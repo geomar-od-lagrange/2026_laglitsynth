@@ -9,7 +9,7 @@ Requires [pixi](https://pixi.sh) for environment management.
 
 ```bash
 pixi install
-cp .env.example .env  # then fill in OPENALEX_API_KEY and UNPAYWALL_EMAIL
+cp .env.example .env  # then fill in OPENALEX_API_KEY, UNPAYWALL_EMAIL and LLM_API_KEY
 ```
 
 `data/` is a git submodule holding the PDF store (`data/pdfs/`, in Git
@@ -36,7 +36,8 @@ rsync -a --exclude pdfs/ data.local/ data/
 ```
 
 Stages 1 and 5 read `OPENALEX_API_KEY` and `UNPAYWALL_EMAIL` from `.env`
-automatically when their flags are absent. See
+automatically when their flags are absent; the LLM stages read
+`LLM_API_KEY` from the environment or `.env`. See
 [`docs/external-services.md`](docs/external-services.md) for the full
 credential setup.
 
@@ -60,9 +61,8 @@ implemented stage has its own doc under [`docs/`](docs/).
   OpenAlex ID, DOI, and title+author+year; accepts globs and multiple
   inputs. See [`docs/catalogue-dedup.md`](docs/catalogue-dedup.md).
 - Stage 3 — `laglitsynth screening-abstracts` — score every abstract for
-  relevance with a local Ollama-hosted LLM or, with `--backend decisions`,
-  a hosted decisions model via OpenRouter, emitting a `ScreeningVerdict`
-  sidecar. See [`docs/screening-abstracts.md`](docs/screening-abstracts.md).
+  relevance with a decisions model on the review's OpenAI-compatible
+  endpoint, emitting a `ScreeningVerdict` sidecar. See [`docs/screening-abstracts.md`](docs/screening-abstracts.md).
 - Stage 5 — `laglitsynth fulltext-retrieval` — for every work in the
   deduplicated catalogue, fill a persistent, work-keyed PDF store under `data/pdfs/` from OA URLs and
   Unpaywall, with `fulltext-retrieval-export` /
@@ -73,25 +73,28 @@ implemented stage has its own doc under [`docs/`](docs/).
   structured section text via GROBID. See
   [`docs/fulltext-extraction.md`](docs/fulltext-extraction.md).
 - Stage 7 — `laglitsynth fulltext-eligibility` — join the catalogue against
-  the screening verdicts, then assess full-text eligibility with a local
+  the screening verdicts, then assess full-text eligibility with an
   LLM, emitting an `EligibilityVerdict` sidecar. See
   [`docs/eligibility.md`](docs/eligibility.md).
 - Stage 8 — `laglitsynth extraction-codebook` — join the catalogue against
   the eligibility verdicts, then extract structured codebook records
   (numerical choices, reproducibility indicators, sub-discipline tags) with
-  a local LLM. See
+  an LLM. See
   [`docs/extraction-codebook.md`](docs/extraction-codebook.md).
 
 ## Running the pipeline
 
 [`scripts/run-pipeline.sh [config.yaml]`](scripts/run-pipeline.sh) runs
 stages 1..8 end-to-end, writing outputs under `data/run/`. The runner
-sources `.env` and passes `--api-key` / `--email` as flags to the tools
-— no env-var leakage into the Python side.
+sources `.env` and passes the OpenAlex `--api-key` and `--email` as flags
+to stages 1 and 5. The LLM key (`LLM_API_KEY`) is never passed as a flag:
+the LLM stages read it from the environment, so it stays out of the
+process list.
 
 The optional positional is a **per-review config** — one YAML that pins
 the query, year window, record cap, criteria/codebook paths, the
-screening threshold, and the per-stage models/concurrency. The runner
+screening threshold, the LLM endpoint URLs, and the per-stage
+models/concurrency. The runner
 validates it via `laglitsynth review-config` and applies **env > config >
 default** precedence to every knob. With no argument it uses the committed
 default
@@ -114,17 +117,20 @@ Defaults that apply to both local and NESH runs:
   as `max_records` in a review config.
 - `STOP_AFTER_STAGE=8` — full pipeline. Set to a smaller integer to
   cut runs short while iterating on upstream stages.
-- Models: `gemma3:4b` for stages 3 and 7, `llama3.1:8b` for stage 8.
-  Override via `SCREENING_MODEL`, `ELIGIBILITY_MODEL`, `EXTRACTION_MODEL`.
+- LLM endpoint and models have no default. `LLM_BASE_URL` (or
+  `llm_base_url`), `LLM_API_KEY` and `SCREENING_MODEL` are required from
+  stage 3 on, `ELIGIBILITY_MODEL` from stage 7 and `EXTRACTION_MODEL` from
+  stage 8; the runner exits naming whichever is missing.
+  `LLM_DECISIONS_URL` (or `llm_decisions_url`) overrides stage 3's
+  decisions URL.
 
 ### Locally
 
-Start Ollama and GROBID yourself first (see [Ollama](#ollama-for-llm-stages)
-and [GROBID](#grobid-for-full-text-extraction) below), then invoke the
-runner:
+Start GROBID yourself first (see [GROBID](#grobid-for-full-text-extraction)
+below), set the LLM endpoint (see [LLM endpoint](#llm-endpoint)), then
+invoke the runner:
 
 ```bash
-ollama serve                                                # stages 3, 7, 8
 docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0         # stage 6
 
 SCREENING_THRESHOLD=50 scripts/run-pipeline.sh                                 # default review config, N=5
@@ -151,7 +157,8 @@ sbatch --export=ALL,STOP_AFTER_STAGE=3,N=500 scripts/nesh-pipeline.sbatch       
 Per-user prerequisites:
 
 - Repo cloned under `$WORK/2026_laglitsynth` (override with `REPO_DIR`).
-- `$REPO_DIR/.env` populated with `OPENALEX_API_KEY` and `UNPAYWALL_EMAIL`.
+- `$REPO_DIR/.env` populated with `OPENALEX_API_KEY`, `UNPAYWALL_EMAIL` and
+  `LLM_API_KEY`.
 
 The job header requests `--partition=base --cpus-per-task=4 --mem=32G
 --time=02:00:00`; override the time budget on the command line with
@@ -222,39 +229,21 @@ email. Set it in `.env`:
 UNPAYWALL_EMAIL=you@example.com
 ```
 
-## Ollama (for LLM stages)
+## LLM endpoint
 
 Stages 3 ([`screening-abstracts`](docs/screening-abstracts.md)), 7
 ([`fulltext-eligibility`](docs/eligibility.md)), and 8
-([`extraction-codebook`](docs/extraction-codebook.md)) all call a local
-Ollama instance via the OpenAI-compatible API.
+([`extraction-codebook`](docs/extraction-codebook.md)) call one
+OpenAI-compatible endpoint per review: `--base-url` (including `/v1`),
+`--model`, and the key from `LLM_API_KEY` in the environment or `.env`:
 
-Install Ollama if you haven't already:
-
-```bash
-# Linux
-curl -fsSL https://ollama.com/install.sh | sh
-# macOS
-brew install --cask ollama
-# or download from https://ollama.com/download
+```
+LLM_API_KEY=your-key-here
 ```
 
-```bash
-OLLAMA_NUM_PARALLEL=2 ollama serve  # set before serve; export after start is silently ignored
-ollama pull gemma3:4b
-```
-
-`gemma3:4b` (the CLI default for stages 3 and 7) handles those stages
-comfortably but returns empty JSON on stage 8's 30-field structured
-JSON payload. `llama3.1:8b` is the stage 8 default; `qwen2.5:14b` also
-works. Pull the models you need:
-
-```bash
-ollama pull llama3.1:8b        # stage 8 default; or qwen2.5:14b, etc.
-```
-
-See [`docs/external-services.md`](docs/external-services.md) for the full
-setup runbook.
+Stage 3 asks decisions at `<base-url>/decisions` unless `--decisions-url`
+names another URL. See
+[`docs/external-services.md`](docs/external-services.md#llm-endpoint).
 
 ## GROBID (for full-text extraction)
 

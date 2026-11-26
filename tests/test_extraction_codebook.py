@@ -15,8 +15,15 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
-from openai import APIConnectionError, APITimeoutError
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AuthenticationError,
+    BadRequestError,
+    RateLimitError,
+)
 from pydantic import BaseModel
 
 from laglitsynth import layout
@@ -30,6 +37,7 @@ from laglitsynth.extraction_codebook.extract import (
 )
 from laglitsynth.fulltext_eligibility.models import EligibilityVerdict
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
+from laglitsynth.llm import LlmEndpoint
 
 from conftest import (
     TEI_NS,
@@ -43,6 +51,12 @@ from conftest import (
 )
 
 DEFAULT_CODEBOOK_PATH = Path("examples/codebooks/lagrangian-oceanography.yaml")
+_BASE = "https://llm.example.org/v1"
+_ENDPOINT = LlmEndpoint(base_url=_BASE, model="m", api_key="k", decisions_url=None)
+
+
+def _api_response(status: int, text: str = '{"error": "x"}') -> httpx.Response:
+    return httpx.Response(status, text=text, request=httpx.Request("POST", _BASE))
 
 
 def _write_eligibility_verdicts_jsonl(
@@ -78,7 +92,7 @@ def _call_extract(
         work_id,
         user_text,
         client=client,
-        model="m",
+        endpoint=_ENDPOINT,
         ctx=ctx,
     )
 
@@ -124,7 +138,7 @@ def _call_extract_works(
             extractions,
             extraction_output_dir,
             client=client,
-            model="m",
+            endpoint=_ENDPOINT,
             max_records=max_records,
             ctx=ctx,
         )
@@ -144,30 +158,56 @@ class TestExtractCodebook:
         record = _call_extract(ctx, client=client)
         assert record.work_id == "W1"  # type: ignore[attr-defined]
         assert record.reason is None  # type: ignore[attr-defined]
-        assert isinstance(record.seed, int)  # type: ignore[attr-defined]
+        assert "seed" not in record.model_dump()
         assert "truncated" not in record.model_dump()
-        assert "extra_body" not in client.chat.completions.create.call_args.kwargs
         assert record.integration_scheme == "v:integration_scheme"  # type: ignore[attr-defined]
 
-    def test_seed_forwarded_to_client(self, ctx: CodebookContext) -> None:
+    def test_create_gets_no_temperature_or_seed(self, ctx: CodebookContext) -> None:
         resp = _mock_openai_response(
             _valid_payload_json(ctx.payload_field_names)
         )
         client = MagicMock()
         client.chat.completions.create.return_value = resp
-        with patch(
-            "laglitsynth.extraction_codebook.extract.random.randint",
-            return_value=42,
-        ):
-            record = _call_extract(ctx, client=client)
-        assert record.seed == 42  # type: ignore[attr-defined]
+        _call_extract(ctx, client=client)
+        kwargs = client.chat.completions.create.call_args.kwargs
+        assert set(kwargs) == {"model", "messages", "response_format"}
+        assert kwargs["model"] == "m"
+        assert kwargs["response_format"] == {"type": "json_object"}
+
+    def test_bad_request_yields_llm_rejected_with_body(
+        self, ctx: CodebookContext
+    ) -> None:
+        client = MagicMock()
+        client.chat.completions.create.side_effect = BadRequestError(
+            "too long", response=_api_response(400, "context too long"), body=None
+        )
+        record = _call_extract(ctx, client=client)
+        assert record.reason == "llm-rejected"  # type: ignore[attr-defined]
+        assert record.raw_response == "context too long"  # type: ignore[attr-defined]
+        for name in ctx.payload_field_names:
+            assert getattr(record, name) is None
+
+    def test_rate_limit_yields_llm_timeout(self, ctx: CodebookContext) -> None:
+        client = MagicMock()
+        client.chat.completions.create.side_effect = RateLimitError(
+            "slow down", response=_api_response(429), body=None
+        )
+        record = _call_extract(ctx, client=client)
+        assert record.reason == "llm-timeout"  # type: ignore[attr-defined]
+
+    def test_authentication_error_exits_naming_url(self, ctx: CodebookContext) -> None:
+        client = MagicMock()
+        client.chat.completions.create.side_effect = AuthenticationError(
+            "bad key", response=_api_response(401), body=None
+        )
+        with pytest.raises(SystemExit, match=_BASE):
+            _call_extract(ctx, client=client)
 
     def test_timeout_yields_llm_timeout_sentinel(self, ctx: CodebookContext) -> None:
         client = MagicMock()
         client.chat.completions.create.side_effect = APITimeoutError(request=MagicMock())
         record = _call_extract(ctx, client=client)
         assert record.reason == "llm-timeout"  # type: ignore[attr-defined]
-        assert record.seed is None  # type: ignore[attr-defined]
         assert record.raw_response is None  # type: ignore[attr-defined]
         for name in ctx.payload_field_names:
             assert getattr(record, name) is None
@@ -188,7 +228,6 @@ class TestExtractCodebook:
         client.chat.completions.create.return_value = resp
         record = _call_extract(ctx, client=client)
         assert record.reason == "llm-parse-failure"  # type: ignore[attr-defined]
-        assert record.seed is None  # type: ignore[attr-defined]
         for name in ctx.payload_field_names:
             assert getattr(record, name) is None
 
@@ -381,7 +420,8 @@ def _make_run_args(
         run_id=run_id,
         codebook=DEFAULT_CODEBOOK_PATH,
         model="m",
-        base_url="http://x",
+        base_url=_BASE,
+        api_key="k",
         max_records=max_records,
         skip_existing=skip_existing,
         dry_run=dry_run,
@@ -429,7 +469,7 @@ class TestRun:
         )
         with (
             patch(
-                "laglitsynth.extraction_codebook.extract.OpenAI",
+                "laglitsynth.extraction_codebook.extract.chat_client",
                 return_value=mock_client,
             ),
         ):
@@ -476,7 +516,7 @@ class TestRun:
         )
         with (
             patch(
-                "laglitsynth.extraction_codebook.extract.OpenAI",
+                "laglitsynth.extraction_codebook.extract.chat_client",
                 return_value=mock_client,
             ),
         ):
@@ -506,7 +546,10 @@ class TestRun:
         assert "abstract_only_count" not in meta
         assert "by_source_basis" not in meta
         assert meta["run"]["tool"] == "laglitsynth.extraction_codebook.extract"
-        assert meta["llm"]["temperature"] == 0.8
+        assert meta["llm"]["base_url"] == _BASE
+        assert meta["llm"]["decisions_url"] is None
+        assert "temperature" not in meta["llm"]
+        assert meta["llm_rejected_count"] == 0
         assert meta["llm"]["prompt_sha256"] == hashlib.sha256(
             (ctx.system_prompt + "\n" + USER_TEMPLATE).encode("utf-8")
         ).hexdigest()
@@ -536,7 +579,7 @@ class TestRun:
         )
         with (
             patch(
-                "laglitsynth.extraction_codebook.extract.OpenAI",
+                "laglitsynth.extraction_codebook.extract.chat_client",
                 return_value=mock_client,
             ),
         ):
@@ -557,6 +600,7 @@ class TestRun:
         assert "run_id" not in config
         # config flag itself excluded.
         assert "config" not in config
+        assert "api_key" not in config
 
     def test_skip_existing_refuses_when_prompt_sha256_differs(
         self, tmp_path: Path
@@ -583,8 +627,9 @@ class TestRun:
                 "validation_skipped": 0,
             },
             "llm": {
-                "model": "gemma3:4b",
-                "temperature": 0.8,
+                "model": "m",
+                "base_url": _BASE,
+                "decisions_url": None,
                 "prompt_sha256": "0" * 64,
             },
             "input_catalogue": str(catalogue),
@@ -613,7 +658,7 @@ class TestRun:
         )
 
         with (
-            patch("laglitsynth.extraction_codebook.extract.OpenAI"),
+            patch("laglitsynth.extraction_codebook.extract.chat_client"),
         ):
             from laglitsynth.extraction_codebook.extract import run
 
@@ -656,7 +701,7 @@ class TestRun:
         mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
         with (
             patch(
-                "laglitsynth.extraction_codebook.extract.OpenAI",
+                "laglitsynth.extraction_codebook.extract.chat_client",
                 return_value=mock_client,
             ),
         ):
@@ -698,7 +743,6 @@ class TestRun:
         prior = record_model(
             work_id="W1",
             reason=None,
-            seed=1,
             **payload_fields,
         )
         (out_dir / "records.jsonl").write_text(prior.model_dump_json() + "\n")
@@ -717,7 +761,7 @@ class TestRun:
         )
         with (
             patch(
-                "laglitsynth.extraction_codebook.extract.OpenAI",
+                "laglitsynth.extraction_codebook.extract.chat_client",
                 return_value=mock_client,
             ),
         ):
@@ -787,7 +831,7 @@ class TestCliWiring:
             )
         assert mock_run.called
 
-    def test_default_model_is_llama_3_1_8b(self) -> None:
+    def test_model_and_base_url_have_no_default(self) -> None:
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers(dest="command")
         from laglitsynth.extraction_codebook.extract import build_subparser
@@ -804,7 +848,9 @@ class TestCliWiring:
                 "/tmp/x.jsonl",
             ]
         )
-        assert parsed.model == "llama3.1:8b"
+        assert parsed.model is None
+        assert parsed.base_url is None
+        assert not hasattr(parsed, "decisions_url")
 
 
 # --- _active_eligible_works join ---
@@ -900,7 +946,7 @@ def test_run_dir_printed_to_stderr_at_end(
     mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
     with (
         patch(
-            "laglitsynth.extraction_codebook.extract.OpenAI",
+            "laglitsynth.extraction_codebook.extract.chat_client",
             return_value=mock_client,
         ),
     ):
@@ -972,7 +1018,7 @@ def test_concurrency_flag_threaded_to_extract_works(
     mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
     with (
         patch(
-            "laglitsynth.extraction_codebook.extract.OpenAI",
+            "laglitsynth.extraction_codebook.extract.chat_client",
             return_value=mock_client,
         ),
         patch(
@@ -1014,7 +1060,7 @@ def test_concurrency_one_uses_sequential_path(
     mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
     with (
         patch(
-            "laglitsynth.extraction_codebook.extract.OpenAI",
+            "laglitsynth.extraction_codebook.extract.chat_client",
             return_value=mock_client,
         ),
         patch("laglitsynth.concurrency.ThreadPoolExecutor", wraps=TPE) as mock_tpe,
@@ -1061,7 +1107,7 @@ class TestConventionalPaths:
         mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
         with (
             patch(
-                "laglitsynth.extraction_codebook.extract.OpenAI",
+                "laglitsynth.extraction_codebook.extract.chat_client",
                 return_value=mock_client,
             ),
         ):

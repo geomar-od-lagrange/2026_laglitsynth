@@ -8,8 +8,8 @@
 # output without re-fetching.
 #
 # Prerequisites:
-#   - .env with OPENALEX_API_KEY and UNPAYWALL_EMAIL
-#   - an LLM endpoint for stages 3, 7, 8
+#   - .env with OPENALEX_API_KEY, UNPAYWALL_EMAIL and LLM_API_KEY
+#   - an OpenAI-compatible LLM endpoint for stages 3, 7, 8 (LLM_BASE_URL)
 #   - GROBID serving at $GROBID_URL (stage 6)
 #
 # Usage:
@@ -35,8 +35,15 @@
 #   SCREENING_THRESHOLD    relevance-score cutoff; no default. Required (env
 #                          or config) when the run reaches stage 7, or
 #                          stage 5 with EXPORT_GAP=1
+#   LLM_BASE_URL           OpenAI-compatible base URL including /v1; no
+#                          default. Required (env or config) from stage 3 on
+#   LLM_DECISIONS_URL      decisions endpoint for stage 3, passed as
+#                          --decisions-url when set (default: the CLI's
+#                          <LLM_BASE_URL>/decisions)
+#   SCREENING_MODEL, ELIGIBILITY_MODEL, EXTRACTION_MODEL
+#                          no defaults; each is required (env or config)
+#                          when the run reaches its stage
 #   OUTPUT_ROOT, GROBID_URL,
-#   SCREENING_MODEL, ELIGIBILITY_MODEL, EXTRACTION_MODEL,
 #   LLM_CONCURRENCY        (--concurrency for stages 3 and 7; default 1),
 #   ELIGIBILITY_CONCURRENCY (--concurrency for stage 7 only; default LLM_CONCURRENCY),
 #   EXTRACTION_CONCURRENCY  (--concurrency for stage 8 only; default 1 — prefill-bound),
@@ -86,10 +93,15 @@ CODEBOOK="${CODEBOOK:-${CFG_CODEBOOK:-examples/codebooks/lagrangian-oceanography
 # Checked below, once STOP_AFTER_STAGE says whether a stage uses it.
 SCREENING_THRESHOLD="${SCREENING_THRESHOLD:-${CFG_SCREENING_THRESHOLD:-}}"
 
-# Models.
-SCREENING_MODEL="${SCREENING_MODEL:-${CFG_SCREENING_MODEL:-gemma3:4b}}"
-ELIGIBILITY_MODEL="${ELIGIBILITY_MODEL:-${CFG_ELIGIBILITY_MODEL:-gemma3:4b}}"
-EXTRACTION_MODEL="${EXTRACTION_MODEL:-${CFG_EXTRACTION_MODEL:-llama3.1:8b}}"
+# LLM endpoint and models: no built-in defaults, the review names them.
+# Checked below, once STOP_AFTER_STAGE says which stages run. The API key
+# (LLM_API_KEY, env or the sourced .env) is never passed as a flag: the
+# CLI reads it itself, so it stays out of the process list.
+LLM_BASE_URL="${LLM_BASE_URL:-${CFG_LLM_BASE_URL:-}}"
+LLM_DECISIONS_URL="${LLM_DECISIONS_URL:-${CFG_LLM_DECISIONS_URL:-}}"
+SCREENING_MODEL="${SCREENING_MODEL:-${CFG_SCREENING_MODEL:-}}"
+ELIGIBILITY_MODEL="${ELIGIBILITY_MODEL:-${CFG_ELIGIBILITY_MODEL:-}}"
+EXTRACTION_MODEL="${EXTRACTION_MODEL:-${CFG_EXTRACTION_MODEL:-}}"
 
 # Concurrency.
 LLM_CONCURRENCY="${LLM_CONCURRENCY:-${CFG_LLM_CONCURRENCY:-1}}"
@@ -114,6 +126,18 @@ if [[ "$STOP_AFTER_STAGE" -ge 7 ]] || [[ "$EXPORT_GAP" == "1" && "$STOP_AFTER_ST
     : "${SCREENING_THRESHOLD:?SCREENING_THRESHOLD required — set screening_threshold in the review config or export it}"
 fi
 
+if [[ "$STOP_AFTER_STAGE" -ge 3 ]]; then
+    : "${LLM_BASE_URL:?LLM_BASE_URL required — set llm_base_url in the review config or export it}"
+    : "${LLM_API_KEY:?LLM_API_KEY required — set in .env or export it}"
+    : "${SCREENING_MODEL:?SCREENING_MODEL required — set models.screening in the review config or export it}"
+fi
+if [[ "$STOP_AFTER_STAGE" -ge 7 ]]; then
+    : "${ELIGIBILITY_MODEL:?ELIGIBILITY_MODEL required — set models.eligibility in the review config or export it}"
+fi
+if [[ "$STOP_AFTER_STAGE" -ge 8 ]]; then
+    : "${EXTRACTION_MODEL:?EXTRACTION_MODEL required — set models.extraction in the review config or export it}"
+fi
+
 : "${OPENALEX_API_KEY:?OPENALEX_API_KEY required — set in .env}"
 : "${UNPAYWALL_EMAIL:?UNPAYWALL_EMAIL required — set in .env}"
 
@@ -129,6 +153,10 @@ fi
 # <run-id>/ leaf. Unset: each stage reads the manifest's run_id itself.
 run_id_flags=()
 [[ -n "${RUN_ID:-}" ]] && run_id_flags=(--run-id "$RUN_ID")
+
+# --decisions-url only when set; the CLI otherwise derives it from --base-url.
+decisions_url_flags=()
+[[ -n "$LLM_DECISIONS_URL" ]] && decisions_url_flags=(--decisions-url "$LLM_DECISIONS_URL")
 
 run_stage() {
     local n="$1" name="$2"
@@ -159,6 +187,8 @@ run_stage 3 screening-abstracts \
         --screening-criteria "$SCREENING_CRITERIA" \
         --data-dir "$ROOT" \
         ${run_id_flags[@]+"${run_id_flags[@]}"} \
+        --base-url "$LLM_BASE_URL" \
+        ${decisions_url_flags[@]+"${decisions_url_flags[@]}"} \
         --model "$SCREENING_MODEL" \
         --concurrency "$LLM_CONCURRENCY"
 
@@ -187,6 +217,7 @@ run_stage 7 fulltext-eligibility \
         --eligibility-criteria "$ELIGIBILITY_CRITERIA" \
         --data-dir "$ROOT" \
         ${run_id_flags[@]+"${run_id_flags[@]}"} \
+        --base-url "$LLM_BASE_URL" \
         --model "$ELIGIBILITY_MODEL" \
         --concurrency "$ELIGIBILITY_CONCURRENCY"
 
@@ -195,6 +226,7 @@ run_stage 8 extraction-codebook \
         --codebook "$CODEBOOK" \
         --data-dir "$ROOT" \
         ${run_id_flags[@]+"${run_id_flags[@]}"} \
+        --base-url "$LLM_BASE_URL" \
         --model "$EXTRACTION_MODEL" \
         --concurrency "$EXTRACTION_CONCURRENCY"
 

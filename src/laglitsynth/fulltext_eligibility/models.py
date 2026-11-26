@@ -55,7 +55,6 @@ class EligibilityVerdict(BaseModel):
     work_id: str
     eligible: bool | None = None  # None for sentinel-reason skips
     reason: str | None = None  # LLM free-text or sentinel
-    seed: int | None = None  # seed sent with this call; None for sentinel reasons
     raw_response: str | None = None  # LLM's raw message content; None when no call was made
 
 
@@ -72,4 +71,5 @@ class EligibilityMeta(BaseModel):
     tei_parse_failure_count: int
     llm_parse_failure_count: int
     llm_timeout_count: int = 0
+    llm_rejected_count: int = 0
     criterion: str = ""  # the eligibility-criteria system prompt, verbatim for reviewer export

@@ -156,7 +156,7 @@ analysis. "Codebook" is the most portable term across communities.
 
 One structured record per work, produced by data
 extraction. Contains the fields defined by the codebook, plus identification
-metadata (work ID, sentinel reason, seed). Because the extraction stage is
+metadata (work ID, sentinel reason, raw response). Because the extraction stage is
 full-text-only, the record carries no source-basis field — the basis is
 always full text.
 

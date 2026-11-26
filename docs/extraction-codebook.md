@@ -18,8 +18,8 @@ expected once phase 3 human review begins.
 
 ## Prerequisites
 
-See [external-services.md](external-services.md) for Ollama setup. Pull
-the default model before the first run: `ollama pull llama3.1:8b` (~5 GB).
+An OpenAI-compatible chat endpoint and its key as `LLM_API_KEY`; see
+[external-services.md](external-services.md#llm-endpoint).
 
 ## Prototype scope
 
@@ -83,7 +83,7 @@ top of the codebook-driven payload model via
 `pydantic.create_model`).
 
 The record carries an identification block (`work_id`, `reason`,
-`seed`, `raw_response`) plus the content fields from the
+`raw_response`) plus the content fields from the
 loaded codebook. Because every record is full-text-based, there is no
 `source_basis` field — the basis is implicit. Every content value is
 paired with a `*_context: str | None` verbatim snippet (unless the YAML
@@ -100,9 +100,9 @@ non-string value is stringified. `None` passes through unchanged. This
 flattens common type mismatches rather than failing the whole record.
 
 `raw_response` carries the LLM's message text before parsing. Set on
-successful records and on `llm-parse-failure` sentinels so an operator
-can see what the model actually said; `None` on the `tei-parse-failure`
-sentinel emitted without an LLM call.
+successful records, on `llm-parse-failure` sentinels (the message) and on
+`llm-rejected` sentinels (the error body) so an operator can see what the
+endpoint actually said; `None` on `tei-parse-failure` and `llm-timeout`.
 
 ### ExtractionCodebookMeta
 
@@ -119,12 +119,13 @@ class ExtractionCodebookMeta(BaseModel):
     skipped_count: int          # tei-parse-failure only
     llm_parse_failure_count: int
     llm_timeout_count: int
+    llm_rejected_count: int
 ```
 
 `run` and `llm` are the shared reproducibility nests from
 [`src/laglitsynth/models.py`](../src/laglitsynth/models.py); they
 carry `tool`, `tool_version`, `run_at`, `validation_skipped`, `model`,
-`temperature`, and `prompt_sha256`. `prompt_sha256` covers the
+`base_url`, `decisions_url` (`None` here), and `prompt_sha256`. `prompt_sha256` covers the
 rendered codebook system prompt and `USER_TEMPLATE`, so any prompt or
 codebook change shifts the hash.
 
@@ -165,13 +166,17 @@ such work, in catalogue order:
 
 ## Sentinel reasons
 
-All sentinels set every content field `None` and `seed=None`.
+All sentinels set every content field `None`.
 
 | Reason | Trigger |
 |---|---|
 | `tei-parse-failure` | `sections()` raises `lxml.etree.XMLSyntaxError`, or renders empty. A paper with a PDF but unreadable TEI is an operator-visible bug, unlike a plain absence of full text (which is silently skipped). |
 | `llm-parse-failure` | The LLM response did not validate against the payload schema. |
-| `llm-timeout` | The OpenAI client raised `APITimeoutError` / `APIConnectionError` after all retries exhausted. The OpenAI client is constructed with `timeout=600s` and `max_retries=3` so a single hang in a long extraction does not kill the stage. |
+| `llm-timeout` | The OpenAI client raised `APITimeoutError`, `APIConnectionError`, `RateLimitError` or `InternalServerError` after all retries exhausted. The client is constructed with `timeout=600s` and `max_retries=3` so a single hang in a long extraction does not kill the stage. |
+| `llm-rejected` | The endpoint refused the request (`BadRequestError`, or another 4xx that is not fatal), for example a full text longer than the model's context. `raw_response` carries the error body. |
+
+`AuthenticationError`, `PermissionDeniedError`, `NotFoundError` and a 402
+fail every work the same way, so the stage exits naming the base URL.
 
 There is no `no-source` sentinel: an eligible work without full text is
 simply not processed, not flagged.
@@ -202,7 +207,7 @@ laglitsynth extraction-codebook \
     [--codebook examples/codebooks/lagrangian-oceanography.yaml] \
     [--config <run-dir>/config.yaml] \
     [--skip-existing] [--max-records N] [--dry-run] \
-    [--model llama3.1:8b] [--base-url http://localhost:11434] \
+    --base-url URL --model MODEL [--api-key KEY] \
     [--concurrency 1]
 ```
 
@@ -253,16 +258,17 @@ to run (see [run-manifest.md](run-manifest.md)).
 - `--max-records`: process only the first N works from the eligible
   catalogue.
 - `--dry-run`: print summaries to stderr without writing any output.
-- `--model`, `--base-url`: the model and the LLM server it is called on
-  (`--base-url` without `/v1`).
+- `--base-url`, `--model`: the OpenAI-compatible base URL (including
+  `/v1`) and the chat model. Both required.
+- `--api-key`: the key; falls back to `LLM_API_KEY` in the environment,
+  then in `.env`. Never written to `config.yaml`.
 - `--concurrency`: number of in-flight LLM requests (default: `1`).
   See [llm-concurrency.md](llm-concurrency.md).
 
 ### Model sizing
 
-The CLI default is `llama3.1:8b`. Smaller models (e.g. `gemma3:4b`)
-return empty JSON on the full codebook payload — pick `--model gemma3:4b`
-only for testing.
+`--model` has no default. Small models can return empty JSON on the full
+codebook payload.
 
 Pick the model once and carry `--model` through to all stage 8
 invocations; the `prompt_sha256` covers the prompt but not the model
@@ -325,12 +331,10 @@ User: full_text:
 <rendered text>
 ```
 
-`response_format={"type": "json_object"}`, `temperature=0.8`, per-call
-random seed recorded on the record. Same shape as
-[eligibility](eligibility.md). The same temperature/seed variance that
-applies to stage 3 applies here — see
-[screening-abstracts.md § Reproducibility](screening-abstracts.md#reproducibility)
-for the full explanation.
+The request carries `model`, `messages` and
+`response_format={"type": "json_object"}` only: no temperature or seed is
+sent, so sampling is the endpoint's default and two runs with the same
+prompt can differ record by record.
 
 ## Changing the codebook
 
@@ -356,9 +360,8 @@ navigation aid). The per-work tab is the working surface: a back-to-Index
 link, a bibliographic block, the embedded criterion, then one row per
 codebook field with columns `field | value | context`, a
 `reviewer_remarks` row, and
-finally a collapsed LLM-meta block (reason, seed, model,
-temperature, prompt_sha256, raw_response — hidden behind an outline
-toggle). The field list is driven off the codebook
+finally a collapsed LLM-meta block (reason, model, base_url,
+prompt_sha256, raw_response — hidden behind an outline toggle). The field list is driven off the codebook
 (the record model is codebook-built), so a non-default codebook's field
 set follows automatically — nothing is hard-coded. The criterion is read
 from the `--codebook` spec itself (the export loads it anyway to

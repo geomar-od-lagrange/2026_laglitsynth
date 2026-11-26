@@ -2,14 +2,15 @@
 #
 # This file carries the runner's smoke-run defaults; it is the config
 # `scripts/run-pipeline.sh` reads when given no argument. The screening
-# threshold has no default: set `screening_threshold` below or export
-# SCREENING_THRESHOLD before running. Validated against the `ReviewConfig`
+# threshold, the LLM endpoint and the models have no default: set them
+# below or export SCREENING_THRESHOLD, LLM_BASE_URL and *_MODEL before
+# running. The API key never goes here: it is LLM_API_KEY in .env. Validated against the `ReviewConfig`
 # model and emitted as CFG_* shell assignments by
 # `laglitsynth review-config`. See docs/configs.md.
 #
-# Only the knobs a review actually pins are set here; every omitted knob
-# (models, concurrency) falls back to the runner's built-in default. Env
-# vars still override everything (env > config > default).
+# Only the knobs a review actually pins are set here; an omitted
+# concurrency falls back to the runner's built-in default. Env vars still
+# override everything (env > config > default).
 
 query: "Lagrangian particle tracking"
 
@@ -27,10 +28,12 @@ codebook: ../codebooks/lagrangian-oceanography.yaml
 # from_year: 2000
 # to_year: 2025
 # screening_threshold: <0-100>   # relevance-score cutoff (required from stage 7 on)
-# models:
-#   screening: gemma3:4b
-#   eligibility: gemma3:4b
-#   extraction: llama3.1:8b
+# llm_base_url: <https://.../v1>  # OpenAI-compatible base (required from stage 3 on)
+# llm_decisions_url: <url>        # only if decisions are not at <llm_base_url>/decisions
+# models:                         # required for each stage the run reaches
+#   screening: <decisions model>
+#   eligibility: <chat model>
+#   extraction: <chat model>
 # concurrency:
 #   llm: 1
 #   extraction: 1

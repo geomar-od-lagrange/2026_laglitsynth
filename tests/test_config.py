@@ -94,6 +94,7 @@ def test_save_resolved_config_inlines_named_paths(tmp_path: Path) -> None:
         codebook=codebook,
         model="gemma3:4b",
         threshold=50,
+        api_key="secret-key",
         config=None,
         run=lambda a: None,
         command="screening-abstracts",
@@ -113,6 +114,9 @@ def test_save_resolved_config_inlines_named_paths(tmp_path: Path) -> None:
     assert "config" not in written
     assert "run" not in written
     assert "command" not in written
+    # A key passed on the command line never lands in the snapshot.
+    assert "api_key" not in written
+    assert "secret-key" not in out.read_text()
 
 
 def test_run_snapshot_round_trips_via_config(tmp_path: Path) -> None:

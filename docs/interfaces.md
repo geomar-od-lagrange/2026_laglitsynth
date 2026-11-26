@@ -77,8 +77,8 @@ The meta files stay as per-run provenance records — they are not merged.
 
 | Path | Model | Description |
 |---|---|---|
-| `data/screening-abstracts/<run-id>/verdicts.jsonl` | [`ScreeningVerdict`](../src/laglitsynth/screening_abstracts/models.py) | Relevance score and reason for every work |
-| `data/screening-abstracts/<run-id>/screening-meta.json` | [`ScreeningMeta`](../src/laglitsynth/screening_abstracts/models.py) | Criterion (loaded `system_prompt`), model, counts |
+| `data/screening-abstracts/<run-id>/verdicts.jsonl` | [`ScreeningVerdict`](../src/laglitsynth/screening_abstracts/models.py) | Relevance score (`round(100 * p)`) or sentinel reason for every work |
+| `data/screening-abstracts/<run-id>/screening-meta.json` | [`ScreeningMeta`](../src/laglitsynth/screening_abstracts/models.py) | LLM fingerprint (`LlmMeta`), counts |
 
 Verdicts cover all works in the deduplicated catalogue, not just accepted
 ones. The accept/reject decision is derived from the relevance score and
@@ -197,9 +197,8 @@ laglitsynth catalogue-sample --n N --seed N \
 laglitsynth screening-abstracts [data/catalogue-dedup/deduplicated.jsonl] \
     [--screening-criteria FILE] \
     [--data-dir DIR] [--run-id ID] [--config FILE] \
-    [--backend ollama|decisions] [--model MODEL] [--api-key KEY] \
-    [--decisions-url URL] \
-    [--base-url URL] [--max-records N] [--concurrency N] [--dry-run]
+    --base-url URL --model MODEL [--api-key KEY] [--decisions-url URL] \
+    [--max-records N] [--concurrency N] [--dry-run]
 
 # Stage 5 — fulltext-retrieval (automatic OA + Unpaywall into data/pdfs/)
 laglitsynth fulltext-retrieval \
@@ -237,7 +236,7 @@ laglitsynth fulltext-eligibility \
     [--screening-threshold 50] [--data-dir DIR] [--run-id ID] \
     [--eligibility-criteria FILE] [--config FILE] \
     [--skip-existing] [--max-records N] [--dry-run] \
-    [--model MODEL] [--base-url URL] \
+    --base-url URL --model MODEL [--api-key KEY] \
     [--concurrency N]
 
 # Stage 8 — extraction-codebook
@@ -249,7 +248,7 @@ laglitsynth extraction-codebook \
     [--data-dir DIR] [--run-id ID] \
     [--codebook FILE] [--config FILE] \
     [--skip-existing] [--max-records N] [--dry-run] \
-    [--model MODEL] [--base-url URL] \
+    --base-url URL --model MODEL [--api-key KEY] \
     [--concurrency N]
 
 # Stage 8 — extraction-codebook-export (human review, XLSX only)
@@ -263,7 +262,12 @@ laglitsynth extraction-codebook-export \
 Stages 3, 7 and 8 use the run-id directory model: outputs land at
 `<data-dir>/<stage-subdir>/<run-id>/`. See [configs.md](configs.md).
 
-On stages 3, 7 and 8, `--concurrency` (default `1`) sets the number of
+Stages 3, 7 and 8 share the endpoint flags: `--base-url` (the
+OpenAI-compatible base, including `/v1`) and `--model` are required (the
+stage exits naming the missing flag), `--api-key` falls back to
+`LLM_API_KEY` in the environment, then in `.env`, and is never written to
+`config.yaml`; stage 3 also takes `--decisions-url` (default
+`<base-url>/decisions`). `--concurrency` (default `1`) sets the number of
 in-flight LLM requests. See [llm-concurrency.md](llm-concurrency.md).
 
 Stages 1 and 3 use positional arguments; the rest use keyword flags.
@@ -276,12 +280,14 @@ Every parameter is a CLI flag on the stage tool. For credential flags
 (`--api-key`, `--email`) the tool also reads `.env` in the working directory
 when the flag is omitted, and emits a one-line stderr notice
 (`Loaded <KEY> from .env`). The explicit flag always wins; the `.env` read is
-never silent. All other run-affecting parameters (`--base-url`, `--grobid-url`,
-model names, thresholds) are CLI-only. Driver scripts
-([scripts/run-pipeline.sh](../scripts/run-pipeline.sh),
+never silent. The LLM stages' `--api-key` falls back to `LLM_API_KEY` in
+the environment first, then in `.env`. All other run-affecting parameters
+(`--base-url`, `--grobid-url`, model names, thresholds) are CLI-only. Driver
+scripts ([scripts/run-pipeline.sh](../scripts/run-pipeline.sh),
 [scripts/nesh-pipeline.sbatch](../scripts/nesh-pipeline.sbatch)) source `.env`
-(`set -a; source .env; set +a`) and pass the values as `--flag "$VAR"` to each
-tool — this is still the recommended pattern for wrapper invocations.
+(`set -a; source .env; set +a`) and pass the OpenAlex key and the Unpaywall
+email as `--flag "$VAR"`; they never pass the LLM key as a flag, so it stays
+out of the process list.
 
 ### Planned subcommands
 
@@ -320,10 +326,11 @@ laglitsynth catalogue-fetch "ocean tracer simulation" --api-key "$OPENALEX_API_K
 laglitsynth catalogue-dedup
 
 # 3. Screening abstracts (writes to data/screening-abstracts/<run-id>/)
-# The relevance criterion lives in the screening-criteria YAML's
-# system_prompt field (default: the Lagrangian-oceanography example).
+# The relevance question lives in the screening-criteria YAML's
+# decision block (default: the Lagrangian-oceanography example).
 laglitsynth screening-abstracts \
-    --screening-criteria examples/screening-criteria/lagrangian-oceanography.yaml
+    --screening-criteria examples/screening-criteria/lagrangian-oceanography.yaml \
+    --base-url https://llm.example.org/v1 --model <decisions-model>
 
 # 5. Fulltext retrieval (every work in the deduplicated catalogue).
 #    Sticky by default: re-runs skip works that already have a PDF and
@@ -399,16 +406,19 @@ LLM configuration carried by `ScreeningMeta`, `EligibilityMeta`, and
 ```python
 class LlmMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    model: str           # Ollama model tag
-    temperature: float   # explicit value passed to the API (currently 0.8)
-    prompt_sha256: str   # 64 hex chars
+    model: str                 # model name sent to the endpoint
+    base_url: str              # OpenAI-compatible base, including /v1
+    decisions_url: str | None  # decisions endpoint; None for chat stages
+    prompt_sha256: str         # 64 hex chars
 ```
+
+No temperature or seed is sent, so none is recorded.
 
 Per stage, the hash input is:
 
 | Stage | `prompt_sha256` covers |
 |---|---|
-| 3 — screening-abstracts | `system_prompt + "\n" + USER_TEMPLATE` (system_prompt loaded from the screening-criteria YAML) |
+| 3 — screening-abstracts | `question.canonical_json() + "\n" + USER_TEMPLATE` (the screening-criteria YAML's `decision` block) |
 | 7 — fulltext-eligibility | `SYSTEM_PROMPT + "\n" + USER_TEMPLATE` |
 | 8 — extraction-codebook | `SYSTEM_PROMPT + "\n" + USER_TEMPLATE` |
 

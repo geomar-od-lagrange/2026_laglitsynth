@@ -3,8 +3,8 @@
 A *review config* is one handwritten YAML that captures the
 review-defining knobs the runner ([scripts/run-pipeline.sh]) needs:
 the query, the year window and record cap, the three criteria/codebook
-files, the screening threshold, and the per-stage models and
-concurrency. It is distinct from the per-stage ``config.yaml``
+files, the screening threshold, the LLM endpoint URLs, and the
+per-stage models and concurrency. The API key is never part of it. It is distinct from the per-stage ``config.yaml``
 run-snapshots written by the LLM stages (see ``laglitsynth.config`` and
 [docs/configs.md]) — those record one resolved stage invocation; this
 describes a whole review up front and drives the runner.
@@ -64,6 +64,8 @@ class ReviewConfig(BaseModel):
     eligibility_criteria: Path | None = None
     codebook: Path | None = None
     screening_threshold: float | None = None
+    llm_base_url: str | None = None
+    llm_decisions_url: str | None = None
     models: _Models = _Models()
     concurrency: _Concurrency = _Concurrency()
 
@@ -118,6 +120,8 @@ def emit_cfg_lines(config: ReviewConfig) -> list[str]:
         ("CFG_ELIGIBILITY_CRITERIA", config.eligibility_criteria),
         ("CFG_CODEBOOK", config.codebook),
         ("CFG_SCREENING_THRESHOLD", config.screening_threshold),
+        ("CFG_LLM_BASE_URL", config.llm_base_url),
+        ("CFG_LLM_DECISIONS_URL", config.llm_decisions_url),
         ("CFG_SCREENING_MODEL", config.models.screening),
         ("CFG_ELIGIBILITY_MODEL", config.models.eligibility),
         ("CFG_EXTRACTION_MODEL", config.models.extraction),

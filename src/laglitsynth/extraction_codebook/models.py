@@ -28,3 +28,4 @@ class ExtractionCodebookMeta(BaseModel):
     skipped_count: int  # tei-parse-failure only
     llm_parse_failure_count: int
     llm_timeout_count: int = 0
+    llm_rejected_count: int = 0

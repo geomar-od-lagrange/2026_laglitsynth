@@ -81,7 +81,7 @@ def resolve_yaml_arg(value: str | Path | dict[str, Any]) -> dict[str, Any]:
     return load_config(Path(value))
 
 
-_DROP_KEYS = frozenset({"config", "run", "command", "run_id"})
+_DROP_KEYS = frozenset({"config", "run", "command", "run_id", "api_key"})
 
 
 def save_resolved_config(
@@ -98,7 +98,8 @@ def save_resolved_config(
     ``--config`` flag, the dispatch ``run`` callable, the subcommand
     ``command`` field, and the runtime ``run_id`` are dropped — a
     rerun from a saved snapshot must always generate a fresh run_id
-    rather than overwrite the original run dir.
+    rather than overwrite the original run dir. ``api_key`` is dropped
+    so a key passed on the command line never lands in the snapshot.
     """
     inlines_set = set(inlines)
     payload: dict[str, Any] = {}

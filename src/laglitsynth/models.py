@@ -12,5 +12,6 @@ class RunMeta(BaseModel):
 class LlmMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     model: str
-    temperature: float | None  # None for backends without a sampling temperature
-    prompt_sha256: str  # sha256(SYSTEM_PROMPT + "\n" + user prompt), full hex digest
+    base_url: str  # OpenAI-compatible base, including /v1
+    decisions_url: str | None  # None for chat stages
+    prompt_sha256: str  # sha256(prompt or question JSON + "\n" + USER_TEMPLATE), full hex

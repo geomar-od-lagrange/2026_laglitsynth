@@ -6,7 +6,6 @@ import argparse
 import hashlib
 import json
 import logging
-import random
 import sys
 import time
 from collections.abc import Iterable, Iterator
@@ -14,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from lxml import etree
-from openai import APIConnectionError, APITimeoutError, OpenAI
+from openai import OpenAI
 from pydantic import ValidationError
 
 from laglitsynth.catalogue_fetch.models import Work
@@ -45,8 +44,16 @@ from laglitsynth.layout import (
     require_input,
     resolve_screening_inputs,
 )
+from laglitsynth.llm import (
+    LlmEndpoint,
+    LlmFailure,
+    add_endpoint_args,
+    chat_client,
+    chat_json,
+    resolve_endpoint,
+)
 from laglitsynth.manifest import resolve_run_id
-from laglitsynth.models import LlmMeta, RunMeta
+from laglitsynth.models import RunMeta
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
 logger = logging.getLogger(__name__)
@@ -55,9 +62,7 @@ DEFAULT_ELIGIBILITY_CRITERIA = Path(
     "examples/eligibility-criteria/lagrangian-oceanography.yaml"
 )
 
-_TEMPERATURE = 0.8
 _LLM_TIMEOUT_SECONDS = 300
-_LLM_MAX_RETRIES = 3
 
 
 def _active_works(
@@ -93,39 +98,27 @@ def classify_eligibility(
     work_id: str,
     prompt: str,
     *,
-    model: str,
+    endpoint: LlmEndpoint,
     client: OpenAI,
     system_prompt: str,
 ) -> EligibilityVerdict:
     """Call the LLM, validate the payload, compose the verdict.
 
-    On JSON parse error or ``ValidationError`` returns a
-    ``reason="llm-parse-failure"`` sentinel with ``eligible=None``,
-    ``seed=None``, and the raw response attached for audit. Mirrors
-    stage 8's ``extract_codebook`` shape and error handling.
+    A per-work endpoint failure gives the ``llm-timeout`` or
+    ``llm-rejected`` sentinel; a JSON parse error or ``ValidationError``
+    gives ``llm-parse-failure``. Both keep the raw response for audit.
     """
-    seed = random.randint(0, 2**31 - 1)
     try:
-        response = client.chat.completions.create(
-            model=model,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=_TEMPERATURE,
-            seed=seed,
+        content = chat_json(
+            client, endpoint, work_id=work_id, system=system_prompt, user=prompt
         )
-    except (APITimeoutError, APIConnectionError) as exc:
-        logger.warning("LLM timeout for %s: %s", work_id, exc)
+    except LlmFailure as exc:
         return EligibilityVerdict(
             work_id=work_id,
             eligible=None,
-            reason="llm-timeout",
-            seed=None,
-            raw_response=None,
+            reason=exc.reason,
+            raw_response=exc.raw_response,
         )
-    content = response.choices[0].message.content or "{}"
     try:
         payload = _EligibilityPayload.model_validate_json(content)
     except (ValidationError, ValueError) as exc:
@@ -134,14 +127,12 @@ def classify_eligibility(
             work_id=work_id,
             eligible=None,
             reason="llm-parse-failure",
-            seed=None,
             raw_response=content,
         )
     return EligibilityVerdict(
         work_id=work_id,
         eligible=payload.eligible,
         reason=payload.reason,
-        seed=seed,
         raw_response=content,
     )
 
@@ -158,7 +149,7 @@ def assess_works(
     extraction_output_dir: Path,
     *,
     client: OpenAI,
-    model: str,
+    endpoint: LlmEndpoint,
     max_records: int | None,
     system_prompt: str,
     skip_ids: set[str] | None = None,
@@ -180,7 +171,7 @@ def assess_works(
 
     def _call_one(work: Work) -> EligibilityVerdict:
         return _assess_one(
-            work, extractions, extraction_output_dir, client, model, system_prompt
+            work, extractions, extraction_output_dir, client, endpoint, system_prompt
         )
 
     yield from map_concurrent(_call_one, eligible, max_workers=concurrency)
@@ -191,7 +182,7 @@ def _assess_one(
     extractions: dict[str, ExtractedDocument],
     extraction_output_dir: Path,
     client: OpenAI,
-    model: str,
+    endpoint: LlmEndpoint,
     system_prompt: str,
 ) -> EligibilityVerdict:
     # Full text or nothing: the active set is already gated on extraction
@@ -208,7 +199,6 @@ def _assess_one(
             work_id=work.id,
             eligible=None,
             reason="tei-parse-failure",
-            seed=None,
         )
     if not rendered:
         # Valid XML but empty body: broken extraction on a paper we do
@@ -220,14 +210,13 @@ def _assess_one(
             work_id=work.id,
             eligible=None,
             reason="tei-parse-failure",
-            seed=None,
         )
     prompt = build_user_message(rendered)
     return classify_eligibility(
         work.id,
         prompt,
+        endpoint=endpoint,
         client=client,
-        model=model,
         system_prompt=system_prompt,
     )
 
@@ -295,16 +284,7 @@ def build_subparser(
             f"consumed directly (default: {DEFAULT_ELIGIBILITY_CRITERIA})."
         ),
     )
-    parser.add_argument(
-        "--model",
-        default="gemma3:4b",
-        help="Model name (default: gemma3:4b)",
-    )
-    parser.add_argument(
-        "--base-url",
-        default="http://localhost:11434",
-        help="LLM server base URL, without /v1 (default: http://localhost:11434)",
-    )
+    add_endpoint_args(parser, decisions=False)
     parser.add_argument(
         "--max-records",
         type=int,
@@ -320,16 +300,6 @@ def build_subparser(
         "--dry-run",
         action="store_true",
         help="Print verdicts to stderr without writing output",
-    )
-    parser.add_argument(
-        "--concurrency",
-        type=int,
-        default=1,
-        help=(
-            "In-flight LLM requests (default: 1). Stage 7 benefits more from "
-            "concurrency than stage 8 because its prompts are less prefill-heavy. "
-            "See docs/llm-concurrency.md."
-        ),
     )
     register_config_arg(parser)
     parser.set_defaults(run=run)
@@ -347,6 +317,7 @@ def run(args: argparse.Namespace) -> None:
         flag="--extractions",
         upstream="fulltext-extraction",
     )
+    endpoint = resolve_endpoint(args)
 
     output_dir: Path = data_dir / ELIGIBILITY_SUBDIR / args.run_id
     verdicts_path = output_dir / "verdicts.jsonl"
@@ -412,7 +383,7 @@ def run(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
 
-    print(f"Assessing {total} works with model {args.model}", file=sys.stderr)
+    print(f"Assessing {total} works with model {endpoint.model}", file=sys.stderr)
     if not args.dry_run:
         print(f"Output dir: {output_dir}", file=sys.stderr)
 
@@ -424,12 +395,7 @@ def run(args: argparse.Namespace) -> None:
     if not args.dry_run and not args.skip_existing and verdicts_path.exists():
         verdicts_path.unlink()
 
-    client = OpenAI(
-        base_url=f"{args.base_url}/v1",
-        api_key="ollama",
-        timeout=_LLM_TIMEOUT_SECONDS,
-        max_retries=_LLM_MAX_RETRIES,
-    )
+    client = chat_client(endpoint, _LLM_TIMEOUT_SECONDS)
 
     t0 = time.monotonic()
     index = 0
@@ -440,7 +406,7 @@ def run(args: argparse.Namespace) -> None:
         extractions,
         extraction_output_dir,
         client=client,
-        model=args.model,
+        endpoint=endpoint,
         max_records=args.max_records,
         system_prompt=system_prompt,
         skip_ids=skip_ids,
@@ -483,18 +449,23 @@ def run(args: argparse.Namespace) -> None:
     llm_timeout_count = sum(
         1 for v in all_verdicts if v.reason == "llm-timeout"
     )
+    llm_rejected_count = sum(
+        1 for v in all_verdicts if v.reason == "llm-rejected"
+    )
 
     skipped_total = (
         tei_parse_failure_count
         + llm_parse_failure_count
         + llm_timeout_count
+        + llm_rejected_count
     )
     print(
         f"\nDone in {elapsed:.1f}s: {eligible_count} eligible, "
         f"{excluded_count} excluded, {skipped_total} skipped "
         f"({tei_parse_failure_count} tei-parse-failure, "
         f"{llm_parse_failure_count} llm-parse-failure, "
-        f"{llm_timeout_count} llm-timeout).",
+        f"{llm_timeout_count} llm-timeout, "
+        f"{llm_rejected_count} llm-rejected).",
         file=sys.stderr,
     )
 
@@ -506,11 +477,7 @@ def run(args: argparse.Namespace) -> None:
         run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
         validation_skipped=stats.skipped,
     )
-    llm_meta = LlmMeta(
-        model=args.model,
-        temperature=_TEMPERATURE,
-        prompt_sha256=prompt_sha256,
-    )
+    llm_meta = endpoint.llm_meta(prompt_sha256)
     write_meta(
         meta_path,
         EligibilityMeta(
@@ -525,6 +492,7 @@ def run(args: argparse.Namespace) -> None:
             tei_parse_failure_count=tei_parse_failure_count,
             llm_parse_failure_count=llm_parse_failure_count,
             llm_timeout_count=llm_timeout_count,
+            llm_rejected_count=llm_rejected_count,
             criterion=system_prompt,
         ),
     )

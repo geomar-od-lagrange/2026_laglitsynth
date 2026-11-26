@@ -20,6 +20,7 @@ from laglitsynth.fulltext_eligibility.eligibility import (
 )
 from laglitsynth.fulltext_eligibility.models import EligibilityVerdict
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
+from laglitsynth.llm import LlmEndpoint
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
 from conftest import (
@@ -35,6 +36,9 @@ from conftest import (
 
 
 # --- fixtures and helpers ---
+
+_BASE = "https://llm.example.org/v1"
+_ENDPOINT = LlmEndpoint(base_url=_BASE, model="m", api_key="k", decisions_url=None)
 
 
 def _write_verdicts_jsonl(path: Path, verdicts: list[ScreeningVerdict]) -> None:
@@ -93,21 +97,21 @@ class TestClassifyEligibility:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt text", model="m", client=mock_client, system_prompt="SP"
+            "W1", "prompt text", endpoint=_ENDPOINT, client=mock_client, system_prompt="SP"
         )
         assert verdict.work_id == "W1"
         assert verdict.eligible is True
         assert verdict.reason == "matches"
-        assert isinstance(verdict.seed, int)
         assert verdict.raw_response == '{"eligible": true, "reason": "matches"}'
-        assert "extra_body" not in mock_client.chat.completions.create.call_args.kwargs
+        kwargs = mock_client.chat.completions.create.call_args.kwargs
+        assert set(kwargs) == {"model", "messages", "response_format"}
 
     def test_valid_eligible_false(self) -> None:
         resp = _mock_openai_response('{"eligible": false, "reason": "review article"}')
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt text", model="m", client=mock_client, system_prompt="SP"
+            "W1", "prompt text", endpoint=_ENDPOINT, client=mock_client, system_prompt="SP"
         )
         assert verdict.eligible is False
 
@@ -116,11 +120,10 @@ class TestClassifyEligibility:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
+            "W1", "prompt", endpoint=_ENDPOINT, client=mock_client, system_prompt="SP"
         )
         assert verdict.reason == "llm-parse-failure"
         assert verdict.eligible is None
-        assert verdict.seed is None
         assert verdict.raw_response == "not json at all"
 
     def test_missing_eligible_field_returns_sentinel(self) -> None:
@@ -128,7 +131,7 @@ class TestClassifyEligibility:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
+            "W1", "prompt", endpoint=_ENDPOINT, client=mock_client, system_prompt="SP"
         )
         assert verdict.reason == "llm-parse-failure"
         assert verdict.raw_response == '{"reason": "ok"}'
@@ -141,7 +144,7 @@ class TestClassifyEligibility:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
+            "W1", "prompt", endpoint=_ENDPOINT, client=mock_client, system_prompt="SP"
         )
         assert verdict.reason == "ok"
         assert verdict.eligible is True
@@ -153,7 +156,7 @@ class TestClassifyEligibility:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
+            "W1", "prompt", endpoint=_ENDPOINT, client=mock_client, system_prompt="SP"
         )
         assert verdict.reason == "a / b"
 
@@ -163,7 +166,7 @@ class TestClassifyEligibility:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = resp
         verdict = classify_eligibility(
-            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
+            "W1", "prompt", endpoint=_ENDPOINT, client=mock_client, system_prompt="SP"
         )
         assert verdict.eligible is True
         assert verdict.reason == "ok"
@@ -175,11 +178,10 @@ class TestClassifyEligibility:
             request=MagicMock()
         )
         verdict = classify_eligibility(
-            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
+            "W1", "prompt", endpoint=_ENDPOINT, client=mock_client, system_prompt="SP"
         )
         assert verdict.reason == "llm-timeout"
         assert verdict.eligible is None
-        assert verdict.seed is None
         assert verdict.raw_response is None
 
     def test_connection_error_returns_sentinel(self) -> None:
@@ -188,22 +190,9 @@ class TestClassifyEligibility:
             request=MagicMock()
         )
         verdict = classify_eligibility(
-            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
+            "W1", "prompt", endpoint=_ENDPOINT, client=mock_client, system_prompt="SP"
         )
         assert verdict.reason == "llm-timeout"
-
-    def test_seed_forwarded_to_client(self) -> None:
-        resp = _mock_openai_response('{"eligible": true, "reason": "ok"}')
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        with patch(
-            "laglitsynth.fulltext_eligibility.eligibility.random.randint",
-            return_value=42,
-        ):
-            verdict = classify_eligibility(
-                "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
-            )
-        assert verdict.seed == 42
 
 
 # --- assess_works cascade ---
@@ -216,7 +205,7 @@ def _mock_classify(
         work_id: str,
         prompt: str,
         *,
-        model: str,
+        endpoint: LlmEndpoint,
         client: Any,
         system_prompt: str,
     ) -> EligibilityVerdict:
@@ -226,7 +215,6 @@ def _mock_classify(
                 work_id=work_id,
                 eligible=None,
                 reason="llm-parse-failure",
-                seed=None,
                 raw_response="mock failure",
             )
         assert isinstance(entry, dict)
@@ -234,7 +222,6 @@ def _mock_classify(
             work_id=work_id,
             eligible=entry["eligible"],
             reason=entry["reason"],
-            seed=entry.get("seed", 12345),
         )
 
     return side_effect
@@ -277,7 +264,7 @@ class TestAssessWorksCascade:
                     extractions,
                     output_dir,
                     client=MagicMock(),
-                    model="m",
+                    endpoint=_ENDPOINT,
                     max_records=None,
                     system_prompt="SP",
                 )
@@ -308,7 +295,7 @@ class TestAssessWorksCascade:
                     {},
                     output_dir,
                     client=MagicMock(),
-                    model="m",
+                    endpoint=_ENDPOINT,
                     max_records=None,
                     system_prompt="SP",
                 )
@@ -341,7 +328,7 @@ class TestAssessWorksCascade:
                     extractions,
                     output_dir,
                     client=MagicMock(),
-                    model="m",
+                    endpoint=_ENDPOINT,
                     max_records=None,
                     system_prompt="SP",
                 )
@@ -350,7 +337,6 @@ class TestAssessWorksCascade:
         assert len(verdicts) == 1
         assert verdicts[0].reason == "tei-parse-failure"
         assert verdicts[0].eligible is None
-        assert verdicts[0].seed is None
         # Malformed TEI on a paper we have a PDF for is an operator-visible bug.
         mock_classify.assert_not_called()
 
@@ -378,7 +364,7 @@ class TestAssessWorksCascade:
                     extractions,
                     output_dir,
                     client=MagicMock(),
-                    model="m",
+                    endpoint=_ENDPOINT,
                     max_records=None,
                     system_prompt="SP",
                 )
@@ -418,7 +404,7 @@ class TestAssessWorksCascade:
                     extractions,
                     output_dir,
                     client=MagicMock(),
-                    model="m",
+                    endpoint=_ENDPOINT,
                     max_records=None,
                     system_prompt="SP",
                 )
@@ -427,7 +413,6 @@ class TestAssessWorksCascade:
         assert len(verdicts) == 1
         assert verdicts[0].reason == "llm-parse-failure"
         assert verdicts[0].eligible is None
-        assert verdicts[0].seed is None
 
     def test_timeout_does_not_stop_loop(self, tmp_path: Path) -> None:
         """A timeout on one work yields a sentinel; subsequent works still run."""
@@ -455,7 +440,7 @@ class TestAssessWorksCascade:
             work_id: str,
             prompt: str,
             *,
-            model: str,
+            endpoint: LlmEndpoint,
             client: Any,
             system_prompt: str,
         ) -> EligibilityVerdict:
@@ -464,14 +449,12 @@ class TestAssessWorksCascade:
                     work_id=work_id,
                     eligible=None,
                     reason="llm-timeout",
-                    seed=None,
                     raw_response=None,
                 )
             return EligibilityVerdict(
                 work_id=work_id,
                 eligible=True,
                 reason="ok",
-                seed=42,
             )
 
         with patch(
@@ -484,7 +467,7 @@ class TestAssessWorksCascade:
                     extractions,
                     output_dir,
                     client=MagicMock(),
-                    model="m",
+                    endpoint=_ENDPOINT,
                     max_records=None,
                     system_prompt="SP",
                 )
@@ -494,42 +477,6 @@ class TestAssessWorksCascade:
         by_id = {v.work_id: v for v in verdicts}
         assert by_id["W1"].reason == "llm-timeout"
         assert by_id["W2"].reason == "ok"
-
-    def test_seed_recorded_on_successful_verdict(self, tmp_path: Path) -> None:
-        output_dir = tmp_path / "ext_out"
-        work = _make_work("W1", abstract="Abstract text.")
-
-        tei_path = "tei/W1.tei.xml"
-        _write_tei(
-            output_dir / tei_path,
-            f'<div xmlns="{TEI_NS}"><head>H</head><p>body</p></div>',
-        )
-        extracted = ExtractedDocument(
-            work_id="W1",
-            tei_path=tei_path,
-            content_sha256="0" * 64,
-            extracted_at="2026-04-17T00:00:00.000000+00:00",
-        )
-        extractions = {extracted.work_id: extracted}
-
-        with patch(
-            "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
-            side_effect=_mock_classify(
-                {"W1": {"eligible": True, "reason": "yes", "seed": 99}}
-            ),
-        ):
-            verdicts = list(
-                assess_works(
-                    [work],
-                    extractions,
-                    output_dir,
-                    client=MagicMock(),
-                    model="m",
-                    max_records=None,
-                    system_prompt="SP",
-                )
-            )
-        assert verdicts[0].seed == 99
 
 
 # --- EligibilityVerdict model ---
@@ -595,7 +542,8 @@ def _make_run_args(
         run_id=run_id,
         eligibility_criteria=_TEST_CRITERIA_SPEC,
         model="m",
-        base_url="http://x",
+        base_url=_BASE,
+        api_key="k",
         max_records=max_records,
         skip_existing=skip_existing,
         dry_run=dry_run,
@@ -635,7 +583,7 @@ class TestRun:
                     {"W1": {"eligible": True, "reason": "ok"}}
                 ),
             ),
-            patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.chat_client"),
         ):
             from laglitsynth.fulltext_eligibility.eligibility import run
 
@@ -679,7 +627,7 @@ class TestRun:
                 "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
                 side_effect=_mock_classify(classify_results),
             ),
-            patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.chat_client"),
         ):
             from laglitsynth.fulltext_eligibility.eligibility import run
 
@@ -709,7 +657,10 @@ class TestRun:
         assert "by_source_basis" not in meta
         assert meta["input_screening_verdicts"] == str(verdicts_path)
         assert meta["run"]["tool"] == "laglitsynth.fulltext_eligibility.assess"
-        assert meta["llm"]["temperature"] == 0.8
+        assert meta["llm"]["base_url"] == _BASE
+        assert meta["llm"]["decisions_url"] is None
+        assert "temperature" not in meta["llm"]
+        assert meta["llm_rejected_count"] == 0
         assert len(meta["llm"]["prompt_sha256"]) == 64
 
     def test_skip_existing_refuses_when_prompt_sha256_differs(
@@ -740,8 +691,9 @@ class TestRun:
                 "validation_skipped": 0,
             },
             "llm": {
-                "model": "gemma3:4b",
-                "temperature": 0.8,
+                "model": "m",
+                "base_url": _BASE,
+                "decisions_url": None,
                 "prompt_sha256": "0" * 64,  # deliberately wrong hash
             },
             "input_catalogue": str(catalogue),
@@ -771,7 +723,7 @@ class TestRun:
         )
 
         with (
-            patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.chat_client"),
         ):
             from laglitsynth.fulltext_eligibility.eligibility import run
 
@@ -814,7 +766,7 @@ class TestRun:
                 "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
                 side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
             ),
-            patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.chat_client"),
         ):
             from laglitsynth.fulltext_eligibility.eligibility import run
 
@@ -849,7 +801,6 @@ class TestRun:
             work_id="W1",
             eligible=True,
             reason="prior",
-            seed=1,
         )
         (out_dir / "verdicts.jsonl").write_text(prior.model_dump_json() + "\n")
 
@@ -872,7 +823,7 @@ class TestRun:
                 "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
                 mock_classify,
             ),
-            patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.chat_client"),
         ):
             from laglitsynth.fulltext_eligibility.eligibility import run
 
@@ -1031,7 +982,7 @@ def test_run_dir_printed_to_stderr_at_end(
             "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
             side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
         ),
-        patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
+        patch("laglitsynth.fulltext_eligibility.eligibility.chat_client"),
     ):
         from laglitsynth.fulltext_eligibility.eligibility import run
 
@@ -1101,7 +1052,7 @@ def test_concurrency_flag_threaded_to_assess_works(tmp_path: Path) -> None:
             "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
             side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
         ),
-        patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
+        patch("laglitsynth.fulltext_eligibility.eligibility.chat_client"),
         patch(
             "laglitsynth.fulltext_eligibility.eligibility.assess_works",
             side_effect=spy_assess,
@@ -1141,7 +1092,7 @@ def test_concurrency_one_uses_sequential_path(tmp_path: Path) -> None:
             "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
             side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
         ),
-        patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
+        patch("laglitsynth.fulltext_eligibility.eligibility.chat_client"),
         patch("laglitsynth.concurrency.ThreadPoolExecutor", wraps=TPE) as mock_tpe,
     ):
         from laglitsynth.fulltext_eligibility.eligibility import run
@@ -1188,7 +1139,7 @@ class TestConventionalPaths:
                 "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
                 side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
             ),
-            patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.chat_client"),
         ):
             from laglitsynth.fulltext_eligibility.eligibility import run
 

@@ -67,10 +67,12 @@ def test_emit_full_config_round_trips(tmp_path: Path) -> None:
             "eligibility_criteria": "elig.yaml",
             "codebook": "book.yaml",
             "screening_threshold": 40.0,
+            "llm_base_url": "https://llm.example.org/v1",
+            "llm_decisions_url": "https://llm.example.org/alt/decisions",
             "models": {
-                "screening": "gemma3:4b",
-                "eligibility": "gemma3:4b",
-                "extraction": "llama3.1:8b",
+                "screening": "decider",
+                "eligibility": "decider",
+                "extraction": "chatter",
             },
             "concurrency": {"llm": 4, "extraction": 1},
         },
@@ -86,9 +88,11 @@ def test_emit_full_config_round_trips(tmp_path: Path) -> None:
     assert parsed["CFG_ELIGIBILITY_CRITERIA"] == str((tmp_path / "elig.yaml").resolve())
     assert parsed["CFG_CODEBOOK"] == str((tmp_path / "book.yaml").resolve())
     assert parsed["CFG_SCREENING_THRESHOLD"] == "40.0"
-    assert parsed["CFG_SCREENING_MODEL"] == "gemma3:4b"
-    assert parsed["CFG_ELIGIBILITY_MODEL"] == "gemma3:4b"
-    assert parsed["CFG_EXTRACTION_MODEL"] == "llama3.1:8b"
+    assert parsed["CFG_LLM_BASE_URL"] == "https://llm.example.org/v1"
+    assert parsed["CFG_LLM_DECISIONS_URL"] == "https://llm.example.org/alt/decisions"
+    assert parsed["CFG_SCREENING_MODEL"] == "decider"
+    assert parsed["CFG_ELIGIBILITY_MODEL"] == "decider"
+    assert parsed["CFG_EXTRACTION_MODEL"] == "chatter"
     assert parsed["CFG_LLM_CONCURRENCY"] == "4"
     assert parsed["CFG_EXTRACTION_CONCURRENCY"] == "1"
 
@@ -107,6 +111,8 @@ def test_emit_none_fields_are_empty(tmp_path: Path) -> None:
         "CFG_ELIGIBILITY_CRITERIA",
         "CFG_CODEBOOK",
         "CFG_SCREENING_THRESHOLD",
+        "CFG_LLM_BASE_URL",
+        "CFG_LLM_DECISIONS_URL",
         "CFG_SCREENING_MODEL",
         "CFG_ELIGIBILITY_MODEL",
         "CFG_EXTRACTION_MODEL",
@@ -206,3 +212,12 @@ def test_shipped_example_config_validates() -> None:
     assert parsed["CFG_SCREENING_CRITERIA"].endswith(
         "screening-criteria/lagrangian-oceanography.yaml"
     )
+    # The example names no provider: endpoint and models are placeholders.
+    assert parsed["CFG_LLM_BASE_URL"] == ""
+    assert parsed["CFG_LLM_DECISIONS_URL"] == ""
+    assert parsed["CFG_SCREENING_MODEL"] == ""
+
+
+def test_api_key_is_not_a_review_config_key() -> None:
+    with pytest.raises(ValidationError):
+        ReviewConfig.model_validate({"query": "x", "llm_api_key": "secret"})

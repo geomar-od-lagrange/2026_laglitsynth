@@ -1,9 +1,10 @@
-"""Shared loader for externalized LLM system prompts.
+"""Shared loaders for externalized LLM criteria.
 
-Several stages keep their system prompt in an external criteria YAML so
-swapping topics is configuration work rather than a code change. The YAML
-carries a single string-valued ``system_prompt`` field; this helper reads
-it (from a path or an already-inlined snapshot mapping) and returns it.
+Stages keep their criteria in an external YAML so swapping topics is
+configuration work rather than a code change. A decisions stage reads the
+YAML's ``decision`` block as a ``DecisionQuestion``; a chat stage reads a
+string-valued ``system_prompt`` field. Both loaders accept a path or an
+already-inlined snapshot mapping.
 """
 
 from __future__ import annotations
@@ -34,11 +35,15 @@ class DecisionQuestion(BaseModel):
         return json.dumps(self.model_dump(), sort_keys=True)
 
     def render(self) -> str:
-        """Human-readable form for the meta's ``criterion`` field."""
+        """The predicate's ``instructions`` text sent to the decisions endpoint.
+
+        A predicate question has no criteria field, so the true and false
+        criteria follow the instructions.
+        """
         return (
-            f"{self.instructions}\n"
-            f"true: {self.criteria.true}\n"
-            f"false: {self.criteria.false}"
+            f"{self.instructions}\n\n"
+            f"True if: {self.criteria.true}\n"
+            f"False if: {self.criteria.false}"
         )
 
 
@@ -46,14 +51,14 @@ def load_decision_question(spec: str | Path | dict[str, Any]) -> DecisionQuestio
     """Return the ``decision`` block of a criteria YAML as a ``DecisionQuestion``.
 
     Raises ``ValueError`` naming the spec when the block is absent, so the
-    decisions backend fails before any request is sent.
+    stage fails before any request is sent.
     """
     loaded = resolve_yaml_arg(spec)
     block = loaded.get("decision")
     if not isinstance(block, dict):
         raise ValueError(
             f"criteria spec {spec} has no 'decision' block; the decisions "
-            f"backend needs 'decision: {{instructions, criteria: {{true, false}}}}'"
+            f"endpoint needs 'decision: {{instructions, criteria: {{true, false}}}}'"
         )
     return DecisionQuestion.model_validate(block)
 
