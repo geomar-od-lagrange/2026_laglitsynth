@@ -244,6 +244,12 @@ threshold.
   deferred until phase 3 codebook review flags attention-dilution on
   specific fields. `passage_locations` is captured faithfully by the
   stage 8 prototype as ground truth for pass-1 calibration.
+- Agentic reading of a paper — orthogonal to the one-question-per-call
+  stages. Chat UIs give the model tools over a PDF (embedding search,
+  page/section lookup) so it can follow up instead of answering once. For
+  this pipeline that would mean deploying a real tool-using agent per
+  paper and keeping its transcripts as outputs. Revisit if per-call
+  extraction, even per section, stays the quality limit. No plan yet.
 - `Work` model additions — `source_catalogues: list[str]`,
   `catalogue_ids: dict[str, str]`, derived `is_peer_reviewed: bool |
   None`. Defer until a stage 7+ consumer arrives — stage 7 itself does
