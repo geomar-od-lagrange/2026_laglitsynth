@@ -275,12 +275,26 @@ class _FakeGrobid:
     """Thread-safe stand-in for ``POST /api/processFulltextDocument``.
 
     Records every PDF sent and the peak number of requests in flight;
-    answers HTTP 500 for the stems in ``fail``.
+    answers HTTP 500 for the stems in ``fail`` and 503 (pool full) for the
+    first ``busy[stem]`` requests of a stem. With ``together=n`` every
+    request waits until n requests are in flight at once, so a run that
+    does not keep n in flight fails instead of passing slowly.
     """
 
-    def __init__(self, *, fail: frozenset[str] = frozenset(), delay: float = 0.0):
+    def __init__(
+        self,
+        *,
+        fail: frozenset[str] = frozenset(),
+        delay: float = 0.0,
+        busy: dict[str, int] | None = None,
+        together: int | None = None,
+    ):
         self.fail = fail
         self.delay = delay
+        self.busy = dict(busy or {})
+        self._barrier = (
+            threading.Barrier(together, timeout=5.0) if together is not None else None
+        )
         self.sent: list[str] = []
         self.peak = 0
         self._in_flight = 0
@@ -288,17 +302,23 @@ class _FakeGrobid:
 
     def __call__(self, url: str, **kwargs: Any) -> httpx.Response:
         name: str = kwargs["files"]["input"][0]
+        stem = Path(name).stem
+        request = httpx.Request("POST", url)
         with self._lock:
             self.sent.append(name)
+            if self.busy.get(stem, 0) > 0:
+                self.busy[stem] -= 1
+                return httpx.Response(503, text="busy", request=request)
             self._in_flight += 1
             self.peak = max(self.peak, self._in_flight)
         try:
+            if self._barrier is not None:
+                self._barrier.wait()
             time.sleep(self.delay)
         finally:
             with self._lock:
                 self._in_flight -= 1
-        request = httpx.Request("POST", url)
-        if Path(name).stem in self.fail:
+        if stem in self.fail:
             return httpx.Response(500, text="boom", request=request)
         return httpx.Response(200, content=_tei_for(name), request=request)
 
@@ -321,12 +341,14 @@ class TestConcurrency:
     def test_every_pdf_extracted_once(self, tmp_path: Path) -> None:
         corpus = tmp_path / "corpus"
         _write_corpus(corpus, [_make_work(w) for w in _WORK_IDS])
-        grobid = _FakeGrobid(delay=0.05)
+        # Every request waits for three in flight: the run fails unless
+        # --concurrency 3 really keeps three requests open at once.
+        grobid = _FakeGrobid(together=3)
 
         _run(_args(tmp_path, corpus_dir=corpus, concurrency=3), post=grobid)
 
         assert sorted(grobid.sent) == sorted(f"W{n}.pdf" for n in range(1, 7))
-        assert 2 <= grobid.peak <= 3
+        assert grobid.peak == 3
         output_dir = tmp_path / "out"
         records = _records(output_dir)
         assert sorted(r.work_id for r in records) == sorted(_WORK_IDS)
@@ -419,6 +441,48 @@ class TestConcurrency:
         mock_tpe.assert_not_called()
         assert grobid.sent == [f"W{n}.pdf" for n in range(1, 7)]
         assert [r.work_id for r in _records(tmp_path / "out")] == _WORK_IDS
+
+
+class TestBusyRetry:
+    """GROBID answers 503 when its own request pool is full."""
+
+    @pytest.fixture(autouse=True)
+    def _no_backoff(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "laglitsynth.fulltext_extraction.extract._BUSY_RETRY_DELAYS", (0.0, 0.0)
+        )
+
+    def test_503_is_retried_until_it_succeeds(self, tmp_path: Path) -> None:
+        corpus = tmp_path / "corpus"
+        _write_corpus(corpus, [_make_work(w) for w in _WORK_IDS[:2]])
+        grobid = _FakeGrobid(busy={"W1": 2})
+
+        _run(_args(tmp_path, corpus_dir=corpus, concurrency=2), post=grobid)
+
+        assert sorted(grobid.sent) == ["W1.pdf", "W1.pdf", "W1.pdf", "W2.pdf"]
+        meta = _meta(tmp_path / "out")
+        assert (meta["extracted_count"], meta["failed_count"]) == (2, 0)
+
+    def test_retries_are_bounded(self, tmp_path: Path) -> None:
+        corpus = tmp_path / "corpus"
+        _write_corpus(corpus, [_make_work(_WORK_IDS[0])])
+        grobid = _FakeGrobid(busy={"W1": 100})
+
+        _run(_args(tmp_path, corpus_dir=corpus), post=grobid)
+
+        assert grobid.sent == ["W1.pdf"] * 3  # first try + one per delay
+        meta = _meta(tmp_path / "out")
+        assert (meta["extracted_count"], meta["failed_count"]) == (0, 1)
+
+    def test_other_errors_are_not_retried(self, tmp_path: Path) -> None:
+        corpus = tmp_path / "corpus"
+        _write_corpus(corpus, [_make_work(_WORK_IDS[0])])
+        grobid = _FakeGrobid(fail=frozenset({"W1"}))
+
+        _run(_args(tmp_path, corpus_dir=corpus), post=grobid)
+
+        assert grobid.sent == ["W1.pdf"]
+        assert _meta(tmp_path / "out")["failed_count"] == 1
 
 
 class TestGrobidVersion:

@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, PositiveInt
 
 # Criteria/codebook fields whose relative values resolve against the
 # config file's own directory (mirrors ``config.load_config``).
@@ -44,9 +44,9 @@ class _Models(BaseModel):
 
 class _Concurrency(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    llm: int | None = None
-    extraction: int | None = None
-    grobid: int | None = None
+    llm: PositiveInt | None = None
+    extraction: PositiveInt | None = None
+    grobid: PositiveInt | None = None
 
 
 class ReviewConfig(BaseModel):

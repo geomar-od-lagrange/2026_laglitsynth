@@ -327,9 +327,12 @@ Stages 3, 7 and 8 share one helper,
 `ThreadPoolExecutor` of `--concurrency` workers, each making one LLM
 request per work. Only the main thread appends to the output JSONL, so
 there is no lock or shared file handle. At `--concurrency 1` no pool is
-created and works run one after another. The useful value depends on the
-provider's rate limits; a 429 is retried and then recorded as
-`llm-timeout`.
+created and works run one after another. Works are handed to the pool
+lazily, at most two per worker ahead of the results, so Ctrl-C or an
+error in the main thread cancels the queued ones and only the requests
+already running finish. `--concurrency` must be at least `1`. The
+useful value depends on the provider's rate limits; a 429 is retried
+and then recorded as `llm-timeout`.
 
 Rows land in this order: sentinels that need no request (stage 3's
 `no-abstract`) in input order, then the LLM-backed rows in completion
@@ -367,6 +370,14 @@ the order carries no meaning. A killed run leaves valid JSONL and a TEI
 file for every record in it; `--skip-existing` resumes it, sending only
 the works without a record for their current corpus PDF. The useful
 value depends on the CPU and memory given to GROBID.
+
+GROBID caps the requests it processes at once on its own side: the
+`concurrency` setting in its `grobid.yaml` (`10` in
+`grobid/grobid:0.9.0-crf`). A request beyond that cap is answered with
+HTTP 503 rather than queued. Stage 6 retries a 503 a few times with a
+growing pause and then counts the PDF as failed; no other error status
+is retried. A `--concurrency` above GROBID's cap therefore buys nothing
+but retries.
 
 The runner passes `GROBID_CONCURRENCY` (default `3`) to stage 6; the
 review config sets it as `concurrency.grobid`.

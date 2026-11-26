@@ -22,7 +22,7 @@ from typing import NamedTuple
 
 import httpx
 
-from laglitsynth.concurrency import map_concurrent
+from laglitsynth.concurrency import map_concurrent, positive_int
 from laglitsynth.corpus.load import load_corpus_meta, read_corpus_pdfs
 from laglitsynth.corpus.models import CorpusPdf
 from laglitsynth.fulltext_extraction.models import (
@@ -80,6 +80,11 @@ def _grobid_version(grobid_url: str, client: httpx.Client) -> str:
         return "unknown"
 
 
+# Seconds to wait before each retry of a request GROBID answered with 503
+# (its own request pool is full); after the last one the 503 is final.
+_BUSY_RETRY_DELAYS: tuple[float, ...] = (2.0, 5.0, 10.0)
+
+
 def _process_pdf(
     pdf_path: Path,
     grobid_url: str,
@@ -88,13 +93,24 @@ def _process_pdf(
     timeout: float,
     consolidate_citations: str,
 ) -> bytes:
-    with open(pdf_path, "rb") as f:
-        resp = client.post(
-            f"{grobid_url}/api/processFulltextDocument",
-            files={"input": (pdf_path.name, f, "application/pdf")},
-            data={"consolidateCitations": consolidate_citations},
-            timeout=timeout,
-        )
+    """POST one PDF to GROBID and return the TEI bytes.
+
+    A 503 means GROBID's server-side request pool is full; the request is
+    retried after each of ``_BUSY_RETRY_DELAYS``. Any other error status
+    raises at once.
+    """
+    for delay in (*_BUSY_RETRY_DELAYS, None):
+        with open(pdf_path, "rb") as f:
+            resp = client.post(
+                f"{grobid_url}/api/processFulltextDocument",
+                files={"input": (pdf_path.name, f, "application/pdf")},
+                data={"consolidateCitations": consolidate_citations},
+                timeout=timeout,
+            )
+        if resp.status_code != 503 or delay is None:
+            break
+        logger.info("GROBID busy (503) on %s; retrying in %.0fs", pdf_path.name, delay)
+        time.sleep(delay)
     resp.raise_for_status()
     return resp.content
 
@@ -167,7 +183,7 @@ def build_subparser(
     )
     parser.add_argument(
         "--concurrency",
-        type=int,
+        type=positive_int,
         default=1,
         help="In-flight GROBID requests (default: 1). See docs/interfaces.md.",
     )

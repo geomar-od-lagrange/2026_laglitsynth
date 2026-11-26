@@ -38,6 +38,7 @@ from openai import (
 )
 from pydantic import BaseModel, ConfigDict
 
+from laglitsynth.concurrency import positive_int
 from laglitsynth.dotenv import load_env_var
 from laglitsynth.models import LlmMeta
 from laglitsynth.prompts import DecisionQuestion
@@ -126,7 +127,7 @@ def add_endpoint_args(parser: argparse.ArgumentParser, *, decisions: bool) -> No
         )
     parser.add_argument(
         "--concurrency",
-        type=int,
+        type=positive_int,
         default=1,
         help="In-flight LLM requests (default: 1). See docs/interfaces.md.",
     )

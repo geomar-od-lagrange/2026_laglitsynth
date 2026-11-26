@@ -259,9 +259,11 @@ laglitsynth fulltext-extraction \
 2. Load existing `extraction.jsonl` if present (for `--skip-existing`).
 3. For each work not skipped, with up to `--concurrency` requests in
    flight:
-   a. Submit `<corpus-dir>/<pdf_path>` to GROBID.
-   b. Save TEI XML to `tei/<stem>.tei.xml` (the main thread does this
-      and step d, in completion order).
+   a. A worker submits `<corpus-dir>/<pdf_path>` to GROBID, retrying
+      when GROBID answers 503 (its request pool is full; see
+      [interfaces.md](interfaces.md#grobid-concurrency)). Steps b–d run
+      on the main thread, in completion order.
+   b. Save TEI XML to `tei/<stem>.tei.xml`.
    c. Hash the TEI bytes (`sha256`).
    d. Append `ExtractedDocument(work_id, tei_path, content_sha256,
       pdf_sha256, extracted_at)` to `extraction.jsonl`.

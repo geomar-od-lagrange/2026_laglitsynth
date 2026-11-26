@@ -110,6 +110,14 @@ def test_grobid_concurrency_knob() -> None:
         ReviewConfig.model_validate({"query": "x", "concurrency": {"grobid": "many"}})
 
 
+@pytest.mark.parametrize("knob", ["llm", "extraction", "grobid"])
+@pytest.mark.parametrize("value", [0, -2])
+def test_concurrency_knobs_reject_non_positive(knob: str, value: int) -> None:
+    """Every concurrency knob must be at least 1."""
+    with pytest.raises(ValidationError):
+        ReviewConfig.model_validate({"query": "x", "concurrency": {knob: value}})
+
+
 def test_emit_none_fields_are_empty(tmp_path: Path) -> None:
     """Absent optional knobs emit an empty value for the runner to fill."""
     cfg = _write_yaml(tmp_path / "review.yaml", {"query": "x"})
