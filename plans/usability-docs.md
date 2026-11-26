@@ -5,8 +5,10 @@ Status: the Ollama parts of this plan are obsolete. The
 LLM stage calls one OpenAI-compatible endpoint, `bake-model`, `num_ctx`
 and `OLLAMA_NUM_PARALLEL` are gone, and `docs/llm-concurrency.md` was
 deleted (concurrency is described in
-[interfaces.md](../docs/interfaces.md#llm-concurrency)). Obsolete: runbook
-steps 1–5 and the Ollama half of step 11, the Reproducibility subsections
+[interfaces.md](../docs/interfaces.md#llm-concurrency)). NESH is dropped
+as a pipeline target (see the [roadmap](roadmap.md#withdrawn)), so its
+batch wrapper and the manual NESH runbook section are gone too. Obsolete:
+runbook steps 1–5, the Reproducibility subsections
 on temperature and seed, the "No `--concurrency` flag" one-liner, the
 model-pull hints, and the README's Ollama section. The GROBID steps, the
 per-stage prerequisite links and the remaining README hygiene items still
@@ -15,8 +17,7 @@ apply.
 ## Goal
 
 Close the documentation gap a manual user hits when running stages 1–8
-without [`scripts/run-pipeline.sh`](../scripts/run-pipeline.sh) or
-[`scripts/nesh-pipeline.sbatch`](../scripts/nesh-pipeline.sbatch). The
+without [`scripts/run-pipeline.sh`](../scripts/run-pipeline.sh). The
 [usability review](../docs/explorations/usability-review.md) catalogued
 twenty-five findings; this plan addresses every doc-only one. Code-side
 fixes (`--num-ctx`, `--concurrency` on stages 7/8, preflight error
@@ -71,9 +72,8 @@ Single runbook a manual user reads before stages 3, 6, 7, 8. Sequence:
    [`extraction-codebook.md`](../docs/extraction-codebook.md)
    L251–256. Single-line quick-start: `ollama pull gemma3:4b && ollama
    pull llama3.1:8b`.
-4. **Bake Modelfiles for `num_ctx`** — the
-   [`scripts/nesh-pipeline.sbatch`](../scripts/nesh-pipeline.sbatch)
-   L175–192 heredoc lifted into a doc-side recipe with `ollama create
+4. **Bake Modelfiles for `num_ctx`** — the batch wrapper's (since
+   deleted) Modelfile heredoc lifted into a doc-side recipe with `ollama create
    laglit-extract -f Modelfile`. Explain that the OpenAI `extra_body`
    `num_ctx` hint is not reliable; only the bake works. Cross-link to
    [`usability-cli.md`](done/usability-cli.md) for the future
@@ -101,13 +101,6 @@ Single runbook a manual user reads before stages 3, 6, 7, 8. Sequence:
 10. **GROBID mid-corpus crash recovery** — name `--skip-existing` as
     the recovery path explicitly. "If GROBID crashed at PDF 47/200,
     re-run with `--skip-existing` after restarting the container."
-11. **Manual NESH section** — promote the working invocations from
-    [`nesh-ollama.md`](../docs/explorations/nesh-ollama.md) and
-    [`nesh-grobid.md`](../docs/explorations/nesh-grobid.md) (SIF path,
-    bind mounts, `--pwd`, login-node proxy `10.0.7.235:3128`) so a
-    user writing their own sbatch script has an authoritative
-    reference. The exploration docs stay where they are; this is a
-    canonical mirror, not a move.
 
 The doc lives in [`docs/`](../docs/), not under `docs/explorations/`,
 because per [AGENTS.md](../AGENTS.md) it's descriptive (states facts
@@ -200,7 +193,7 @@ Three commits. `pixi run typecheck` and `pixi run test` are unaffected
 
 ### 1. New: `docs/external-services.md`
 
-Write the runbook from scratch following the eleven-section structure
+Write the runbook from scratch following the ten-section structure
 above. Cross-link from each section back to the original
 `docs/explorations/` doc that the content was derived from, so a
 reader who wants the full investigation can find it. Keep prose
@@ -262,14 +255,6 @@ belongs to a follow-up plan once `external-services.md` exists and a
 
 ## Risks
 
-**Doc drift between `external-services.md` and the exploration
-docs.** The promotion of `nesh-ollama.md` and `nesh-grobid.md`
-content into a canonical doc creates two copies of the same setup
-text. Mitigation: the canonical doc states facts; the exploration
-docs keep the *why* and the investigative log. Cross-link both
-directions. Future operational changes go to the canonical doc;
-exploration docs are append-only history.
-
 **Cutover-plan rebase.** If the
 [`verdicts-only-cutover.md`](done/verdicts-only-cutover.md) plan lands
 between commit 1 and commit 2 here, the per-stage doc edits in step 2
@@ -297,7 +282,6 @@ network-namespace workaround that's known to work."
   [`docs/explorations/nesh-ollama.md`](../docs/explorations/nesh-ollama.md),
   [`docs/explorations/nesh-grobid.md`](../docs/explorations/nesh-grobid.md),
   [`docs/grobid-lessons.md`](../docs/grobid-lessons.md),
-  `docs/llm-concurrency.md` (deleted),
-  [`scripts/nesh-pipeline.sbatch`](../scripts/nesh-pipeline.sbatch).
+  `docs/llm-concurrency.md` (deleted).
 - Roadmap: [`plans/roadmap.md`](roadmap.md) — add this plan as
   in-flight; archive when each commit lands.

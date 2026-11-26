@@ -22,17 +22,17 @@ one-off scripts. Title-based import matching stays queued in the
 
 ### Deleted
 
-- Stage 2b: [`abstract_lookup/`](../../src/laglitsynth/abstract_lookup/),
-  [docs/abstract-lookup.md](../../docs/abstract-lookup.md), and the
+- Stage 2b: `abstract_lookup/`,
+  `docs/abstract-lookup.md`, and the
   `ABSTRACT_LOOKUP_EMAIL` and `SEMANTIC_SCHOLAR_API_KEY` keys in
   `.env.example`.
-- Stage 9: [docs/adjudication-extraction.md](../../docs/adjudication-extraction.md),
-  [plans/multi-run-consensus.md](multi-run-consensus.md), and the
+- Stage 9: `docs/adjudication-extraction.md`,
+  `plans/multi-run-consensus.md`, and the
   `reviewer_correction` column of `extraction-codebook-export` (the per-work
   tab becomes `field | value | context`).
 - XLSX review exports for screening and eligibility:
-  [`screening_abstracts/export.py`](../../src/laglitsynth/screening_abstracts/export.py)
-  and [`fulltext_eligibility/export.py`](../../src/laglitsynth/fulltext_eligibility/export.py).
+  `screening_abstracts/export.py`
+  and `fulltext_eligibility/export.py`.
   `extraction-codebook-export` stays, so `openpyxl` stays.
 - `--pass-all` and the `unscreened` sentinel. `ScreeningMeta.llm` is no
   longer optional.
@@ -46,15 +46,15 @@ one-off scripts. Title-based import matching stays queued in the
   Retrieval runs over the whole `--catalogue`. The export keeps the join
   (moved into [`export.py`](../../src/laglitsynth/fulltext_retrieval/export.py))
   until commit 8.
-- Ollama: [`ollama.py`](../../src/laglitsynth/ollama.py),
-  [`bake_model.py`](../../src/laglitsynth/bake_model.py) and
-  [docs/bake-model.md](../../docs/bake-model.md). Also `--num-ctx`, the
+- Ollama: `ollama.py`,
+  `bake_model.py` and
+  `docs/bake-model.md`. Also `--num-ctx`, the
   `extra_body` `num_ctx` hint, `CHAR_BUDGET` and its block truncation in
   [`extraction_codebook/prompts.py`](../../src/laglitsynth/extraction_codebook/prompts.py),
   the `truncated` record field, the explicit `temperature` and per-call
   `seed`, the `seed` field on every verdict and record, `--backend`, and
   the chat path of screening. In
-  [nesh-pipeline.sbatch](../../scripts/nesh-pipeline.sbatch) the Ollama install
+  `nesh-pipeline.sbatch` the Ollama install
   check, `ollama serve`, its wait loop, the pulls and the Modelfile tags go,
   and the GPU request (`--partition=gpu`, `--constraint`, `--gpus-per-node`)
   becomes `--partition=base`. GROBID and the proxy exports stay; the hosted
@@ -67,7 +67,7 @@ one-off scripts. Title-based import matching stays queued in the
 ### LLM backend: `src/laglitsynth/llm.py`
 
 One module replaces `ollama.py` and
-[`screening_abstracts/decisions.py`](../../src/laglitsynth/screening_abstracts/decisions.py).
+`screening_abstracts/decisions.py`.
 The three LLM stages register `--base-url`, `--model`, `--api-key` and
 `--concurrency` with `add_endpoint_args(parser, decisions=...)`; stages 3
 and 7 pass `decisions=True`, which adds `--decisions-url`.
@@ -325,11 +325,11 @@ broader doc rewrite is commit 7. Slices: s1 is commits 1–2, s2 commits 3–4,
 s3 commit 5, s4 commit 6, s5 commit 7 and s6 commit 8.
 
 1. Drop abstract lookup, adjudication and the screening/eligibility XLSX
-   exports. Delete [`abstract_lookup/`](../../src/laglitsynth/abstract_lookup/),
+   exports. Delete `abstract_lookup/`,
    the two export modules, their builders in [`cli.py`](../../src/laglitsynth/cli.py),
-   [docs/abstract-lookup.md](../../docs/abstract-lookup.md),
-   [docs/adjudication-extraction.md](../../docs/adjudication-extraction.md),
-   [multi-run-consensus.md](multi-run-consensus.md), and the two
+   `docs/abstract-lookup.md`,
+   `docs/adjudication-extraction.md`,
+   `multi-run-consensus.md`, and the two
    `.env.example` keys. Drop `reviewer_correction` and its placeholder from
    [`extraction_codebook/export.py`](../../src/laglitsynth/extraction_codebook/export.py).
    Tests: delete `tests/test_abstract_lookup.py`,
@@ -480,7 +480,7 @@ s3 commit 5, s4 commit 6, s5 commit 7 and s6 commit 8.
    [two-pass-extraction.md](../../docs/two-pass-extraction.md) for
    `CHAR_BUDGET`). In [external-services.md](../../docs/external-services.md)
    the Ollama sections become an endpoint section that names no provider.
-   Delete [llm-concurrency.md](../../docs/llm-concurrency.md) and point the
+   Delete `llm-concurrency.md` and point the
    `--concurrency` help strings at interfaces.md. Update
    [README.md](../../README.md) and add [docs/corpus.md](../../docs/corpus.md).
    In the [roadmap](../roadmap.md), multi-run consensus, stages 9–12, the
@@ -552,10 +552,10 @@ s3 commit 5, s4 commit 6, s5 commit 7 and s6 commit 8.
   [prompts.py](../../src/laglitsynth/prompts.py),
   [dotenv.py](../../src/laglitsynth/dotenv.py),
   [io.py](../../src/laglitsynth/io.py),
-  [ollama.py](../../src/laglitsynth/ollama.py),
-  [bake_model.py](../../src/laglitsynth/bake_model.py)
+  `ollama.py` (deleted),
+  `bake_model.py` (deleted)
 - [screening_abstracts/screen.py](../../src/laglitsynth/screening_abstracts/screen.py),
-  [decisions.py](../../src/laglitsynth/screening_abstracts/decisions.py),
+  `decisions.py` (deleted),
   [models.py](../../src/laglitsynth/screening_abstracts/models.py)
 - [fulltext_retrieval/retrieve.py](../../src/laglitsynth/fulltext_retrieval/retrieve.py),
   [export.py](../../src/laglitsynth/fulltext_retrieval/export.py),
@@ -573,7 +573,7 @@ s3 commit 5, s4 commit 6, s5 commit 7 and s6 commit 8.
   [export.py](../../src/laglitsynth/extraction_codebook/export.py)
 - [examples/](../../examples/),
   [scripts/run-pipeline.sh](../../scripts/run-pipeline.sh),
-  [scripts/nesh-pipeline.sbatch](../../scripts/nesh-pipeline.sbatch),
+  `scripts/nesh-pipeline.sbatch` (deleted),
   [.env.example](../../.env.example)
 - [docs/pipeline.md](../../docs/pipeline.md),
   [docs/interfaces.md](../../docs/interfaces.md),

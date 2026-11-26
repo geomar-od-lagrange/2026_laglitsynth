@@ -51,7 +51,7 @@
 #   OUTPUT_ROOT, GROBID_URL,
 #   LLM_CONCURRENCY        (--concurrency for stages 3 and 7; default 1),
 #   ELIGIBILITY_CONCURRENCY (--concurrency for stage 7 only; default LLM_CONCURRENCY),
-#   EXTRACTION_CONCURRENCY  (--concurrency for stage 8 only; default 1 — prefill-bound),
+#   EXTRACTION_CONCURRENCY  (--concurrency for stage 8 only; default 1 — long full-text prompts),
 #   RUN_ID                 screening run-id: the stage-3 leaf that
 #                          corpus-assemble and the export read verdicts
 #                          from. Unset (the default), each takes the run_id

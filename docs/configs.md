@@ -18,8 +18,8 @@ sweep at a sibling tree. `<stage-subdir>` is hardcoded per stage:
 `<data-dir>/corpus/corpus-meta.json` for eligibility and extraction-codebook
 (see [run-manifest.md](run-manifest.md)); a minted id is a
 `<iso-1s>_<12hex>` in UTC — the ISO timestamp is human-readable and the
-12-hex suffix removes concurrent-job collision risk on NESH or local
-sweeps. The PDF store, the [corpus](corpus.md) and the TEIs (under
+12-hex suffix removes collision risk between concurrent runs in a
+sweep. The PDF store, the [corpus](corpus.md) and the TEIs (under
 `<data-dir>/fulltext-extraction/tei/`) are not run-namespaced. The
 corpus is rewritten whole by each `corpus-assemble`; the TEIs are a
 shared cache filled incrementally through stage 6's `--skip-existing`.
@@ -33,8 +33,8 @@ it lives.
 
 **Input configs** are version-controlled or sweep-generated YAMLs that
 drive an invocation. They reference the criteria and codebook YAMLs by
-path. Use cases: assembling NESH job
-submissions without 200-character `sbatch` strings; running a sweep
+path. Use cases: pinning a run's parameters in one file instead of a
+long string of env overrides; running a sweep
 where the only difference between 12 invocations is one parameter;
 shipping a paper's supplementary materials as one config file.
 
@@ -130,8 +130,8 @@ it references regardless of the invocation CWD.
 ### Runner precedence: env > config > default
 
 The runner `eval`s the emitted block, then resolves every knob as
-`VAR="${VAR:-${CFG_VAR:-default}}"`. So an environment variable (or a
-`sbatch --export=`) wins over the config file, which wins over the
+`VAR="${VAR:-${CFG_VAR:-default}}"`. So an environment variable wins
+over the config file, which wins over the
 runner's built-in default; an absent config field falls through to that
 default. The historical `QUERY` and `N` env overrides keep working
 through this same mechanism (`N` maps to `CFG_MAX_RECORDS`). The

@@ -1,11 +1,11 @@
 # Cross-machine and storage convention
 
-The pipeline runs across more than one machine: a laptop for the light,
-interactive stages; the [NESH HPC cluster](external-services.md#nesh-hpc-cluster)
-for GROBID and the storage-heavy analysis stages; and one or more
-collaborators' machines for full-text retrieval behind their own
-institutional access. The two halves of the [pipeline](pipeline.md) meet
-at the self-contained [corpus](corpus.md), so a machine running the
+The pipeline runs across more than one machine: the operator's laptop
+for the pipeline stages, with GROBID in Docker and the LLM stages calling
+the review's hosted endpoint; and one or more collaborators' machines for
+full-text retrieval behind their own institutional access. The two halves
+of the [pipeline](pipeline.md) meet at the self-contained
+[corpus](corpus.md), so a machine running the
 analysis half needs `data/corpus/` and nothing else from the first half.
 This document states the conventions that make that work — the project
 boundary, the path contract, per-machine credentials, and the safe
@@ -68,20 +68,18 @@ silent — see [interfaces.md](interfaces.md#configuration-flags-first-env-fallb
 
 The stage graph suggests a natural split across machines:
 
-- Laptop — [`catalogue-fetch`](interfaces.md#stage-1--catalogue-fetch-exists),
-  [`catalogue-dedup`](interfaces.md#stage-2--catalogue-dedup-exists), and
+- Laptop — every stage the operator drives:
+  [`catalogue-fetch`](interfaces.md#stage-1--catalogue-fetch-exists),
+  [`catalogue-dedup`](interfaces.md#stage-2--catalogue-dedup-exists),
   [`screening-abstracts`](interfaces.md#stage-3--screening-abstracts-exists),
-  which calls the review's hosted LLM endpoint. Light data, interactive
-  work.
-- NESH — the analysis half
+  retrieval and `corpus-assemble`, and the analysis half
   ([`fulltext-extraction`](interfaces.md#stage-6--fulltext-extraction),
   [`fulltext-eligibility`](interfaces.md#stage-7--fulltext-eligibility-exists),
-  [`extraction-codebook`](interfaces.md#stage-8--extraction-codebook-exists)),
-  which needs GROBID and disk for the corpus copies and the TEI, so the
-  bulk never has to come home. The LLM stages reach the hosted endpoint
-  through the cluster's proxy. See the
-  [NESH section of external-services.md](external-services.md#nesh-hpc-cluster)
-  for the batch setup.
+  [`extraction-codebook`](interfaces.md#stage-8--extraction-codebook-exists)).
+  GROBID runs in Docker and the LLM stages call the review's hosted
+  endpoint (see [external-services.md](external-services.md)), so no stage
+  needs local GPU. Because the analysis half reads only the corpus, it can
+  move to any other machine with GROBID by copying `data/corpus/`.
 - Collaborators — full-text
   [`fulltext-retrieval`](interfaces.md#stage-5--fulltext-retrieval-exists)
   of paywalled PDFs via their own institutional access. This is the one
@@ -171,8 +169,9 @@ rewritten store.
 
 Stage 3 writes under a screening `<run-id>/` leaf that `corpus-assemble` and
 the export read, and stages 7 and 8 write under an analysis `<run-id>/` leaf
-they share. Both must be the same across machines: if NESH runs eligibility
-and the laptop later runs extraction, both must use the same analysis run-id.
+they share. Both must be the same across machines: if one machine runs
+eligibility and another later runs extraction, both must use the same
+analysis run-id.
 `data/manifest.json` carries the screening run-id: `laglitsynth
 manifest-init` mints it once, and the screening-side stages adopt it when no
 run-id is passed. `data/corpus/corpus-meta.json` carries the analysis

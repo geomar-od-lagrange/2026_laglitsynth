@@ -112,14 +112,14 @@ still work and still win over the config. See
 [`docs/configs.md`](docs/configs.md#per-review-config-the-runners-config)
 for the config shape and the full `CFG_*` knob list.
 
-Defaults that apply to both local and NESH runs:
+Defaults:
 
-- `N=5` (local) or `N=10` (NESH) — max records pulled from OpenAlex.
+- `N=5` — max records pulled from OpenAlex.
   The runner passes `--max-records "$N"` to stage 1 (catalogue-fetch)
   only; downstream stages consume the already-capped catalogue, so the
   cap propagates through the data rather than as a re-passed flag.
-  Override via `N=...` (env, or `sbatch --export=` on NESH), or pin it
-  as `max_records` in a review config.
+  Override via the `N` env var, or pin it as `max_records` in a review
+  config.
 - `STOP_AFTER_STAGE=8` — full pipeline. Set to a smaller integer to
   cut runs short while iterating on upstream stages.
 - LLM endpoint and models have no default. `LLM_BASE_URL` (or
@@ -135,7 +135,7 @@ Defaults that apply to both local and NESH runs:
   `ANALYSIS_RUN_ID` names the stage 7 and 8 run and defaults to the
   corpus's `analysis_run_id`, which changes whenever the corpus does.
 
-### Locally
+### Starting a run
 
 Start GROBID yourself first (see [GROBID](#grobid-for-full-text-extraction)
 below), set the LLM endpoint (see [LLM endpoint](#llm-endpoint)), then
@@ -150,59 +150,31 @@ SCREENING_THRESHOLD=50 QUERY="particle dispersion" N=200 scripts/run-pipeline.sh
 STOP_AFTER_STAGE=3 scripts/run-pipeline.sh                                     # stages 1..3 only, no threshold needed
 ```
 
-### On NESH
+### Production runs
 
-[`scripts/nesh-pipeline.sbatch`](scripts/nesh-pipeline.sbatch) wraps the
-runner with the cluster's plumbing: it sets the compute-node proxy, pulls
-(once) and starts a Singularity GROBID container, then invokes the runner.
-It runs no LLM itself; the LLM stages call their endpoint through the
-proxy.
-
-```bash
-mkdir -p logs
-sbatch --export=ALL,SCREENING_THRESHOLD=50 scripts/nesh-pipeline.sbatch                  # smoke, N=10
-sbatch --export=ALL,SCREENING_THRESHOLD=50,QUERY="particle dispersion",N=200 scripts/nesh-pipeline.sbatch
-sbatch --export=ALL,STOP_AFTER_STAGE=3,N=500 scripts/nesh-pipeline.sbatch                 # stages 1..3, no threshold needed
-```
-
-Per-user prerequisites:
-
-- Repo cloned under `$WORK/2026_laglitsynth` (override with `REPO_DIR`).
-- `$REPO_DIR/.env` populated with `OPENALEX_API_KEY`, `UNPAYWALL_EMAIL` and
-  `LLM_API_KEY`.
-
-The job header requests `--partition=base --cpus-per-task=4 --mem=32G
---time=02:00:00`; override the time budget on the command line with
-`sbatch --time=...` (see below).
-
-#### Production-run cheatsheet
-
-The sbatch header's 2 h is smoke-sized. For a real corpus run,
-override `N` and `--time`. `LLM_CONCURRENCY` (default `1`) sets the
-in-flight requests of the LLM stages; see
+For a real corpus run, raise `N` (or set `max_records` in the review
+config). `LLM_CONCURRENCY` (default `1`) sets the in-flight requests of
+the LLM stages; see
 [docs/interfaces.md](docs/interfaces.md#llm-concurrency).
 
 ```bash
-sbatch \
-    --time=12:00:00 \
-    --export=ALL,SCREENING_THRESHOLD=50,QUERY="Lagrangian particle tracking",N=500 \
-    scripts/nesh-pipeline.sbatch
+SCREENING_THRESHOLD=50 QUERY="Lagrangian particle tracking" N=500 \
+    scripts/run-pipeline.sh
 ```
 
 Notes:
 
-- Stage 8 (extraction-codebook) is the throughput floor; budget
-  `--time` against it. Stages 7 and 8 both honour `--concurrency`
-  (dispatching through `laglitsynth.concurrency.map_concurrent`); the
-  runner forwards `LLM_CONCURRENCY` as that flag to stages 3 and 7, and
+- Stage 8 (extraction-codebook) is the throughput floor. Stages 7 and 8
+  both honour `--concurrency` (dispatching through
+  `laglitsynth.concurrency.map_concurrent`); the runner forwards
+  `LLM_CONCURRENCY` as that flag to stages 3 and 7, and
   `EXTRACTION_CONCURRENCY` (default `1`) to stage 8.
 - The runner starts each LLM stage's output afresh (stage 6 runs with
-  `--skip-existing`), so a wall-clock kill mid-stage means re-running
-  that LLM stage on the next submission. If you
-  expect a tight budget, run with `STOP_AFTER_STAGE=6` first to land
-  catalogue, retrieval, corpus and extraction, then submit a second job
-  with stages 7..8. By hand, stages 7 and 8 resume a killed run with
-  `--skip-existing`.
+  `--skip-existing`), so an interrupted run means re-running the LLM
+  stage it stopped in. To split a long run, use `STOP_AFTER_STAGE=6`
+  first to land catalogue, retrieval, corpus and extraction, then run
+  stages 7 and 8 by hand, where `--skip-existing` resumes an interrupted
+  run.
 
 ### Reviewer export
 

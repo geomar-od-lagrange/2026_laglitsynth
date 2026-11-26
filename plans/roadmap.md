@@ -60,7 +60,7 @@ Update this file when a plan is written, implemented, or archived.
   was not needed for stage 8 either — malformed TEI records a
   `tei-parse-failure` sentinel as in stage 7.
 - [Pre-prod cleanup](done/pre-prod-cleanup.md) — hold-the-prod and
-  high-leverage simplifications before the first NESH prod run.
+  high-leverage simplifications before the first production run.
   Stage tools become flags-only (`--api-key` on catalogue-fetch,
   `--email` on fulltext-retrieval); driver scripts source `.env` and
   pass the flag. `--max-records` default cap dropped. Stages 7 and 8
@@ -71,13 +71,13 @@ Update this file when a plan is written, implemented, or archived.
   so the 28 codebook fields no longer drift between two declarations.
   `screening-abstracts-export` collapses to one subcommand with
   `--format csv|xlsx`. `_RunMeta`/`_LlmMeta` lose their leading
-  underscores. NESH sbatch wait loops emit real elapsed time. Test
+  underscores. Test
   helpers move to `tests/conftest.py`; mock-heavy seed/temperature
   call-site assertions go. Production code: −114 lines net.
 
 - [LLM-stage timeouts and reviewer-xlsx restructure](done/llm-timeout-and-reviewer-xlsx.md)
-  — fixes the `openai.APITimeoutError` that killed
-  `nesh-pipeline-22047331` mid-stage 8 (timeout + retries on the OpenAI
+  — fixes the `openai.APITimeoutError` that killed a production run
+  mid-stage 8 (timeout + retries on the OpenAI
   client in stages 3/7/8, new `llm-timeout` sentinel); flips stage 4
   to pass-through every null-score sentinel so `no-abstract` works
   reach fulltext-retrieval; gives stage 3 the same title/authors/year/
@@ -149,7 +149,7 @@ Update this file when a plan is written, implemented, or archived.
 - [Doc/code consistency fixes](done/doc-code-consistency-fixes.md) —
   closes a three-agent documentation audit (440 doc facts extracted,
   checked against code, gaps found; spot-check validated). Fixes one real
-  regression — `scripts/run-pipeline.sh` (and NESH via the sbatch) passed
+  regression — `scripts/run-pipeline.sh` passed
   the removed `--output-dir`/`--skip-existing` to `fulltext-retrieval`, so
   it could not reach stages 5–8; now `--data-dir "$ROOT"` with sticky
   default and stage-6 `--pdf-dir "$ROOT/pdfs"`. Plus ~16 docs corrected to
@@ -325,6 +325,9 @@ dropped and why, so the same idea is not re-proposed from the gap it leaves.
   ordinary editing of the configs followed by a re-run.
 - **Zotero export probe.** Withdrawn with the Zotero-import open question,
   under [Cross-machine + storage convention](#in-flight) above.
+- NESH (the Kiel HPC cluster) as a pipeline target is dropped, with its
+  batch wrapper: the LLM stages call a hosted endpoint and GROBID runs in
+  Docker on the laptop, which leaves nothing for the cluster to do.
 
 ## Latest review
 

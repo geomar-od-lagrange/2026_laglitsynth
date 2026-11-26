@@ -19,10 +19,10 @@ Start the GROBID container before running this stage:
 docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0
 ```
 
-GROBID takes ~30–60 seconds to start (up to ~90s on a cold NESH node).
+GROBID takes ~30–60 seconds to start.
 Health check: `GET http://localhost:8070/api/isalive`.
 See [external-services.md](external-services.md) for the full setup (Apple
-Silicon Rosetta workaround, memory requirements, NESH).
+Silicon Rosetta workaround, memory requirements, crash recovery).
 
 The stage reads only the [corpus](corpus.md), so the machines that
 acquire PDFs need no GROBID or Docker. The PDF is the scarce artifact;
@@ -48,8 +48,7 @@ From [grobid-lessons.md](grobid-lessons.md):
 - Run GROBID as a Docker container (`lfoppiano/grobid:0.8.0`).
 - amd64-only image; runs under Rosetta on Apple Silicon (slower but
   functional).
-- Startup takes ~30–60 seconds (up to ~90s on a cold NESH node). Health
-  check: `GET /api/isalive`.
+- Startup takes ~30–60 seconds. Health check: `GET /api/isalive`.
 - Memory footprint: ~2 GB.
 - Processing endpoint: `POST /api/processFulltextDocument` with the PDF as
   multipart form data.

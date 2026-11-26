@@ -1,13 +1,7 @@
 # Bench-mode TEI files live at the repo root (rsync'd in). Copyright.
 *.tei.xml
 
-# sbatch --output / --error files (default to submission cwd).
-nesh-pipeline-*.out
-nesh-pipeline-*.err
-bench-*.out
-bench-*.err
-
-# Per-run service logs (Ollama / GROBID / bench TSVs).
+# Per-run service logs.
 logs/
 .claude/
 .env

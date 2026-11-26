@@ -313,12 +313,11 @@ when the flag is omitted, and emits a one-line stderr notice
 (`Loaded <KEY> from .env`). The explicit flag always wins; the `.env` read is
 never silent. The LLM stages' `--api-key` falls back to `LLM_API_KEY` in
 the environment first, then in `.env`. All other run-affecting parameters
-(`--base-url`, `--grobid-url`, model names, thresholds) are CLI-only. Driver
-scripts ([scripts/run-pipeline.sh](../scripts/run-pipeline.sh),
-[scripts/nesh-pipeline.sbatch](../scripts/nesh-pipeline.sbatch)) source `.env`
-(`set -a; source .env; set +a`) and pass the OpenAlex key and the Unpaywall
-email as `--flag "$VAR"`; they never pass the LLM key as a flag, so it stays
-out of the process list.
+(`--base-url`, `--grobid-url`, model names, thresholds) are CLI-only. The
+driver script [scripts/run-pipeline.sh](../scripts/run-pipeline.sh) sources
+`.env` (`set -a; source .env; set +a`) and passes the OpenAlex key and the
+Unpaywall email as `--flag "$VAR"`; it never passes the LLM key as a flag,
+so it stays out of the process list.
 
 ### LLM concurrency
 
