@@ -404,6 +404,9 @@ def export_review_xlsx(
     return len(selected)
 
 
+_DEFAULT_CATALOGUE = Path("data/corpus/works.jsonl")
+
+
 def build_subparser(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> argparse.ArgumentParser:
@@ -420,8 +423,8 @@ def build_subparser(
     parser.add_argument(
         "--catalogue",
         type=Path,
-        required=True,
-        help="Path to the deduplicated catalogue JSONL",
+        default=_DEFAULT_CATALOGUE,
+        help=f"Works JSONL for the bibliographic block (default: {_DEFAULT_CATALOGUE}).",
     )
     parser.add_argument(
         "--codebook",

@@ -7,6 +7,7 @@ exits naming the file instead of skipping rows.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import TypeVar
 
@@ -19,6 +20,13 @@ from laglitsynth.corpus.models import (
     WORKS_FILENAME,
     CorpusMeta,
     CorpusPdf,
+)
+from laglitsynth.fulltext_extraction.models import (
+    META_FILENAME as EXTRACTION_META_FILENAME,
+)
+from laglitsynth.fulltext_extraction.models import (
+    ExtractedDocument,
+    ExtractionMeta,
 )
 from laglitsynth.io import JsonlReadStats, read_jsonl
 from laglitsynth.layout import require_input
@@ -79,3 +87,51 @@ def require_corpus(recorded: str, current: str, source: Path, *, rerun: str) -> 
             f"{source} was made on corpus {recorded}, but the corpus is now "
             f"{current}; re-run {rerun}"
         )
+
+
+def load_upstream_meta(path: Path, model: type[_T], *, flag: str, upstream: str) -> _T:
+    """Return an upstream stage's meta file; exit when missing or invalid."""
+    require_input(path, flag=flag, upstream=upstream)
+    try:
+        return model.model_validate_json(path.read_text())
+    except ValidationError as exc:
+        raise SystemExit(
+            f"{path} does not validate as {model.__name__}; re-run {upstream}:\n{exc}"
+        ) from exc
+
+
+def read_current_extractions(
+    extractions: Path,
+    corpus_meta: CorpusMeta,
+    pdfs: list[CorpusPdf],
+    stats: JsonlReadStats,
+) -> dict[str, ExtractedDocument]:
+    """Return the latest extraction per corpus work made from its corpus PDF.
+
+    Exits when ``extraction-meta.json`` beside ``extractions`` is missing,
+    invalid, or names another corpus. A record whose ``pdf_sha256`` differs
+    from the corpus copy (the PDF changed since it was extracted) is
+    ignored, as is a record for a work the corpus has no PDF for.
+    """
+    meta_path = extractions.parent / EXTRACTION_META_FILENAME
+    meta = load_upstream_meta(
+        meta_path, ExtractionMeta, flag="--extractions", upstream="fulltext-extraction"
+    )
+    require_corpus(
+        meta.corpus_id, corpus_meta.corpus_id, meta_path, rerun="fulltext-extraction"
+    )
+    latest = {rec.work_id: rec for rec in read_jsonl(extractions, ExtractedDocument, stats)}
+    pdf_sha = {p.work_id: p.content_sha256 for p in pdfs if p.content_sha256 is not None}
+    current = {
+        work_id: rec
+        for work_id, rec in latest.items()
+        if pdf_sha.get(work_id) == rec.pdf_sha256
+    }
+    stale = sum(1 for work_id in latest if work_id in pdf_sha) - len(current)
+    if stale:
+        print(
+            f"Ignoring {stale} extraction(s) in {extractions} made from another "
+            f"PDF than the corpus copy; re-run fulltext-extraction --skip-existing.",
+            file=sys.stderr,
+        )
+    return current

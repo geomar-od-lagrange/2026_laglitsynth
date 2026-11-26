@@ -85,6 +85,13 @@ fields:
       given in the paper itself. Describe availability in words,
       not as a yes/no boolean.
 
+  - name: rationale
+    description: >-
+      Reasons the paper states for its numerical choices (integration
+      scheme, time step, interpolation, diffusion, software), in the
+      authors' own terms. Free text; null when the paper gives none.
+    context: true
+
   - name: in_text_locations
     description: >-
       Where in THIS PAPER the extracted values were found — section

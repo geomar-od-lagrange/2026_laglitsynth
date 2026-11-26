@@ -29,7 +29,7 @@
 #   sbatch --export=ALL,STOP_AFTER_STAGE=3,N=200 scripts/nesh-pipeline.sbatch
 #
 # SCREENING_THRESHOLD has no default: the runner exits without it when the
-# run reaches stage 7 (or stage 5 with EXPORT_GAP=1), unless the review
+# run reaches stage 5 (where corpus-assemble applies it), unless the review
 # config sets screening_threshold. The default config leaves it unset.
 #
 # The job drives the runner through env overrides (QUERY, N,

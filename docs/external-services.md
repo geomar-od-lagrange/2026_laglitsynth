@@ -101,14 +101,15 @@ restart the container and re-run with `--skip-existing`:
 docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0 &
 # wait for /api/isalive ...
 laglitsynth fulltext-extraction --skip-existing \
-    --pdf-dir data/pdfs/ --output-dir data/fulltext-extraction/ ...
+    --corpus-dir data/corpus/ --output-dir data/fulltext-extraction/ ...
 ```
 
-Stage 6 takes `--pdf-dir`, `--output-dir`, `--grobid-url`, `--timeout`,
+Stage 6 takes `--corpus-dir`, `--output-dir`, `--grobid-url`, `--timeout`,
 and `--skip-existing`; it has no `--run-id` flag. `--skip-existing`
 loads any prior `extraction.jsonl` from the output directory and skips
-`work_id`s that already have a completed record. Only new or previously
-failed PDFs are submitted to GROBID.
+works whose latest record was made from the current corpus PDF (same
+`pdf_sha256`). Only new, changed or previously failed PDFs are submitted
+to GROBID.
 
 ## NESH HPC cluster
 

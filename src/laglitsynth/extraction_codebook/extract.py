@@ -4,6 +4,11 @@ The LLM-fillable payload model and per-work record class are built at
 ``run()`` time from the codebook YAML pointed to by ``--codebook``. The
 system prompt is rendered the same way — see
 [codebook.py](codebook.py) for the loader and renderers.
+
+The stage runs on the corpus works with a positive eligibility verdict. It
+refuses verdicts made on another corpus or with other eligibility criteria
+than ``--eligibility-criteria``, and uses only extractions of the current
+corpus PDFs.
 """
 
 from __future__ import annotations
@@ -17,8 +22,7 @@ import time
 from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-
-from typing import cast
+from typing import Any, cast
 
 from lxml import etree
 from openai import OpenAI
@@ -27,6 +31,14 @@ from pydantic import BaseModel, ValidationError
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.concurrency import map_concurrent
 from laglitsynth.config import register_config_arg, resolve_yaml_arg, save_resolved_config
+from laglitsynth.corpus.load import (
+    load_corpus_meta,
+    load_upstream_meta,
+    read_corpus_pdfs,
+    read_corpus_works,
+    read_current_extractions,
+    require_corpus,
+)
 from laglitsynth.extraction_codebook.codebook import (
     CodebookContext,
     ExtractionRecordProto,
@@ -40,7 +52,14 @@ from laglitsynth.extraction_codebook.prompts import (
     build_user_message,
     render_fulltext,
 )
-from laglitsynth.fulltext_eligibility.models import EligibilityVerdict
+from laglitsynth.fulltext_eligibility.eligibility import (
+    DEFAULT_ELIGIBILITY_CRITERIA,
+    criteria_sha256,
+)
+from laglitsynth.fulltext_eligibility.eligibility import (
+    META_FILENAME as ELIGIBILITY_META_FILENAME,
+)
+from laglitsynth.fulltext_eligibility.models import EligibilityMeta, EligibilityVerdict
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
 from laglitsynth.io import (
     JsonlReadStats,
@@ -50,12 +69,14 @@ from laglitsynth.io import (
 )
 from laglitsynth.layout import (
     EXTRACTION_CODEBOOK_SUBDIR,
-    deduplicated_path,
+    corpus_dir,
     eligibility_verdicts_path,
     extractions_path,
     require_input,
+    resolve_analysis_run_id,
 )
 from laglitsynth.llm import (
+    REASONING_EFFORTS,
     LlmEndpoint,
     LlmFailure,
     add_endpoint_args,
@@ -63,7 +84,6 @@ from laglitsynth.llm import (
     chat_json,
     resolve_endpoint,
 )
-from laglitsynth.manifest import resolve_run_id
 from laglitsynth.models import RunMeta
 
 logger = logging.getLogger(__name__)
@@ -142,47 +162,56 @@ def extract_codebook(
 
 
 def _active_eligible_works(
-    catalogue_path: Path,
+    works: list[Work],
     eligibility_verdicts_path: Path,
     stats: JsonlReadStats | None = None,
 ) -> Iterator[Work]:
-    """Yield Works that have an explicit ``eligible=True`` verdict.
+    """Yield the corpus works that have an explicit ``eligible=True`` verdict.
 
-    Joins the eligibility verdict sidecar to the catalogue.  Works with
-    ``eligible=False`` or ``eligible=None`` (sentinel skips) are excluded.
-    No screening threshold is re-applied here — stage 7 already gated by
-    screening, so the eligibility verdict is the only gate needed.
-
-    The catalogue is required (rather than just the verdict file) for the
-    verdict↔catalogue consistency check below and for the bibliographic
-    block the export attaches to each record.
-
-    Raises ``KeyError`` if a verdict's ``work_id`` is absent from the
-    catalogue — this signals a data inconsistency (stage 7 wrote a verdict
-    for a work the catalogue does not contain).
+    Works with ``eligible=False`` or ``eligible=None`` (sentinel skips) are
+    excluded. Exits when a verdict names a work the corpus does not
+    contain: the verdicts and the corpus then do not belong together.
     """
-    ev = {
-        v.work_id: v
-        for v in read_jsonl(eligibility_verdicts_path, EligibilityVerdict, stats)
-    }
-    catalogue = {
-        w.id: w for w in read_jsonl(catalogue_path, Work, stats)
-    }
-    for v in ev.values():
+    corpus = {w.id: w for w in works}
+    for v in read_jsonl(eligibility_verdicts_path, EligibilityVerdict, stats):
         if v.eligible is not True:
             continue
-        if v.work_id not in catalogue:
-            raise KeyError(
-                f"work_id {v.work_id!r} found in eligibility verdicts but absent "
-                f"from catalogue {catalogue_path}; this is a data inconsistency"
+        if v.work_id not in corpus:
+            raise SystemExit(
+                f"work_id {v.work_id!r} has an eligibility verdict in "
+                f"{eligibility_verdicts_path} but is not in the corpus; re-run "
+                f"fulltext-eligibility"
             )
-        yield catalogue[v.work_id]
+        yield corpus[v.work_id]
 
 
-def _load_extractions(
-    path: Path, stats: JsonlReadStats
-) -> dict[str, ExtractedDocument]:
-    return {rec.work_id: rec for rec in read_jsonl(path, ExtractedDocument, stats)}
+def _check_eligibility_meta(
+    verdicts_path: Path, corpus_id: str, eligibility_criteria: str | Path | dict[str, Any]
+) -> str:
+    """Return the eligibility prompt hash; exit when the verdicts do not fit.
+
+    The meta beside the verdicts must exist, name the current corpus, and
+    record the ``prompt_sha256`` of ``--eligibility-criteria``.
+    """
+    meta_path = verdicts_path.parent / ELIGIBILITY_META_FILENAME
+    meta = load_upstream_meta(
+        meta_path,
+        EligibilityMeta,
+        flag="--eligibility-verdicts",
+        upstream="fulltext-eligibility",
+    )
+    require_corpus(meta.corpus_id, corpus_id, meta_path, rerun="fulltext-eligibility")
+    try:
+        expected = criteria_sha256(eligibility_criteria)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if meta.llm.prompt_sha256 != expected:
+        raise SystemExit(
+            f"{meta_path} records prompt_sha256 {meta.llm.prompt_sha256}, but "
+            f"--eligibility-criteria hashes to {expected}; pass the criteria the "
+            f"verdicts were made with or re-run fulltext-eligibility"
+        )
+    return expected
 
 
 def extract_works(
@@ -202,9 +231,9 @@ def extract_works(
     for work in works:
         if work.id in skip_ids:
             continue
-        # Full-text-only: a work without an extraction never enters the
-        # loop — no record row, no count. The gap is already visible
-        # upstream (stage 5/6 provenance), so we don't flag it here.
+        # Full-text-only: a work without a current extraction never enters
+        # the loop — no record row, no count. The gap is visible in the
+        # corpus provenance and the stage 6 meta, so we don't flag it here.
         if work.id not in extractions:
             continue
         if max_records is not None and len(eligible) >= max_records:
@@ -270,28 +299,41 @@ def build_subparser(
         help="Extract codebook records for eligible works with an LLM.",
     )
     parser.add_argument(
-        "--catalogue",
+        "--corpus-dir",
         type=Path,
         default=None,
         help=(
-            "Deduplicated catalogue JSONL (data/catalogue-dedup/deduplicated.jsonl). "
-            "Required for the verdict↔catalogue consistency check (every eligibility "
-            "verdict must name a work the catalogue contains) and for the "
-            "bibliographic block the review export attaches to each record "
-            "(default: <data-dir>/catalogue-dedup/deduplicated.jsonl)."
+            "Corpus written by corpus-assemble; every eligibility verdict must "
+            "name one of its works (default: <data-dir>/corpus/)."
         ),
     )
     parser.add_argument(
         "--eligibility-verdicts",
         type=Path,
         default=None,
-        help="Eligibility verdicts JSONL (default: <data-dir>/fulltext-eligibility/<run-id>/verdicts.jsonl).",
+        help=(
+            "Eligibility verdicts JSONL, with eligibility-meta.json beside it "
+            "(default: <data-dir>/fulltext-eligibility/<run-id>/verdicts.jsonl)."
+        ),
+    )
+    parser.add_argument(
+        "--eligibility-criteria",
+        default=str(DEFAULT_ELIGIBILITY_CRITERIA),
+        help=(
+            "Eligibility-criteria YAML the verdicts were made with; its hash must "
+            "match prompt_sha256 in eligibility-meta.json. On reload from a saved "
+            f"snapshot, the inlined mapping is consumed directly (default: "
+            f"{DEFAULT_ELIGIBILITY_CRITERIA})."
+        ),
     )
     parser.add_argument(
         "--extractions",
         type=Path,
         default=None,
-        help="Extraction JSONL (default: <data-dir>/fulltext-extraction/extraction.jsonl).",
+        help=(
+            "Extraction JSONL, with extraction-meta.json beside it "
+            "(default: <data-dir>/fulltext-extraction/extraction.jsonl)."
+        ),
     )
     parser.add_argument(
         "--extraction-output-dir",
@@ -313,7 +355,7 @@ def build_subparser(
         default=None,
         help=(
             "Run identifier, shared with the eligibility run whose verdicts are "
-            "read (default: the run_id in <data-dir>/manifest.json)."
+            "read (default: analysis_run_id in <corpus-dir>/corpus-meta.json)."
         ),
     )
     parser.add_argument(
@@ -326,6 +368,12 @@ def build_subparser(
         ),
     )
     add_endpoint_args(parser, decisions=False)
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=REASONING_EFFORTS,
+        default=None,
+        help="Reasoning effort sent with each request (default: none sent, the provider's default).",
+    )
     parser.add_argument(
         "--max-records",
         type=int,
@@ -349,12 +397,11 @@ def build_subparser(
 
 def run(args: argparse.Namespace) -> None:
     data_dir: Path = Path(args.data_dir)
-    args.run_id = resolve_run_id(data_dir, args.run_id)
-    args.catalogue = require_input(
-        args.catalogue if args.catalogue is not None else deduplicated_path(data_dir),
-        flag="--catalogue",
-        upstream="catalogue-dedup",
+    args.corpus_dir = (
+        Path(args.corpus_dir) if args.corpus_dir is not None else corpus_dir(data_dir)
     )
+    corpus_meta = load_corpus_meta(args.corpus_dir)
+    args.run_id = resolve_analysis_run_id(args.corpus_dir, args.run_id)
     args.eligibility_verdicts = require_input(
         args.eligibility_verdicts
         if args.eligibility_verdicts is not None
@@ -366,6 +413,9 @@ def run(args: argparse.Namespace) -> None:
         args.extractions if args.extractions is not None else extractions_path(data_dir),
         flag="--extractions",
         upstream="fulltext-extraction",
+    )
+    eligibility_prompt_sha256 = _check_eligibility_meta(
+        args.eligibility_verdicts, corpus_meta.corpus_id, args.eligibility_criteria
     )
     endpoint = resolve_endpoint(args)
 
@@ -385,7 +435,8 @@ def run(args: argparse.Namespace) -> None:
         (ctx.system_prompt + "\n" + USER_TEMPLATE).encode("utf-8")
     ).hexdigest()
 
-    # Prompt-hash guard: refuse --skip-existing when the recorded hash differs.
+    # Resume guards: refuse --skip-existing when the recorded prompt hash
+    # or corpus differs, so records.jsonl never mixes either.
     if args.skip_existing and meta_path.exists():
         try:
             recorded = json.loads(meta_path.read_text())
@@ -401,17 +452,25 @@ def run(args: argparse.Namespace) -> None:
                 f"refusing --skip-existing to avoid mixing prompt versions in "
                 f"{records_path}"
             )
+        if recorded.get("corpus_id") != corpus_meta.corpus_id:
+            raise SystemExit(
+                f"{meta_path} was made on corpus {recorded.get('corpus_id')}, but "
+                f"the corpus is now {corpus_meta.corpus_id}; refusing "
+                f"--skip-existing (pass another --run-id for a fresh run)"
+            )
 
     stats = JsonlReadStats()
-    extractions = _load_extractions(args.extractions, stats)
+    extractions = read_current_extractions(
+        args.extractions, corpus_meta, read_corpus_pdfs(args.corpus_dir), stats
+    )
 
-    # Full-text-only: gate on extraction presence so eligible works without
+    # Full-text-only: gate on a current extraction so eligible works without
     # a PDF never enter the extracted set, get no record row, and are not
-    # counted. The gap is already visible in upstream provenance.
+    # counted.
     eligible_works = [
         work
         for work in _active_eligible_works(
-            args.catalogue, args.eligibility_verdicts, stats
+            read_corpus_works(args.corpus_dir), args.eligibility_verdicts, stats
         )
         if work.id in extractions
     ]
@@ -436,7 +495,9 @@ def run(args: argparse.Namespace) -> None:
 
     if not args.dry_run:
         output_dir.mkdir(parents=True, exist_ok=True)
-        save_resolved_config(args, output_dir, inlines=["codebook"])
+        save_resolved_config(
+            args, output_dir, inlines=["codebook", "eligibility_criteria"]
+        )
 
     # Start-of-run truncation: non-resuming runs rewrite records.jsonl.
     if not args.dry_run and not args.skip_existing and records_path.exists():
@@ -516,7 +577,8 @@ def run(args: argparse.Namespace) -> None:
         ExtractionCodebookMeta(
             run=run_meta,
             llm=llm_meta,
-            input_catalogue=str(args.catalogue),
+            corpus_id=corpus_meta.corpus_id,
+            eligibility_prompt_sha256=eligibility_prompt_sha256,
             input_eligibility_verdicts=str(args.eligibility_verdicts),
             input_extractions=str(args.extractions),
             input_count=total,

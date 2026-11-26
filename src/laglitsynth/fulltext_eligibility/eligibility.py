@@ -1,9 +1,10 @@
 """Full-text eligibility assessment on the decisions endpoint.
 
-Each work's rendered full text is sent as the ``input`` of one decision
-whose predicate question comes from the eligibility-criteria YAML's
-``decision`` block. The answer's probability is stored on the verdict and
-cut at 0.5 into ``eligible``.
+Reads the works of ``data/corpus/`` and their stage 6 extractions. Each
+work's rendered full text is sent as the ``input`` of one decision whose
+predicate question comes from the eligibility-criteria YAML's ``decision``
+block. The answer's probability is stored on the verdict and cut at 0.5
+into ``eligible``.
 """
 
 from __future__ import annotations
@@ -25,6 +26,12 @@ from lxml import etree
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.concurrency import map_concurrent
 from laglitsynth.config import register_config_arg, save_resolved_config
+from laglitsynth.corpus.load import (
+    load_corpus_meta,
+    read_corpus_pdfs,
+    read_corpus_works,
+    read_current_extractions,
+)
 from laglitsynth.fulltext_eligibility.models import (
     TOOL_NAME,
     EligibilityMeta,
@@ -40,9 +47,10 @@ from laglitsynth.io import (
 )
 from laglitsynth.layout import (
     ELIGIBILITY_SUBDIR,
+    corpus_dir,
     extractions_path,
     require_input,
-    resolve_screening_inputs,
+    resolve_analysis_run_id,
 )
 from laglitsynth.llm import (
     LlmEndpoint,
@@ -51,16 +59,16 @@ from laglitsynth.llm import (
     decisions_client,
     resolve_endpoint,
 )
-from laglitsynth.manifest import resolve_run_id
 from laglitsynth.models import RunMeta
 from laglitsynth.prompts import DecisionQuestion, load_decision_question
-from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_ELIGIBILITY_CRITERIA = Path(
     "examples/eligibility-criteria/lagrangian-oceanography.yaml"
 )
+
+META_FILENAME = "eligibility-meta.json"
 
 _LLM_TIMEOUT_SECONDS = 300.0
 
@@ -85,35 +93,6 @@ def criteria_sha256(spec: str | Path | dict[str, Any]) -> str:
     Raises ``ValueError`` naming the spec when it has no ``decision`` block.
     """
     return question_sha256(load_decision_question(spec))
-
-
-def _active_works(
-    catalogue_path: Path,
-    screening_verdicts_path: Path,
-    screening_threshold: float,
-    stats: JsonlReadStats | None = None,
-) -> Iterator[Work]:
-    """Yield Works that pass the screening threshold gate.
-
-    Works whose ``ScreeningVerdict.relevance_score`` is None (sentinels:
-    ``no-abstract``, ``llm-parse-failure``, ``llm-timeout``) are never
-    filtered — absence of a score is not evidence of irrelevance.  Only an
-    explicit numeric score strictly below ``screening_threshold`` excludes.
-
-    Works present in the catalogue but absent from the verdicts file are also
-    excluded (they were never screened).
-    """
-    verdicts = {
-        v.work_id: v
-        for v in read_jsonl(screening_verdicts_path, ScreeningVerdict, stats)
-    }
-    for w in read_jsonl(catalogue_path, Work, stats):
-        sv = verdicts.get(w.id)
-        if sv is None:
-            continue
-        if sv.relevance_score is not None and sv.relevance_score < screening_threshold:
-            continue
-        yield w
 
 
 def classify_eligibility(
@@ -141,12 +120,6 @@ def classify_eligibility(
     )
 
 
-def _load_extractions(
-    path: Path, stats: JsonlReadStats
-) -> dict[str, ExtractedDocument]:
-    return {rec.work_id: rec for rec in read_jsonl(path, ExtractedDocument, stats)}
-
-
 def assess_works(
     works: Iterable[Work],
     extractions: dict[str, ExtractedDocument],
@@ -164,9 +137,9 @@ def assess_works(
     for work in works:
         if work.id in skip_ids:
             continue
-        # Full-text-only: a work without an extraction never enters the
-        # loop — no verdict row, no count. The gap is already visible
-        # upstream (stage 5/6 provenance), so we don't flag it here.
+        # Full-text-only: a work without a current extraction never enters
+        # the loop — no verdict row, no count. The gap is visible in the
+        # corpus provenance and the stage 6 meta, so we don't flag it here.
         if work.id not in extractions:
             continue
         if max_records is not None and len(eligible) >= max_records:
@@ -232,28 +205,19 @@ def build_subparser(
         help="Assess full-text eligibility of included works on the decisions endpoint.",
     )
     parser.add_argument(
-        "--catalogue",
+        "--corpus-dir",
         type=Path,
         default=None,
-        help="Deduplicated catalogue JSONL (default: <data-dir>/catalogue-dedup/deduplicated.jsonl).",
-    )
-    parser.add_argument(
-        "--screening-verdicts",
-        type=Path,
-        default=None,
-        help="Stage 3 verdicts JSONL (default: <data-dir>/screening-abstracts/<run-id>/verdicts.jsonl).",
-    )
-    parser.add_argument(
-        "--screening-threshold",
-        type=float,
-        default=50.0,
-        help="Relevance score cutoff, 0-100 (default: 50)",
+        help="Corpus written by corpus-assemble (default: <data-dir>/corpus/).",
     )
     parser.add_argument(
         "--extractions",
         type=Path,
         default=None,
-        help="Extraction JSONL (default: <data-dir>/fulltext-extraction/extraction.jsonl).",
+        help=(
+            "Extraction JSONL, with extraction-meta.json beside it "
+            "(default: <data-dir>/fulltext-extraction/extraction.jsonl)."
+        ),
     )
     parser.add_argument(
         "--extraction-output-dir",
@@ -274,8 +238,8 @@ def build_subparser(
         "--run-id",
         default=None,
         help=(
-            "Run identifier, shared with the screening run whose verdicts are "
-            "read (default: the run_id in <data-dir>/manifest.json)."
+            "Run identifier, shared with the extraction-codebook run that reads "
+            "these verdicts (default: analysis_run_id in <corpus-dir>/corpus-meta.json)."
         ),
     )
     parser.add_argument(
@@ -292,7 +256,7 @@ def build_subparser(
         "--max-records",
         type=int,
         default=None,
-        help="Process only the first N catalogue works",
+        help="Process only the first N corpus works",
     )
     parser.add_argument(
         "--skip-existing",
@@ -311,10 +275,11 @@ def build_subparser(
 
 def run(args: argparse.Namespace) -> None:
     data_dir: Path = Path(args.data_dir)
-    args.run_id = resolve_run_id(data_dir, args.run_id)
-    args.catalogue, args.screening_verdicts = resolve_screening_inputs(
-        data_dir, args.catalogue, args.screening_verdicts, args.run_id
+    args.corpus_dir = (
+        Path(args.corpus_dir) if args.corpus_dir is not None else corpus_dir(data_dir)
     )
+    corpus_meta = load_corpus_meta(args.corpus_dir)
+    args.run_id = resolve_analysis_run_id(args.corpus_dir, args.run_id)
     args.extractions = require_input(
         args.extractions if args.extractions is not None else extractions_path(data_dir),
         flag="--extractions",
@@ -324,7 +289,7 @@ def run(args: argparse.Namespace) -> None:
 
     output_dir: Path = data_dir / ELIGIBILITY_SUBDIR / args.run_id
     verdicts_path = output_dir / "verdicts.jsonl"
-    meta_path = output_dir / "eligibility-meta.json"
+    meta_path = output_dir / META_FILENAME
 
     extraction_output_dir: Path = (
         Path(args.extraction_output_dir)
@@ -339,7 +304,8 @@ def run(args: argparse.Namespace) -> None:
         raise SystemExit(str(exc)) from exc
     prompt_sha256 = question_sha256(question)
 
-    # Prompt-hash guard: refuse --skip-existing when the recorded hash differs.
+    # Resume guards: refuse --skip-existing when the recorded prompt hash
+    # or corpus differs, so verdicts.jsonl never mixes either.
     if args.skip_existing and meta_path.exists():
         try:
             recorded = json.loads(meta_path.read_text())
@@ -355,22 +321,22 @@ def run(args: argparse.Namespace) -> None:
                 f"refusing --skip-existing to avoid mixing prompt versions in "
                 f"{verdicts_path}"
             )
+        if recorded.get("corpus_id") != corpus_meta.corpus_id:
+            raise SystemExit(
+                f"{meta_path} was made on corpus {recorded.get('corpus_id')}, but "
+                f"the corpus is now {corpus_meta.corpus_id}; refusing "
+                f"--skip-existing (pass another --run-id for a fresh run)"
+            )
 
     stats = JsonlReadStats()
-    extractions = _load_extractions(args.extractions, stats)
+    extractions = read_current_extractions(
+        args.extractions, corpus_meta, read_corpus_pdfs(args.corpus_dir), stats
+    )
 
-    # Full-text-only: gate on extraction presence so works without a PDF
-    # never enter the assessed set, get no verdict row, and are not
-    # counted. The gap is already visible in upstream provenance.
+    # Full-text-only: gate on a current extraction so works without a PDF
+    # never enter the assessed set, get no verdict row, and are not counted.
     active: list[Work] = [
-        work
-        for work in _active_works(
-            args.catalogue,
-            args.screening_verdicts,
-            args.screening_threshold,
-            stats,
-        )
-        if work.id in extractions
+        work for work in read_corpus_works(args.corpus_dir) if work.id in extractions
     ]
     total = len(active)
 
@@ -486,8 +452,7 @@ def run(args: argparse.Namespace) -> None:
         EligibilityMeta(
             run=run_meta,
             llm=llm_meta,
-            input_catalogue=str(args.catalogue),
-            input_screening_verdicts=str(args.screening_verdicts),
+            corpus_id=corpus_meta.corpus_id,
             input_extractions=str(args.extractions),
             input_count=total,
             eligible_count=eligible_count,

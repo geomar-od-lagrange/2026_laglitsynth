@@ -1,10 +1,11 @@
-"""Run manifest: the one file that pins a review's queries and run-id.
+"""Run manifest: the one file that pins a review's queries and screening run-id.
 
 ``data/manifest.json`` is written once by ``manifest-init`` and never
-rewritten. Stages 3, 7, and 8 write under a ``<run-id>/`` leaf, and every
-stage that reads one of those leaves resolves the run-id from here when
-``--run-id`` is omitted. Everything else a stage needs is at a fixed path
-under ``--data-dir`` (``laglitsynth.layout``).
+rewritten. Stage 3 writes under a ``<run-id>/`` leaf, and every stage that
+reads that leaf (``corpus-assemble``, the export) resolves the run-id from
+here when no run-id is passed. Stages 7 and 8 take theirs from the corpus
+(``layout.resolve_analysis_run_id``). Everything else a stage needs is at a
+fixed path under ``--data-dir`` (``laglitsynth.layout``).
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ MANIFEST_FILENAME = "manifest.json"
 class RunManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run: RunMeta
-    run_id: str  # the shared run-id leaf for stages 3/7/8
+    run_id: str  # the screening run-id leaf (stage 3)
     queries: list[str]  # the search term(s) this review ran
 
 

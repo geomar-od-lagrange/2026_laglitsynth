@@ -51,6 +51,7 @@ class LlmMeta(BaseModel):
     model: str
     base_url: str              # OpenAI-compatible base, including /v1
     decisions_url: str | None  # None for chat stages
+    reasoning_effort: str | None  # stage 8's --reasoning-effort; None when none was sent
     prompt_sha256: str  # sha256(prompt or question JSON + "\n" + USER_TEMPLATE), full hex digest
 ```
 

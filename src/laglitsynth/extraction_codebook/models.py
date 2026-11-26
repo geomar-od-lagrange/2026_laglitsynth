@@ -20,7 +20,8 @@ class ExtractionCodebookMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run: RunMeta
     llm: LlmMeta
-    input_catalogue: str
+    corpus_id: str  # CorpusMeta.corpus_id of the corpus the works came from
+    eligibility_prompt_sha256: str  # prompt_sha256 of the eligibility verdicts read
     input_eligibility_verdicts: str
     input_extractions: str
     input_count: int

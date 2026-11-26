@@ -44,6 +44,9 @@ from laglitsynth.prompts import DecisionQuestion
 
 API_KEY_VAR = "LLM_API_KEY"
 
+# Values stage 8's --reasoning-effort accepts.
+REASONING_EFFORTS = ("low", "medium", "high")
+
 _DECISIONS_TIMEOUT_SECONDS = 300.0
 _DECISIONS_MAX_ATTEMPTS = 4
 _DECISIONS_BACKOFF_SECONDS = 2.0
@@ -64,12 +67,14 @@ class LlmEndpoint(BaseModel):
     model: str
     api_key: str
     decisions_url: str | None  # None for chat-only stages
+    reasoning_effort: str | None = None  # chat only; None sends no effort
 
     def llm_meta(self, prompt_sha256: str) -> LlmMeta:
         return LlmMeta(
             model=self.model,
             base_url=self.base_url,
             decisions_url=self.decisions_url,
+            reasoning_effort=self.reasoning_effort,
             prompt_sha256=prompt_sha256,
         )
 
@@ -131,7 +136,9 @@ def resolve_endpoint(args: argparse.Namespace) -> LlmEndpoint:
     """Build the endpoint from parsed args; exit naming whatever is missing.
 
     The decisions URL is resolved only when the stage registered
-    ``--decisions-url``; it defaults to ``<base-url>/decisions``.
+    ``--decisions-url``; it defaults to ``<base-url>/decisions``. The
+    reasoning effort is read only when the stage registered
+    ``--reasoning-effort`` (stage 8).
     """
     base_url: str | None = args.base_url
     if not base_url:
@@ -147,8 +154,13 @@ def resolve_endpoint(args: argparse.Namespace) -> LlmEndpoint:
     decisions_url: str | None = None
     if "decisions_url" in vars(args):
         decisions_url = args.decisions_url or base_url.rstrip("/") + "/decisions"
+    reasoning_effort: str | None = vars(args).get("reasoning_effort")
     return LlmEndpoint(
-        base_url=base_url, model=model, api_key=api_key, decisions_url=decisions_url
+        base_url=base_url,
+        model=model,
+        api_key=api_key,
+        decisions_url=decisions_url,
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -175,8 +187,12 @@ def chat_json(
 
     Raises ``LlmFailure`` for per-work failures (``llm-timeout``,
     ``llm-rejected``) and ``SystemExit`` naming the base URL for errors
-    that would fail every work.
+    that would fail every work. ``reasoning_effort`` is sent only when the
+    endpoint sets one; otherwise the provider default applies.
     """
+    extra: dict[str, Any] = {}
+    if endpoint.reasoning_effort is not None:
+        extra["reasoning_effort"] = endpoint.reasoning_effort
     try:
         response = client.chat.completions.create(
             model=endpoint.model,
@@ -185,6 +201,7 @@ def chat_json(
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
+            **extra,
         )
     except (APITimeoutError, APIConnectionError, RateLimitError, InternalServerError) as exc:
         logger.warning("LLM timeout for %s: %s", work_id, exc)

@@ -104,6 +104,7 @@ def test_screening_meta_serialization() -> None:
             model="decider",
             base_url=_BASE,
             decisions_url=_BASE + "/decisions",
+            reasoning_effort=None,
             prompt_sha256="a" * 64,
         ),
         input_path="data/catalogue-dedup/deduplicated.jsonl",
@@ -300,6 +301,7 @@ def test_meta_records_endpoint_and_question_hash(tmp_path: Path) -> None:
         "model": "decider",
         "base_url": _BASE,
         "decisions_url": _BASE + "/decisions",
+        "reasoning_effort": None,
         "prompt_sha256": hashlib.sha256(
             (
                 DecisionQuestion.model_validate(_DECISION_BLOCK).canonical_json()

@@ -1,4 +1,9 @@
-"""Full-text extraction via GROBID: PDF in, TEI XML on disk."""
+"""Full-text extraction via GROBID: corpus PDF in, TEI XML on disk.
+
+Iterates the ``CorpusPdf`` rows of ``data/corpus/provenance.jsonl`` that
+carry a PDF. Each ``ExtractedDocument`` records the corpus copy's sha256 so
+later stages can tell an extraction of a since-changed PDF apart.
+"""
 
 from __future__ import annotations
 
@@ -12,15 +17,16 @@ from pathlib import Path
 
 import httpx
 
+from laglitsynth.corpus.load import load_corpus_meta, read_corpus_pdfs
 from laglitsynth.fulltext_extraction.models import (
+    EXTRACTIONS_FILENAME,
+    META_FILENAME,
     TOOL_NAME,
     ExtractedDocument,
     ExtractionMeta,
 )
-from laglitsynth.fulltext_retrieval.store import pdfs_dir
-from laglitsynth.ids import filename_to_work_id
 from laglitsynth.io import append_jsonl, read_jsonl, write_meta
-from laglitsynth.layout import extraction_dir, require_input
+from laglitsynth.layout import corpus_dir, extraction_dir
 from laglitsynth.models import RunMeta
 
 logger = logging.getLogger(__name__)
@@ -63,12 +69,13 @@ def _process_pdf(
     return resp.content
 
 
-def _load_existing(output_dir: Path) -> set[str]:
-    extraction_path = output_dir / "extraction.jsonl"
+def _load_latest(output_dir: Path) -> dict[str, ExtractedDocument]:
+    """Return the latest record per work in ``extraction.jsonl`` (appended)."""
+    extraction_path = output_dir / EXTRACTIONS_FILENAME
     if not extraction_path.exists():
-        return set()
+        return {}
     return {
-        rec.work_id for rec in read_jsonl(extraction_path, ExtractedDocument)
+        rec.work_id: rec for rec in read_jsonl(extraction_path, ExtractedDocument)
     }
 
 
@@ -80,10 +87,10 @@ def build_subparser(
         help="Extract structured text from PDFs via GROBID.",
     )
     parser.add_argument(
-        "--pdf-dir",
+        "--corpus-dir",
         type=Path,
         default=None,
-        help="Directory containing PDFs (default: <data-dir>/pdfs/)",
+        help="Corpus written by corpus-assemble (default: <data-dir>/corpus/)",
     )
     parser.add_argument(
         "--output-dir",
@@ -112,7 +119,10 @@ def build_subparser(
     parser.add_argument(
         "--skip-existing",
         action="store_true",
-        help="Skip PDFs that already have an ExtractedDocument record",
+        help=(
+            "Skip works whose latest ExtractedDocument was made from the "
+            "current corpus PDF (same pdf_sha256)"
+        ),
     )
     parser.add_argument(
         "--consolidate-citations",
@@ -131,11 +141,9 @@ def build_subparser(
 
 def run(args: argparse.Namespace) -> None:
     data_dir: Path = args.data_dir
-    pdf_dir: Path = require_input(
-        args.pdf_dir if args.pdf_dir is not None else pdfs_dir(data_dir),
-        flag="--pdf-dir",
-        upstream="fulltext-retrieval",
-    )
+    corpus: Path = args.corpus_dir if args.corpus_dir is not None else corpus_dir(data_dir)
+    corpus_meta = load_corpus_meta(corpus)
+    corpus_pdfs = [p for p in read_corpus_pdfs(corpus) if p.pdf_path is not None]
     output_dir: Path = (
         args.output_dir if args.output_dir is not None else extraction_dir(data_dir)
     )
@@ -157,45 +165,42 @@ def run(args: argparse.Namespace) -> None:
     version = _grobid_version(args.grobid_url, preflight_client)
     preflight_client.close()
 
+    # A work is skipped only when its latest record came from the same PDF
+    # bytes as the corpus copy; a changed PDF is extracted again.
     skip_ids: set[str] = set()
     if args.skip_existing:
-        skip_ids = _load_existing(output_dir)
+        latest = _load_latest(output_dir)
+        skip_ids = {
+            p.work_id
+            for p in corpus_pdfs
+            if p.work_id in latest
+            and latest[p.work_id].pdf_sha256 == p.content_sha256
+        }
         if skip_ids:
             print(
                 f"Skipping {len(skip_ids)} already-extracted PDFs.",
                 file=sys.stderr,
             )
 
-    pdfs = sorted(pdf_dir.glob("*.pdf"))
-    total = len(pdfs)
-    print(f"Extracting {total} PDFs via GROBID ({version}).", file=sys.stderr)
+    total = len(corpus_pdfs)
+    print(
+        f"Extracting {total - len(skip_ids)} of {total} corpus PDFs via GROBID ({version}).",
+        file=sys.stderr,
+    )
 
-    extraction_path = output_dir / "extraction.jsonl"
+    extraction_path = output_dir / EXTRACTIONS_FILENAME
     t0 = time.monotonic()
     extracted_count = 0
     failed_count = 0
-    invalid_stem_count = 0
 
     # Per-paper client uses the full (potentially long) timeout.
     client = httpx.Client(timeout=args.timeout)
     try:
-        for i, pdf in enumerate(pdfs, 1):
-            work_id = filename_to_work_id(pdf.stem)
-            if work_id is None:
-                invalid_stem_count += 1
-                logger.warning(
-                    "Skipping %s: stem %r does not match ^W\\d+$ pattern",
-                    pdf,
-                    pdf.stem,
-                )
-                print(
-                    f"  WARNING: skipping {pdf.name} — stem {pdf.stem!r} is not a valid OpenAlex W-ID",
-                    file=sys.stderr,
-                )
+        for i, row in enumerate(corpus_pdfs, 1):
+            if row.work_id in skip_ids:
                 continue
-
-            if work_id in skip_ids:
-                continue
+            assert row.pdf_path is not None and row.content_sha256 is not None
+            pdf = corpus / row.pdf_path
 
             try:
                 tei_bytes = _process_pdf(
@@ -218,9 +223,10 @@ def run(args: argparse.Namespace) -> None:
             (tei_dir / tei_filename).write_bytes(tei_bytes)
 
             doc = ExtractedDocument(
-                work_id=work_id,
+                work_id=row.work_id,
                 tei_path=f"tei/{tei_filename}",
                 content_sha256=hashlib.sha256(tei_bytes).hexdigest(),
+                pdf_sha256=row.content_sha256,
                 extracted_at=datetime.now(UTC).isoformat(timespec="microseconds"),
             )
             append_jsonl(doc, extraction_path)
@@ -236,22 +242,22 @@ def run(args: argparse.Namespace) -> None:
     run_meta = RunMeta(
         tool=TOOL_NAME,
         run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
-        validation_skipped=0,  # extraction reads PDFs, not JSONL records
+        validation_skipped=0,  # the corpus readers exit on invalid rows
     )
     write_meta(
-        output_dir / "extraction-meta.json",
+        output_dir / META_FILENAME,
         ExtractionMeta(
             run=run_meta,
+            corpus_id=corpus_meta.corpus_id,
             grobid_version=version,
             total_pdfs=total,
             extracted_count=extracted_count,
             failed_count=failed_count,
-            invalid_stem_count=invalid_stem_count,
         ),
     )
 
     print(
-        f"\nExtraction done: {extracted_count} extracted, {failed_count} failed"
-        f", {invalid_stem_count} skipped (invalid stem). ({elapsed:.1f}s)",
+        f"\nExtraction done: {extracted_count} extracted, {failed_count} failed, "
+        f"{len(skip_ids)} skipped (already extracted). ({elapsed:.1f}s)",
         file=sys.stderr,
     )

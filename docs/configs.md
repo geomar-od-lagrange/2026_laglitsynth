@@ -13,8 +13,10 @@ Resolved output dir is `<data-dir>/<stage-subdir>/<run-id>/`. `--data-dir`
 (default: `data/`) is the bucket root, swapped wholesale to repoint a
 sweep at a sibling tree. `<stage-subdir>` is hardcoded per stage:
 `screening-abstracts`, `fulltext-eligibility`, `extraction-codebook`.
-`--run-id` (default: the `run_id` in `<data-dir>/manifest.json`, see
-[run-manifest.md](run-manifest.md)) names the leaf; a minted id is a
+`--run-id` names the leaf. It defaults to the `run_id` in
+`<data-dir>/manifest.json` for screening and to `analysis_run_id` in
+`<data-dir>/corpus/corpus-meta.json` for eligibility and extraction-codebook
+(see [run-manifest.md](run-manifest.md)); a minted id is a
 `<iso-1s>_<12hex>` in UTC — the ISO timestamp is human-readable and the
 12-hex suffix removes concurrent-job collision risk on NESH or local
 sweeps. PDFs
@@ -42,7 +44,7 @@ moved or been edited.
 
 The two share a file format and may even round-trip: feed a run
 snapshot back as `--config <run-dir>/config.yaml` and the inlined
-codebook is consumed directly. That isn't replay (the endpoint's
+codebook and eligibility criteria are consumed directly. That isn't replay (the endpoint's
 sampling is not pinned, so record-level reproduction is not
 guaranteed), but it is "rerun with the same configuration," and for that
 purpose the shapes are interchangeable. The API key is never part of a
@@ -80,8 +82,10 @@ A per-review config is validated against the typed `ReviewConfig`
 [src/laglitsynth/review.py](../src/laglitsynth/review.py). Its fields are
 the query, the year window (`from_year` / `to_year`) and record cap
 (`max_records`), the three criteria/codebook paths (`screening_criteria`,
-`eligibility_criteria`, `codebook`), the `screening_threshold`, and nested
-per-stage groups for `models.{screening,eligibility,extraction}` and
+`eligibility_criteria`, `codebook`), the `screening_threshold`, the
+endpoint URLs (`llm_base_url`, `llm_decisions_url`), and nested per-stage
+groups for `models.{screening,eligibility,extraction}` plus
+`models.extraction_reasoning_effort` (`low`, `medium` or `high`) and
 `concurrency.{llm,extraction}`.
 Only `query` is required; every other field is optional. An absent
 optional field means "fall back to the runner's built-in default" — it
@@ -111,6 +115,7 @@ The stable, documented name set is:
 | `CFG_LLM_BASE_URL` | `llm_base_url` |
 | `CFG_LLM_DECISIONS_URL` | `llm_decisions_url` |
 | `CFG_SCREENING_MODEL` / `CFG_ELIGIBILITY_MODEL` / `CFG_EXTRACTION_MODEL` | `models.{screening,eligibility,extraction}` |
+| `CFG_EXTRACTION_REASONING_EFFORT` | `models.extraction_reasoning_effort` |
 | `CFG_LLM_CONCURRENCY` / `CFG_EXTRACTION_CONCURRENCY` | `concurrency.{llm,extraction}` |
 
 The three criteria/codebook paths are resolved against the config file's
@@ -128,23 +133,27 @@ runner's built-in default; an absent config field falls through to that
 default. The historical `QUERY` and `N` env overrides keep working
 through this same mechanism (`N` maps to `CFG_MAX_RECORDS`). The
 screening threshold has no built-in default: when the run reaches stage
-7 (or stage 5 with `EXPORT_GAP=1`), the runner exits unless
+5, where `corpus-assemble` applies it, the runner exits unless
 `SCREENING_THRESHOLD` is set in the environment or `screening_threshold`
 in the config. The LLM endpoint has no default either: from stage 3 on the
 runner requires `LLM_BASE_URL` (env or `llm_base_url`), `LLM_API_KEY`
 (env or the sourced `.env`) and the model of every stage it reaches, and
 exits naming whichever is missing. `LLM_DECISIONS_URL` is passed to stages
-3 and 7 as `--decisions-url` when set; the key is never passed as a flag. See
+3 and 7 as `--decisions-url` when set, and `EXTRACTION_REASONING_EFFORT`
+to stage 8 as `--reasoning-effort` when set; the key is never passed as a
+flag. `RUN_ID` names the screening run (stage 3, `corpus-assemble`, the
+export) and `ANALYSIS_RUN_ID`, unset by default, is passed as `--run-id`
+to stages 7 and 8, which otherwise take the corpus's `analysis_run_id`. See
 [README.md](../README.md#running-the-pipeline) for the invocation.
 
 ## Quick recipes
 
 ```bash
 # run with defaults: inputs at their conventional paths under data/,
-# run-id from data/manifest.json, default codebook YAML
+# run-id from data/corpus/corpus-meta.json, default codebook YAML
 laglitsynth extraction-codebook
 
-# write under a run-id other than the manifest's
+# write under a run-id other than the corpus's
 laglitsynth extraction-codebook --run-id 2026-05-03T14-30-00_abc123def456
 
 # rerun a saved snapshot from its config

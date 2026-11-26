@@ -188,9 +188,11 @@ def test_llm_details_block_rows(tmp_path: Path) -> None:
                 model="chatter",
                 base_url="https://llm.example.org/v1",
                 decisions_url=None,
+                reasoning_effort=None,
                 prompt_sha256="a" * 64,
             ),
-            input_catalogue="c",
+            corpus_id="c",
+            eligibility_prompt_sha256="b" * 64,
             input_eligibility_verdicts="v",
             input_extractions="e",
             input_count=1,
@@ -317,3 +319,14 @@ def test_cli_default_output(tmp_path: Path, ctx: CodebookContext) -> None:
     )
 
     assert (tmp_path / "review.xlsx").exists()
+
+
+def test_catalogue_defaults_to_corpus_works() -> None:
+    import argparse
+
+    from laglitsynth.extraction_codebook.export import build_subparser
+
+    parser = argparse.ArgumentParser()
+    build_subparser(parser.add_subparsers())
+    args = parser.parse_args(["extraction-codebook-export", "--records", "r.jsonl"])
+    assert args.catalogue == Path("data/corpus/works.jsonl")

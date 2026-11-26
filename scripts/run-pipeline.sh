@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run pipeline stages 1..STOP_AFTER_STAGE end-to-end, driven by one
-# per-review config YAML.
+# per-review config YAML. corpus-assemble runs with stage 5 and writes
+# <root>/corpus/, which stages 6-8 read.
 #
 # Defaults to a tiny smoke-sized run; point at a real review config (or
 # raise N / override QUERY) for production runs. Outputs are written
@@ -32,9 +33,9 @@
 #   SCREENING_CRITERIA     stage-3 screening-criteria YAML
 #   ELIGIBILITY_CRITERIA   stage-7 eligibility-criteria YAML
 #   CODEBOOK               stage-8 codebook YAML
-#   SCREENING_THRESHOLD    relevance-score cutoff; no default. Required (env
-#                          or config) when the run reaches stage 7, or
-#                          stage 5 with EXPORT_GAP=1
+#   SCREENING_THRESHOLD    relevance-score cutoff applied by corpus-assemble
+#                          (and the EXPORT_GAP export); no default. Required
+#                          (env or config) when the run reaches stage 5
 #   LLM_BASE_URL           OpenAI-compatible base URL including /v1; no
 #                          default. Required (env or config) from stage 3 on
 #   LLM_DECISIONS_URL      decisions endpoint for stages 3 and 7, passed as
@@ -43,14 +44,24 @@
 #   SCREENING_MODEL, ELIGIBILITY_MODEL, EXTRACTION_MODEL
 #                          no defaults; each is required (env or config)
 #                          when the run reaches its stage
+#   EXTRACTION_REASONING_EFFORT
+#                          low, medium or high, passed to stage 8 as
+#                          --reasoning-effort when set (default: unset, the
+#                          provider's default)
 #   OUTPUT_ROOT, GROBID_URL,
 #   LLM_CONCURRENCY        (--concurrency for stages 3 and 7; default 1),
 #   ELIGIBILITY_CONCURRENCY (--concurrency for stage 7 only; default LLM_CONCURRENCY),
 #   EXTRACTION_CONCURRENCY  (--concurrency for stage 8 only; default 1 — prefill-bound),
-#   RUN_ID                 run-id leaf for stages 3, 7, 8 and the stages that
-#                          read their verdicts. Unset (the default), every
-#                          stage takes the run_id in <root>/manifest.json;
-#                          set, it is passed as --run-id to each of them.
+#   RUN_ID                 screening run-id: the stage-3 leaf that
+#                          corpus-assemble and the export read verdicts
+#                          from. Unset (the default), each takes the run_id
+#                          in <root>/manifest.json; set, it is passed to
+#                          each of them.
+#   ANALYSIS_RUN_ID        run-id leaf for stages 7 and 8. Unset (the
+#                          default), both take analysis_run_id from
+#                          <root>/corpus/corpus-meta.json, which changes
+#                          whenever the corpus does; set, it is passed as
+#                          --run-id to both (a variant run on one corpus).
 #   EXPORT_GAP             1 = after stage 5, export the still-missing
 #                          selection as a collaborator handoff bundle into
 #                          <root>/pdfs/export/ (default 0). Env only — it is
@@ -61,7 +72,8 @@
 #   Useful while stabilising upstream stages: STOP_AFTER_STAGE=3 iterates on
 #   screening without paying retrieval/extraction time.
 #   STOP_AFTER_STAGE=5 EXPORT_GAP=1 is the collaborator handoff run: screen the
-#   corpus, fetch what open access gives, then export the remaining gap.
+#   catalogue, fetch what open access gives, assemble the corpus, then export
+#   the remaining gap.
 
 set -euo pipefail
 
@@ -102,6 +114,7 @@ LLM_DECISIONS_URL="${LLM_DECISIONS_URL:-${CFG_LLM_DECISIONS_URL:-}}"
 SCREENING_MODEL="${SCREENING_MODEL:-${CFG_SCREENING_MODEL:-}}"
 ELIGIBILITY_MODEL="${ELIGIBILITY_MODEL:-${CFG_ELIGIBILITY_MODEL:-}}"
 EXTRACTION_MODEL="${EXTRACTION_MODEL:-${CFG_EXTRACTION_MODEL:-}}"
+EXTRACTION_REASONING_EFFORT="${EXTRACTION_REASONING_EFFORT:-${CFG_EXTRACTION_REASONING_EFFORT:-}}"
 
 # Concurrency.
 LLM_CONCURRENCY="${LLM_CONCURRENCY:-${CFG_LLM_CONCURRENCY:-1}}"
@@ -120,9 +133,9 @@ STOP_AFTER_STAGE="${STOP_AFTER_STAGE:-8}"
     exit 2
 }
 
-# Only stage 7 and the stage-5 handoff export read the threshold, so a
-# run that stops before them does not need one.
-if [[ "$STOP_AFTER_STAGE" -ge 7 ]] || [[ "$EXPORT_GAP" == "1" && "$STOP_AFTER_STAGE" -ge 5 ]]; then
+# Only corpus-assemble and the handoff export, both gated with stage 5,
+# read the threshold, so a run that stops before stage 5 does not need one.
+if [[ "$STOP_AFTER_STAGE" -ge 5 ]]; then
     : "${SCREENING_THRESHOLD:?SCREENING_THRESHOLD required — set screening_threshold in the review config or export it}"
 fi
 
@@ -143,16 +156,30 @@ fi
 
 mkdir -p "$ROOT"
 
-# The manifest carries the run-id every run-id-aware stage reads when
-# --run-id is omitted. One per review: created on the first run, kept after.
+# The manifest carries the screening run-id that stage 3, corpus-assemble
+# and the export read when no run-id is passed. One per review: created on
+# the first run, kept after.
 if [[ ! -f "$ROOT/manifest.json" ]]; then
     laglitsynth manifest-init "$QUERY" --data-dir "$ROOT"
 fi
 
-# RUN_ID set: pass it explicitly to every stage that writes or reads a
-# <run-id>/ leaf. Unset: each stage reads the manifest's run_id itself.
+# RUN_ID set: pass it to every stage that writes or reads the screening
+# <run-id>/ leaf. Unset: each reads the manifest's run_id itself.
 run_id_flags=()
-[[ -n "${RUN_ID:-}" ]] && run_id_flags=(--run-id "$RUN_ID")
+screening_run_id_flags=()
+if [[ -n "${RUN_ID:-}" ]]; then
+    run_id_flags=(--run-id "$RUN_ID")
+    screening_run_id_flags=(--screening-run-id "$RUN_ID")
+fi
+
+# ANALYSIS_RUN_ID set: pass it to stages 7 and 8. Unset: both take the
+# corpus's analysis_run_id.
+analysis_run_id_flags=()
+[[ -n "${ANALYSIS_RUN_ID:-}" ]] && analysis_run_id_flags=(--run-id "$ANALYSIS_RUN_ID")
+
+# --reasoning-effort for stage 8 only when set; unset sends none.
+reasoning_effort_flags=()
+[[ -n "$EXTRACTION_REASONING_EFFORT" ]] && reasoning_effort_flags=(--reasoning-effort "$EXTRACTION_REASONING_EFFORT")
 
 # --decisions-url only when set; the CLI otherwise derives it from --base-url.
 decisions_url_flags=()
@@ -197,6 +224,12 @@ run_stage 5 fulltext-retrieval \
         --data-dir "$ROOT" \
         --email "$UNPAYWALL_EMAIL"
 
+run_stage 5 corpus-assemble \
+    laglitsynth corpus-assemble \
+        --screening-threshold "$SCREENING_THRESHOLD" \
+        --data-dir "$ROOT" \
+        ${screening_run_id_flags[@]+"${screening_run_id_flags[@]}"}
+
 if [[ "$EXPORT_GAP" == "1" ]]; then
     run_stage 5 "fulltext-retrieval-export (handoff bundle)" \
         laglitsynth fulltext-retrieval-export \
@@ -213,10 +246,9 @@ run_stage 6 fulltext-extraction \
 
 run_stage 7 fulltext-eligibility \
     laglitsynth fulltext-eligibility \
-        --screening-threshold "$SCREENING_THRESHOLD" \
         --eligibility-criteria "$ELIGIBILITY_CRITERIA" \
         --data-dir "$ROOT" \
-        ${run_id_flags[@]+"${run_id_flags[@]}"} \
+        ${analysis_run_id_flags[@]+"${analysis_run_id_flags[@]}"} \
         --base-url "$LLM_BASE_URL" \
         ${decisions_url_flags[@]+"${decisions_url_flags[@]}"} \
         --model "$ELIGIBILITY_MODEL" \
@@ -225,12 +257,15 @@ run_stage 7 fulltext-eligibility \
 run_stage 8 extraction-codebook \
     laglitsynth extraction-codebook \
         --codebook "$CODEBOOK" \
+        --eligibility-criteria "$ELIGIBILITY_CRITERIA" \
         --data-dir "$ROOT" \
-        ${run_id_flags[@]+"${run_id_flags[@]}"} \
+        ${analysis_run_id_flags[@]+"${analysis_run_id_flags[@]}"} \
         --base-url "$LLM_BASE_URL" \
         --model "$EXTRACTION_MODEL" \
+        ${reasoning_effort_flags[@]+"${reasoning_effort_flags[@]}"} \
         --concurrency "$EXTRACTION_CONCURRENCY"
 
 echo
 echo "Pipeline complete (stages 1..$STOP_AFTER_STAGE). Outputs under: $ROOT/"
-echo "Run-id: ${RUN_ID:-the run_id in $ROOT/manifest.json}"
+echo "Screening run-id: ${RUN_ID:-the run_id in $ROOT/manifest.json}"
+echo "Analysis run-id: ${ANALYSIS_RUN_ID:-the analysis_run_id in $ROOT/corpus/corpus-meta.json}"

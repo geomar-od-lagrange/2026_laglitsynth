@@ -101,8 +101,8 @@ default
 [`examples/reviews/lagrangian-oceanography.yaml`](examples/reviews/lagrangian-oceanography.yaml),
 the smoke run. The screening threshold has no default: set
 `screening_threshold` in the config or export `SCREENING_THRESHOLD`, or
-the runner exits once the run reaches stage 7 (or stage 5 with
-`EXPORT_GAP=1`); a run with `STOP_AFTER_STAGE` below that needs none. The historical `QUERY` and `N` env overrides
+the runner exits once the run reaches stage 5, after which it runs
+`corpus-assemble` with it; a run with `STOP_AFTER_STAGE` below 5 needs none. The historical `QUERY` and `N` env overrides
 still work and still win over the config. See
 [`docs/configs.md`](docs/configs.md#per-review-config-the-runners-config)
 for the config shape and the full `CFG_*` knob list.
@@ -122,7 +122,13 @@ Defaults that apply to both local and NESH runs:
   stage 3 on, `ELIGIBILITY_MODEL` from stage 7 and `EXTRACTION_MODEL` from
   stage 8; the runner exits naming whichever is missing.
   `LLM_DECISIONS_URL` (or `llm_decisions_url`) overrides the
-  decisions URL of stages 3 and 7.
+  decisions URL of stages 3 and 7. `EXTRACTION_REASONING_EFFORT` (or
+  `models.extraction_reasoning_effort`) sets stage 8's reasoning effort;
+  unset, none is sent.
+- `RUN_ID` names the screening run (stage 3, `corpus-assemble`, the
+  export) and defaults to the one in the data dir's `manifest.json`.
+  `ANALYSIS_RUN_ID` names the stage 7 and 8 run and defaults to the
+  corpus's `analysis_run_id`, which changes whenever the corpus does.
 
 ### Locally
 

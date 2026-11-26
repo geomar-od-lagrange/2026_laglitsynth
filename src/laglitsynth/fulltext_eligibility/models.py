@@ -20,8 +20,7 @@ class EligibilityMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run: RunMeta
     llm: LlmMeta
-    input_catalogue: str
-    input_screening_verdicts: str
+    corpus_id: str  # CorpusMeta.corpus_id of the corpus the works came from
     input_extractions: str
     input_count: int
     eligible_count: int

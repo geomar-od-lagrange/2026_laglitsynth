@@ -27,13 +27,14 @@ codebook: ../codebooks/lagrangian-oceanography.yaml
 #
 # from_year: 2000
 # to_year: 2025
-# screening_threshold: <0-100>   # relevance-score cutoff (required from stage 7 on)
+# screening_threshold: <0-100>   # corpus-assemble's relevance-score cutoff (required from stage 5 on)
 # llm_base_url: <https://.../v1>  # OpenAI-compatible base (required from stage 3 on)
 # llm_decisions_url: <url>        # only if decisions are not at <llm_base_url>/decisions
 # models:                         # required for each stage the run reaches
 #   screening: <decisions model>
 #   eligibility: <decisions model>
 #   extraction: <chat model>
+#   extraction_reasoning_effort: <low|medium|high>  # unset: provider default
 # concurrency:
 #   llm: 1
 #   extraction: 1

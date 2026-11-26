@@ -35,19 +35,20 @@ from laglitsynth.extraction_codebook.extract import (
     extract_codebook,
     extract_works,
 )
+from laglitsynth.fulltext_eligibility.eligibility import criteria_sha256
 from laglitsynth.fulltext_eligibility.models import EligibilityVerdict
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
 from laglitsynth.llm import LlmEndpoint
 
 from conftest import (
     TEI_NS,
-    TEST_RUN_ID,
+    TEST_ANALYSIS_RUN_ID,
     _make_work,
     _mock_openai_response,
+    _write_corpus,
     _write_extractions_jsonl,
-    _write_manifest,
+    _write_full_text_for,
     _write_tei,
-    _write_works_jsonl,
 )
 
 DEFAULT_CODEBOOK_PATH = Path("examples/codebooks/lagrangian-oceanography.yaml")
@@ -95,32 +96,6 @@ def _call_extract(
         endpoint=_ENDPOINT,
         ctx=ctx,
     )
-
-
-def _write_full_text_for(
-    extractions_path: Path, output_dir: Path, work_ids: list[str]
-) -> None:
-    """Write a renderable TEI + extraction record for each work id.
-
-    Stage 8 is full-text-only, so run()-level tests need each work that
-    should be extracted to carry an extraction with non-empty TEI.
-    """
-    records: list[ExtractedDocument] = []
-    for wid in work_ids:
-        tei_path = f"tei/{wid.rsplit('/', 1)[-1]}.tei.xml"
-        _write_tei(
-            output_dir / tei_path,
-            f'<div xmlns="{TEI_NS}"><head>Methods</head><p>Body text.</p></div>',
-        )
-        records.append(
-            ExtractedDocument(
-                work_id=wid,
-                tei_path=tei_path,
-                content_sha256="0" * 64,
-                extracted_at="2026-04-17T00:00:00.000000+00:00",
-            )
-        )
-    _write_extractions_jsonl(extractions_path, records)
 
 
 def _call_extract_works(
@@ -173,6 +148,21 @@ class TestExtractCodebook:
         assert set(kwargs) == {"model", "messages", "response_format"}
         assert kwargs["model"] == "m"
         assert kwargs["response_format"] == {"type": "json_object"}
+
+    def test_create_gets_reasoning_effort_when_set(self, ctx: CodebookContext) -> None:
+        client = MagicMock()
+        client.chat.completions.create.return_value = _mock_openai_response(
+            _valid_payload_json(ctx.payload_field_names)
+        )
+        extract_codebook(
+            "W1",
+            "body",
+            client=client,
+            endpoint=_ENDPOINT.model_copy(update={"reasoning_effort": "high"}),
+            ctx=ctx,
+        )
+        kwargs = client.chat.completions.create.call_args.kwargs
+        assert kwargs["reasoning_effort"] == "high"
 
     def test_bad_request_yields_llm_rejected_with_body(
         self, ctx: CodebookContext
@@ -284,6 +274,7 @@ class TestExtractWorksCascade:
             work_id="W1",
             tei_path=tei_path,
             content_sha256="0" * 64,
+            pdf_sha256="0" * 64,
             extracted_at="2026-04-17T00:00:00.000000+00:00",
         )
         _write_extractions_jsonl(extractions_path, [extracted])
@@ -337,6 +328,7 @@ class TestExtractWorksCascade:
             work_id="W1",
             tei_path=tei_path,
             content_sha256="0" * 64,
+            pdf_sha256="0" * 64,
             extracted_at="2026-04-17T00:00:00.000000+00:00",
         )
         client = MagicMock()
@@ -367,6 +359,7 @@ class TestExtractWorksCascade:
             work_id="W1",
             tei_path="tei/W1.tei.xml",
             content_sha256="0" * 64,
+            pdf_sha256="0" * 64,
             extracted_at="2026-04-17T00:00:00.000000+00:00",
         )
         _write_extractions_jsonl(extractions_path, [extracted])
@@ -396,22 +389,103 @@ class TestExtractWorksCascade:
 # --- run() end-to-end ---
 
 
+_CRITERIA_SPEC: dict[str, Any] = {
+    "id": "test-criteria",
+    "decision": {
+        "instructions": "Is this ocean particle tracking primary research?",
+        "criteria": {"true": "Tracks particles in the ocean.", "false": "Anything else."},
+    },
+}
+
+
+def _write_eligibility(
+    verdicts_path: Path,
+    verdicts: list[EligibilityVerdict],
+    corpus_dir: Path,
+    *,
+    corpus_id: str | None = None,
+    prompt_sha256: str | None = None,
+) -> None:
+    """Write stage 7 verdicts and the eligibility-meta.json stage 8 checks."""
+    from laglitsynth.corpus.load import load_corpus_meta
+    from laglitsynth.fulltext_eligibility.models import EligibilityMeta
+    from laglitsynth.io import write_meta
+    from laglitsynth.models import LlmMeta, RunMeta
+
+    verdicts_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(verdicts_path, "w") as f:
+        for v in verdicts:
+            f.write(v.model_dump_json() + "\n")
+    write_meta(
+        verdicts_path.parent / "eligibility-meta.json",
+        EligibilityMeta(
+            run=RunMeta(
+                tool="laglitsynth.fulltext_eligibility.assess",
+                run_at="2026-01-01T00:00:00.000000+00:00",
+                validation_skipped=0,
+            ),
+            llm=LlmMeta(
+                model="m",
+                base_url=_BASE,
+                decisions_url=_BASE + "/decisions",
+                reasoning_effort=None,
+                prompt_sha256=prompt_sha256
+                if prompt_sha256 is not None
+                else criteria_sha256(_CRITERIA_SPEC),
+            ),
+            corpus_id=corpus_id
+            if corpus_id is not None
+            else load_corpus_meta(corpus_dir).corpus_id,
+            input_extractions="extraction.jsonl",
+            input_count=len(verdicts),
+            eligible_count=sum(1 for v in verdicts if v.eligible is True),
+            excluded_count=sum(1 for v in verdicts if v.eligible is False),
+            tei_parse_failure_count=0,
+            llm_parse_failure_count=0,
+        ),
+    )
+
+
+def _inputs(
+    tmp_path: Path,
+    eligible: list[str],
+    *,
+    full_text: list[str] | None = None,
+) -> tuple[Path, Path, Path]:
+    """Write a corpus, stage 6 output and eligible=True verdicts for ``eligible``.
+
+    Returns the corpus dir, the verdicts path and the extractions path.
+    """
+    corpus = tmp_path / "corpus"
+    _write_corpus(corpus, [_make_work(w, abstract="abs") for w in eligible])
+    extractions = tmp_path / "fulltext-extraction" / "extraction.jsonl"
+    extractions.parent.mkdir(parents=True, exist_ok=True)
+    _write_full_text_for(extractions, full_text if full_text is not None else eligible, corpus)
+    verdicts = tmp_path / "fulltext-eligibility" / "elig-run" / "verdicts.jsonl"
+    _write_eligibility(
+        verdicts, [EligibilityVerdict(work_id=w, eligible=True) for w in eligible], corpus
+    )
+    return corpus, verdicts, extractions
+
+
 def _make_run_args(
     tmp_path: Path,
     *,
-    catalogue: Path,
+    corpus_dir: Path,
     eligibility_verdicts: Path,
     extractions: Path,
     dry_run: bool = False,
     skip_existing: bool = False,
     max_records: int | None = None,
-    run_id: str = "test-run-id",
+    run_id: str | None = "test-run-id",
     extraction_output_dir: Path | None = None,
     concurrency: int = 1,
+    reasoning_effort: str | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
-        catalogue=catalogue,
+        corpus_dir=corpus_dir,
         eligibility_verdicts=eligibility_verdicts,
+        eligibility_criteria=_CRITERIA_SPEC,
         extractions=extractions,
         extraction_output_dir=extraction_output_dir
         if extraction_output_dir is not None
@@ -422,11 +496,23 @@ def _make_run_args(
         model="m",
         base_url=_BASE,
         api_key="k",
+        reasoning_effort=reasoning_effort,
         max_records=max_records,
         skip_existing=skip_existing,
         dry_run=dry_run,
         config=None,
         concurrency=concurrency,
+    )
+
+
+def _one_work_args(tmp_path: Path, **kwargs: Any) -> argparse.Namespace:
+    corpus, verdicts, extractions = _inputs(tmp_path, ["W1"])
+    return _make_run_args(
+        tmp_path,
+        corpus_dir=corpus,
+        eligibility_verdicts=verdicts,
+        extractions=extractions,
+        **kwargs,
     )
 
 
@@ -442,40 +528,37 @@ def _make_mock_client(payload_content: str) -> MagicMock:
     return client
 
 
+def _run(args: argparse.Namespace, ctx: CodebookContext) -> MagicMock:
+    """Run stage 8 against a mock chat client; return the client."""
+    mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
+    with patch(
+        "laglitsynth.extraction_codebook.extract.chat_client",
+        return_value=mock_client,
+    ):
+        from laglitsynth.extraction_codebook.extract import run
+
+        run(args)
+    return mock_client
+
+
+def _meta(args: argparse.Namespace) -> dict[str, Any]:
+    meta: dict[str, Any] = json.loads(
+        (_resolved_out_dir(args) / "extraction-codebook-meta.json").read_text()
+    )
+    return meta
+
+
+def _corpus_id(corpus_dir: Path) -> str:
+    corpus_id: str = json.loads((corpus_dir / "corpus-meta.json").read_text())["corpus_id"]
+    return corpus_id
+
+
 class TestRun:
     def test_dry_run_writes_nothing(
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        extractions_path = tmp_path / "extraction.jsonl"
-        _write_works_jsonl(catalogue, [_make_work("W1", abstract="abs")])
-        _write_eligibility_verdicts_jsonl(
-            verdicts_path,
-            [EligibilityVerdict(work_id="W1", eligible=True)],
-        )
-        _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
-
-        args = _make_run_args(
-            tmp_path,
-            catalogue=catalogue,
-            eligibility_verdicts=verdicts_path,
-            extractions=extractions_path,
-            dry_run=True,
-        )
-
-        mock_client = _make_mock_client(
-            _valid_payload_json(ctx.payload_field_names)
-        )
-        with (
-            patch(
-                "laglitsynth.extraction_codebook.extract.chat_client",
-                return_value=mock_client,
-            ),
-        ):
-            from laglitsynth.extraction_codebook.extract import run
-
-            run(args)
+        args = _one_work_args(tmp_path, dry_run=True)
+        _run(args, ctx)
 
         out_dir = _resolved_out_dir(args)
         assert not out_dir.exists() or not any(out_dir.iterdir())
@@ -483,46 +566,15 @@ class TestRun:
     def test_writes_expected_files(
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        extractions_path = tmp_path / "extraction.jsonl"
-
-        works = [
-            _make_work("W1", abstract="about oceans"),
-            _make_work("W2", abstract="not relevant"),
-            _make_work("W3", abstract=None),
-        ]
-        _write_works_jsonl(catalogue, works)
-        _write_eligibility_verdicts_jsonl(
-            verdicts_path,
-            [
-                EligibilityVerdict(work_id="W1", eligible=True),
-                EligibilityVerdict(work_id="W2", eligible=True),
-                EligibilityVerdict(work_id="W3", eligible=True),
-            ],
-        )
         # W1, W2 have full text; W3 has no extraction → not extracted, not counted.
-        _write_full_text_for(extractions_path, extractions_path.parent, ["W1", "W2"])
-
+        corpus, verdicts, extractions = _inputs(
+            tmp_path, ["W1", "W2", "W3"], full_text=["W1", "W2"]
+        )
         args = _make_run_args(
-            tmp_path,
-            catalogue=catalogue,
-            eligibility_verdicts=verdicts_path,
-            extractions=extractions_path,
+            tmp_path, corpus_dir=corpus, eligibility_verdicts=verdicts, extractions=extractions
         )
 
-        mock_client = _make_mock_client(
-            _valid_payload_json(ctx.payload_field_names)
-        )
-        with (
-            patch(
-                "laglitsynth.extraction_codebook.extract.chat_client",
-                return_value=mock_client,
-            ),
-        ):
-            from laglitsynth.extraction_codebook.extract import run
-
-            run(args)
+        _run(args, ctx)
 
         out_dir = _resolved_out_dir(args)
         assert (out_dir / "records.jsonl").exists()
@@ -534,240 +586,214 @@ class TestRun:
             for line in (out_dir / "records.jsonl").read_text().splitlines()
             if line.strip()
         ]
-        # W3 has no extraction: full-text-only means it is not extracted.
         assert len(record_lines) == 2
 
-        meta = json.loads((out_dir / "extraction-codebook-meta.json").read_text())
+        meta = _meta(args)
         assert meta["input_count"] == 2
         assert meta["full_text_count"] == 2
         assert meta["skipped_count"] == 0
         assert meta["llm_parse_failure_count"] == 0
         assert "truncated_count" not in meta
-        assert "abstract_only_count" not in meta
-        assert "by_source_basis" not in meta
+        assert "input_catalogue" not in meta
+        assert meta["corpus_id"] == _corpus_id(corpus)
+        assert meta["eligibility_prompt_sha256"] == criteria_sha256(_CRITERIA_SPEC)
         assert meta["run"]["tool"] == "laglitsynth.extraction_codebook.extract"
         assert meta["llm"]["base_url"] == _BASE
         assert meta["llm"]["decisions_url"] is None
+        assert meta["llm"]["reasoning_effort"] is None
         assert "temperature" not in meta["llm"]
         assert meta["llm_rejected_count"] == 0
         assert meta["llm"]["prompt_sha256"] == hashlib.sha256(
             (ctx.system_prompt + "\n" + USER_TEMPLATE).encode("utf-8")
         ).hexdigest()
 
-    def test_config_yaml_inlines_codebook(
+    def test_reasoning_effort_sent_and_recorded(
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        extractions_path = tmp_path / "extraction.jsonl"
-        _write_works_jsonl(catalogue, [_make_work("W1", abstract="abs")])
-        _write_eligibility_verdicts_jsonl(
-            verdicts_path,
+        args = _one_work_args(tmp_path, reasoning_effort="high")
+
+        mock_client = _run(args, ctx)
+
+        kwargs = mock_client.chat.completions.create.call_args.kwargs
+        assert kwargs["reasoning_effort"] == "high"
+        assert _meta(args)["llm"]["reasoning_effort"] == "high"
+
+    def test_config_yaml_inlines_codebook_and_eligibility_criteria(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        args = _one_work_args(tmp_path)
+        args.eligibility_criteria = "examples/eligibility-criteria/lagrangian-oceanography.yaml"
+        _write_eligibility(
+            args.eligibility_verdicts,
             [EligibilityVerdict(work_id="W1", eligible=True)],
-        )
-        _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
-
-        args = _make_run_args(
-            tmp_path,
-            catalogue=catalogue,
-            eligibility_verdicts=verdicts_path,
-            extractions=extractions_path,
+            args.corpus_dir,
+            prompt_sha256=criteria_sha256(args.eligibility_criteria),
         )
 
-        mock_client = _make_mock_client(
-            _valid_payload_json(ctx.payload_field_names)
-        )
-        with (
-            patch(
-                "laglitsynth.extraction_codebook.extract.chat_client",
-                return_value=mock_client,
-            ),
-        ):
-            from laglitsynth.extraction_codebook.extract import run
-
-            run(args)
+        _run(args, ctx)
 
         import yaml
 
         config = yaml.safe_load(
             (_resolved_out_dir(args) / "config.yaml").read_text()
         )
-        # Codebook embedded as a mapping, not a path string.
+        # Codebook and criteria embedded as mappings, not path strings.
         assert isinstance(config["codebook"], dict)
         assert config["codebook"]["id"] == "lagrangian-oceanography"
         assert config["codebook"]["fields"]
+        assert isinstance(config["eligibility_criteria"], dict)
+        assert config["eligibility_criteria"]["decision"]
         # run_id excluded; replay generates a fresh one.
         assert "run_id" not in config
         # config flag itself excluded.
         assert "config" not in config
         assert "api_key" not in config
 
-    def test_skip_existing_refuses_when_prompt_sha256_differs(
-        self, tmp_path: Path
+    def test_eligibility_meta_corpus_mismatch_exits(
+        self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        extractions_path = tmp_path / "extraction.jsonl"
-        _write_works_jsonl(catalogue, [_make_work("W1", abstract="first abstract")])
-        _write_eligibility_verdicts_jsonl(
-            verdicts_path,
+        args = _one_work_args(tmp_path)
+        _write_eligibility(
+            args.eligibility_verdicts,
             [EligibilityVerdict(work_id="W1", eligible=True)],
-        )
-        _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
-
-        run_id = "stale-run"
-        out_dir = tmp_path / "extraction-codebook" / run_id
-        out_dir.mkdir(parents=True)
-
-        # Write a meta file with a deliberately wrong prompt_sha256.
-        stale_meta = {
-            "run": {
-                "tool": "laglitsynth.extraction_codebook.extract",
-                "run_at": "2026-01-01T00:00:00.000000+00:00",
-                "validation_skipped": 0,
-            },
-            "llm": {
-                "model": "m",
-                "base_url": _BASE,
-                "decisions_url": None,
-                "prompt_sha256": "0" * 64,
-            },
-            "input_catalogue": str(catalogue),
-            "input_eligibility_verdicts": str(verdicts_path),
-            "input_extractions": str(extractions_path),
-            "input_count": 1,
-            "full_text_count": 1,
-            "skipped_count": 0,
-            "llm_parse_failure_count": 0,
-            "llm_timeout_count": 0,
-        }
-        # Validate the dict is a real valid ExtractionCodebookMeta shape; if the
-        # model changes, this assertion fails loudly instead of silently.
-        from laglitsynth.extraction_codebook.models import ExtractionCodebookMeta
-
-        ExtractionCodebookMeta.model_validate(stale_meta)
-        (out_dir / "extraction-codebook-meta.json").write_text(json.dumps(stale_meta))
-
-        args = _make_run_args(
-            tmp_path,
-            catalogue=catalogue,
-            eligibility_verdicts=verdicts_path,
-            extractions=extractions_path,
-            skip_existing=True,
-            run_id=run_id,
+            args.corpus_dir,
+            corpus_id="another-corpus",
         )
 
-        with (
-            patch("laglitsynth.extraction_codebook.extract.chat_client"),
-        ):
-            from laglitsynth.extraction_codebook.extract import run
+        with pytest.raises(SystemExit) as exc_info:
+            _run(args, ctx)
+        msg = str(exc_info.value)
+        assert "eligibility-meta.json" in msg
+        assert "re-run fulltext-eligibility" in msg
+        assert not _resolved_out_dir(args).exists()
 
-            with pytest.raises(SystemExit, match="prompt_sha256"):
-                run(args)
-
-    def test_validation_skipped_counts_invalid_catalogue_lines(
+    def test_eligibility_criteria_hash_mismatch_exits(
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
-        """meta.run.validation_skipped reflects malformed lines in catalogue and verdicts."""
-        # One valid work with a valid eligibility verdict; one malformed line in
-        # each of catalogue and verdicts.  Two skipped total.
-        catalogue = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        extractions_path = tmp_path / "extraction.jsonl"
-
-        work = _make_work("W1", abstract="about oceans")
-
-        with open(catalogue, "w") as f:
-            f.write(work.model_dump_json() + "\n")
-            f.write('{"not_a_real_field": "x"}\n')
-
-        valid_verdict = EligibilityVerdict(
-            work_id="W1", eligible=True
-        )
-        with open(verdicts_path, "w") as f:
-            f.write(valid_verdict.model_dump_json() + "\n")
-            f.write('{"not_a_real_field": "y"}\n')
-
-        _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
-
-        args = _make_run_args(
-            tmp_path,
-            catalogue=catalogue,
-            eligibility_verdicts=verdicts_path,
-            extractions=extractions_path,
-            run_id="skipped-test-run",
+        args = _one_work_args(tmp_path)
+        _write_eligibility(
+            args.eligibility_verdicts,
+            [EligibilityVerdict(work_id="W1", eligible=True)],
+            args.corpus_dir,
+            prompt_sha256="0" * 64,
         )
 
-        mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
-        with (
-            patch(
-                "laglitsynth.extraction_codebook.extract.chat_client",
-                return_value=mock_client,
-            ),
-        ):
-            from laglitsynth.extraction_codebook.extract import run
+        with pytest.raises(SystemExit, match="--eligibility-criteria"):
+            _run(args, ctx)
+        assert not _resolved_out_dir(args).exists()
 
-            run(args)
-
-        out_dir = _resolved_out_dir(args)
-        meta = json.loads((out_dir / "extraction-codebook-meta.json").read_text())
-        assert meta["run"]["validation_skipped"] == 2
-
-    def test_skip_existing_processes_only_delta(
+    def test_missing_eligibility_meta_exits(
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        extractions_path = tmp_path / "extraction.jsonl"
-        works = [
-            _make_work("W1", abstract="first abstract"),
-            _make_work("W2", abstract="second abstract"),
-        ]
-        _write_works_jsonl(catalogue, works)
-        _write_eligibility_verdicts_jsonl(
-            verdicts_path,
+        args = _one_work_args(tmp_path)
+        (args.eligibility_verdicts.parent / "eligibility-meta.json").unlink()
+
+        with pytest.raises(SystemExit, match="run fulltext-eligibility first"):
+            _run(args, ctx)
+        assert not _resolved_out_dir(args).exists()
+
+    def test_extraction_meta_corpus_mismatch_exits(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        args = _one_work_args(tmp_path)
+        _write_full_text_for(args.extractions, ["W1"], args.corpus_dir, corpus_id="other")
+
+        with pytest.raises(SystemExit, match="re-run fulltext-extraction"):
+            _run(args, ctx)
+
+    def test_stale_pdf_sha256_extraction_ignored(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        args = _one_work_args(tmp_path)
+        _write_full_text_for(
+            args.extractions, ["W1"], args.corpus_dir, pdf_sha256={"W1": "e" * 64}
+        )
+
+        mock_client = _run(args, ctx)
+
+        mock_client.chat.completions.create.assert_not_called()
+        assert _meta(args)["input_count"] == 0
+
+    def test_verdict_outside_corpus_exits(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        args = _one_work_args(tmp_path)
+        _write_eligibility(
+            args.eligibility_verdicts,
             [
                 EligibilityVerdict(work_id="W1", eligible=True),
                 EligibilityVerdict(work_id="W2", eligible=True),
             ],
+            args.corpus_dir,
         )
-        _write_full_text_for(extractions_path, extractions_path.parent, ["W1", "W2"])
 
-        run_id = "resume-run"
-        out_dir = tmp_path / "extraction-codebook" / run_id
+        with pytest.raises(SystemExit, match="W2"):
+            _run(args, ctx)
+
+    def test_skip_existing_refuses_when_prompt_sha256_differs(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        args = _one_work_args(tmp_path, skip_existing=True, run_id="stale-run")
+        out_dir = _resolved_out_dir(args)
+        out_dir.mkdir(parents=True)
+        (out_dir / "extraction-codebook-meta.json").write_text(
+            json.dumps(_stale_meta(_corpus_id(args.corpus_dir), "0" * 64))
+        )
+
+        with pytest.raises(SystemExit, match="prompt_sha256"):
+            _run(args, ctx)
+
+    def test_skip_existing_refuses_when_corpus_id_differs(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        args = _one_work_args(tmp_path, skip_existing=True, run_id="stale-run")
+        out_dir = _resolved_out_dir(args)
+        out_dir.mkdir(parents=True)
+        prompt_sha256 = hashlib.sha256(
+            (ctx.system_prompt + "\n" + USER_TEMPLATE).encode("utf-8")
+        ).hexdigest()
+        (out_dir / "extraction-codebook-meta.json").write_text(
+            json.dumps(_stale_meta("another-corpus", prompt_sha256))
+        )
+
+        with pytest.raises(SystemExit, match="another-corpus"):
+            _run(args, ctx)
+
+    def test_validation_skipped_counts_invalid_verdict_lines(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        """meta.run.validation_skipped reflects malformed verdict and extraction lines."""
+        args = _one_work_args(tmp_path, run_id="skipped-test-run")
+        with open(args.eligibility_verdicts, "a") as f:
+            f.write('{"not_a_real_field": "y"}\n')
+        with open(args.extractions, "a") as f:
+            f.write('{"not_a_real_field": "x"}\n')
+
+        _run(args, ctx)
+
+        assert _meta(args)["run"]["validation_skipped"] == 2
+
+    def test_skip_existing_processes_only_delta(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        corpus, verdicts, extractions = _inputs(tmp_path, ["W1", "W2"])
+        args = _make_run_args(
+            tmp_path,
+            corpus_dir=corpus,
+            eligibility_verdicts=verdicts,
+            extractions=extractions,
+            skip_existing=True,
+            run_id="resume-run",
+        )
+        out_dir = _resolved_out_dir(args)
         out_dir.mkdir(parents=True)
         # Prior record for W1 only — built via the same dynamic record_model
         # the runtime would use, so the read-back validates cleanly.
-        record_model = ctx.record_model
         payload_fields = {name: None for name in ctx.payload_field_names}
-        prior = record_model(
-            work_id="W1",
-            reason=None,
-            **payload_fields,
-        )
+        prior = ctx.record_model(work_id="W1", reason=None, **payload_fields)
         (out_dir / "records.jsonl").write_text(prior.model_dump_json() + "\n")
 
-        args = _make_run_args(
-            tmp_path,
-            catalogue=catalogue,
-            eligibility_verdicts=verdicts_path,
-            extractions=extractions_path,
-            skip_existing=True,
-            run_id=run_id,
-        )
-
-        mock_client = _make_mock_client(
-            _valid_payload_json(ctx.payload_field_names)
-        )
-        with (
-            patch(
-                "laglitsynth.extraction_codebook.extract.chat_client",
-                return_value=mock_client,
-            ),
-        ):
-            from laglitsynth.extraction_codebook.extract import run
-
-            run(args)
+        mock_client = _run(args, ctx)
 
         # Only W2 was extracted (W1 was skipped).
         assert mock_client.chat.completions.create.call_count == 1
@@ -783,71 +809,96 @@ class TestRun:
         ]
         assert len(record_lines) == 2
 
-        meta = json.loads((out_dir / "extraction-codebook-meta.json").read_text())
+        meta = _meta(args)
         assert meta["full_text_count"] == 2
         assert meta["skipped_count"] == 0
+
+
+def _stale_meta(corpus_id: str, prompt_sha256: str) -> dict[str, Any]:
+    """A valid ``ExtractionCodebookMeta`` dict for the resume guards."""
+    from laglitsynth.extraction_codebook.models import ExtractionCodebookMeta
+
+    meta = {
+        "run": {
+            "tool": "laglitsynth.extraction_codebook.extract",
+            "run_at": "2026-01-01T00:00:00.000000+00:00",
+            "validation_skipped": 0,
+        },
+        "llm": {
+            "model": "m",
+            "base_url": _BASE,
+            "decisions_url": None,
+            "reasoning_effort": None,
+            "prompt_sha256": prompt_sha256,
+        },
+        "corpus_id": corpus_id,
+        "eligibility_prompt_sha256": criteria_sha256(_CRITERIA_SPEC),
+        "input_eligibility_verdicts": "verdicts.jsonl",
+        "input_extractions": "extraction.jsonl",
+        "input_count": 1,
+        "full_text_count": 1,
+        "skipped_count": 0,
+        "llm_parse_failure_count": 0,
+        "llm_timeout_count": 0,
+    }
+    # Fails loudly if the model changes under this fixture.
+    ExtractionCodebookMeta.model_validate(meta)
+    return meta
 
 
 # --- CLI wiring ---
 
 
+_CLI_ARGS = [
+    "extraction-codebook",
+    "--corpus-dir",
+    "/tmp/corpus",
+    "--eligibility-verdicts",
+    "/tmp/ev.jsonl",
+    "--extractions",
+    "/tmp/x.jsonl",
+]
+
+
+def _parse(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command")
+    from laglitsynth.extraction_codebook.extract import build_subparser
+
+    build_subparser(subparsers)
+    return parser.parse_args(argv)
+
+
 class TestCliWiring:
     def test_subparser_registered(self) -> None:
-        parser = argparse.ArgumentParser()
-        subparsers = parser.add_subparsers(dest="command")
-        from laglitsynth.extraction_codebook.extract import build_subparser
-
-        build_subparser(subparsers)
-        parsed = parser.parse_args(
-            [
-                "extraction-codebook",
-                "--catalogue",
-                "/tmp/cat.jsonl",
-                "--eligibility-verdicts",
-                "/tmp/ev.jsonl",
-                "--extractions",
-                "/tmp/x.jsonl",
-            ]
-        )
+        parsed = _parse(_CLI_ARGS)
         assert parsed.command == "extraction-codebook"
-        assert parsed.catalogue == Path("/tmp/cat.jsonl")
+        assert parsed.corpus_dir == Path("/tmp/corpus")
         assert parsed.eligibility_verdicts == Path("/tmp/ev.jsonl")
         assert parsed.extractions == Path("/tmp/x.jsonl")
+        assert parsed.eligibility_criteria == (
+            "examples/eligibility-criteria/lagrangian-oceanography.yaml"
+        )
+        assert parsed.reasoning_effort is None
+
+    def test_catalogue_flag_is_gone(self) -> None:
+        with pytest.raises(SystemExit):
+            _parse([*_CLI_ARGS, "--catalogue", "/tmp/cat.jsonl"])
+
+    def test_reasoning_effort_choices(self) -> None:
+        assert _parse([*_CLI_ARGS, "--reasoning-effort", "high"]).reasoning_effort == "high"
+        with pytest.raises(SystemExit):
+            _parse([*_CLI_ARGS, "--reasoning-effort", "extreme"])
 
     def test_main_cli_includes_subparser(self) -> None:
         from laglitsynth.cli import main
 
         with patch("laglitsynth.extraction_codebook.extract.run") as mock_run:
-            main(
-                [
-                    "extraction-codebook",
-                    "--catalogue",
-                    "/tmp/cat.jsonl",
-                    "--eligibility-verdicts",
-                    "/tmp/ev.jsonl",
-                    "--extractions",
-                    "/tmp/x.jsonl",
-                ]
-            )
+            main(_CLI_ARGS)
         assert mock_run.called
 
     def test_model_and_base_url_have_no_default(self) -> None:
-        parser = argparse.ArgumentParser()
-        subparsers = parser.add_subparsers(dest="command")
-        from laglitsynth.extraction_codebook.extract import build_subparser
-
-        build_subparser(subparsers)
-        parsed = parser.parse_args(
-            [
-                "extraction-codebook",
-                "--catalogue",
-                "/tmp/cat.jsonl",
-                "--eligibility-verdicts",
-                "/tmp/ev.jsonl",
-                "--extractions",
-                "/tmp/x.jsonl",
-            ]
-        )
+        parsed = _parse(_CLI_ARGS)
         assert parsed.model is None
         assert parsed.base_url is None
         assert not hasattr(parsed, "decisions_url")
@@ -856,8 +907,14 @@ class TestCliWiring:
 # --- _active_eligible_works join ---
 
 
+def _write_verdicts(path: Path, verdicts: list[EligibilityVerdict]) -> None:
+    with open(path, "w") as f:
+        for v in verdicts:
+            f.write(v.model_dump_json() + "\n")
+
+
 class TestActiveEligibleWorks:
-    """Unit tests for the stage-8 eligibility inline-join helper."""
+    """Unit tests for the stage-8 eligibility join against the corpus works."""
 
     def test_eligibility_gate_filters_to_eligible_true(
         self, tmp_path: Path
@@ -868,53 +925,32 @@ class TestActiveEligibleWorks:
             _make_work("W2", abstract="Second"),
             _make_work("W3", abstract="Third"),
         ]
-        verdicts = [
-            EligibilityVerdict(work_id="W1", eligible=True),
-            EligibilityVerdict(work_id="W2", eligible=False),
-            EligibilityVerdict(work_id="W3", eligible=None, reason="no-source"),
-        ]
-        catalogue_path = tmp_path / "catalogue.jsonl"
         verdicts_path = tmp_path / "verdicts.jsonl"
-        _write_works_jsonl(catalogue_path, works)
-        _write_eligibility_verdicts_jsonl(verdicts_path, verdicts)
+        _write_verdicts(
+            verdicts_path,
+            [
+                EligibilityVerdict(work_id="W1", eligible=True),
+                EligibilityVerdict(work_id="W2", eligible=False),
+                EligibilityVerdict(work_id="W3", eligible=None, reason="llm-timeout"),
+            ],
+        )
 
-        result = list(_active_eligible_works(catalogue_path, verdicts_path))
-        assert len(result) == 1
-        assert result[0].id == "W1"
+        result = list(_active_eligible_works(works, verdicts_path))
+        assert [w.id for w in result] == ["W1"]
 
-    def test_non_eligible_works_are_skipped(self, tmp_path: Path) -> None:
-        """Works with eligible=False are excluded."""
-        works = [
-            _make_work("W1", abstract="First"),
-            _make_work("W2", abstract="Second"),
-        ]
-        verdicts = [
-            EligibilityVerdict(work_id="W1", eligible=False),
-            EligibilityVerdict(work_id="W2", eligible=False),
-        ]
-        catalogue_path = tmp_path / "catalogue.jsonl"
+    def test_verdict_outside_corpus_exits(self, tmp_path: Path) -> None:
+        """A verdict for a work_id absent from the corpus exits naming it."""
         verdicts_path = tmp_path / "verdicts.jsonl"
-        _write_works_jsonl(catalogue_path, works)
-        _write_eligibility_verdicts_jsonl(verdicts_path, verdicts)
+        _write_verdicts(
+            verdicts_path,
+            [
+                EligibilityVerdict(work_id="W1", eligible=True),
+                EligibilityVerdict(work_id="W2", eligible=True),
+            ],
+        )
 
-        result = list(_active_eligible_works(catalogue_path, verdicts_path))
-        assert result == []
-
-    def test_catalogue_miss_raises_key_error(self, tmp_path: Path) -> None:
-        """A verdict for a work_id absent from the catalogue raises KeyError."""
-        works = [_make_work("W1", abstract="First")]
-        verdicts = [
-            EligibilityVerdict(work_id="W1", eligible=True),
-            # W2 is eligible but not in the catalogue — data inconsistency.
-            EligibilityVerdict(work_id="W2", eligible=True),
-        ]
-        catalogue_path = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        _write_works_jsonl(catalogue_path, works)
-        _write_eligibility_verdicts_jsonl(verdicts_path, verdicts)
-
-        with pytest.raises(KeyError, match="W2"):
-            list(_active_eligible_works(catalogue_path, verdicts_path))
+        with pytest.raises(SystemExit, match="W2"):
+            list(_active_eligible_works([_make_work("W1")], verdicts_path))
 
 
 # --- run() stderr output ---
@@ -924,35 +960,10 @@ def test_run_dir_printed_to_stderr_at_end(
     tmp_path: Path, ctx: CodebookContext, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """run() prints 'Run dir: <output_dir>' to stderr at the end of a normal (non-dry) run."""
-    catalogue = tmp_path / "catalogue.jsonl"
-    verdicts_path = tmp_path / "verdicts.jsonl"
-    extractions_path = tmp_path / "extraction.jsonl"
-    _write_works_jsonl(catalogue, [_make_work("W1", abstract="abs")])
-    _write_eligibility_verdicts_jsonl(
-        verdicts_path,
-        [EligibilityVerdict(work_id="W1", eligible=True)],
-    )
-    _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
-
-    args = _make_run_args(
-        tmp_path,
-        catalogue=catalogue,
-        eligibility_verdicts=verdicts_path,
-        extractions=extractions_path,
-        run_id="test-stderr-run",
-    )
+    args = _one_work_args(tmp_path, run_id="test-stderr-run")
     expected_dir = tmp_path / "extraction-codebook" / "test-stderr-run"
 
-    mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
-    with (
-        patch(
-            "laglitsynth.extraction_codebook.extract.chat_client",
-            return_value=mock_client,
-        ),
-    ):
-        from laglitsynth.extraction_codebook.extract import run
-
-        run(args)
+    _run(args, ctx)
 
     err = capsys.readouterr().err
     assert f"Output dir: {expected_dir}" in err
@@ -966,69 +977,27 @@ def test_run_dir_printed_to_stderr_at_end(
 
 def test_concurrency_default_is_one() -> None:
     """Stage 8 --concurrency defaults to 1 (prefill-bound stage)."""
-    import argparse as _argparse
-
-    from laglitsynth.extraction_codebook.extract import build_subparser
-
-    p = _argparse.ArgumentParser()
-    subs = p.add_subparsers()
-    build_subparser(subs)
-    args = p.parse_args(
-        [
-            "extraction-codebook",
-            "--catalogue", "c.jsonl",
-            "--eligibility-verdicts", "v.jsonl",
-            "--extractions", "e.jsonl",
-        ]
-    )
-    assert args.concurrency == 1
+    assert _parse(_CLI_ARGS).concurrency == 1
 
 
 def test_concurrency_flag_threaded_to_extract_works(
     tmp_path: Path, ctx: CodebookContext
 ) -> None:
     """--concurrency N is forwarded to extract_works as concurrency=N."""
-    catalogue = tmp_path / "catalogue.jsonl"
-    verdicts_path = tmp_path / "verdicts.jsonl"
-    extractions_path = tmp_path / "extraction.jsonl"
-    _write_works_jsonl(catalogue, [_make_work("W1", abstract="abs")])
-    _write_eligibility_verdicts_jsonl(
-        verdicts_path,
-        [EligibilityVerdict(work_id="W1", eligible=True)],
-    )
-    _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
-
-    args = _make_run_args(
-        tmp_path,
-        catalogue=catalogue,
-        eligibility_verdicts=verdicts_path,
-        extractions=extractions_path,
-        concurrency=3,
-    )
+    args = _one_work_args(tmp_path, concurrency=3)
 
     captured: dict[str, Any] = {}
-    original_extract = __import__(
-        "laglitsynth.extraction_codebook.extract", fromlist=["extract_works"]
-    ).extract_works
+    original_extract = extract_works
 
     def spy_extract(*a: Any, **kw: Any) -> Any:
         captured["concurrency"] = kw.get("concurrency")
         return original_extract(*a, **kw)
 
-    mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
-    with (
-        patch(
-            "laglitsynth.extraction_codebook.extract.chat_client",
-            return_value=mock_client,
-        ),
-        patch(
-            "laglitsynth.extraction_codebook.extract.extract_works",
-            side_effect=spy_extract,
-        ),
+    with patch(
+        "laglitsynth.extraction_codebook.extract.extract_works",
+        side_effect=spy_extract,
     ):
-        from laglitsynth.extraction_codebook.extract import run
-
-        run(args)
+        _run(args, ctx)
 
     assert captured["concurrency"] == 3
 
@@ -1039,35 +1008,10 @@ def test_concurrency_one_uses_sequential_path(
     """concurrency=1 does not create a ThreadPoolExecutor."""
     from concurrent.futures import ThreadPoolExecutor as TPE
 
-    catalogue = tmp_path / "catalogue.jsonl"
-    verdicts_path = tmp_path / "verdicts.jsonl"
-    extractions_path = tmp_path / "extraction.jsonl"
-    _write_works_jsonl(catalogue, [_make_work("W1", abstract="abs")])
-    _write_eligibility_verdicts_jsonl(
-        verdicts_path,
-        [EligibilityVerdict(work_id="W1", eligible=True)],
-    )
-    _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
+    args = _one_work_args(tmp_path, concurrency=1)
 
-    args = _make_run_args(
-        tmp_path,
-        catalogue=catalogue,
-        eligibility_verdicts=verdicts_path,
-        extractions=extractions_path,
-        concurrency=1,
-    )
-
-    mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
-    with (
-        patch(
-            "laglitsynth.extraction_codebook.extract.chat_client",
-            return_value=mock_client,
-        ),
-        patch("laglitsynth.concurrency.ThreadPoolExecutor", wraps=TPE) as mock_tpe,
-    ):
-        from laglitsynth.extraction_codebook.extract import run
-
-        run(args)
+    with patch("laglitsynth.concurrency.ThreadPoolExecutor", wraps=TPE) as mock_tpe:
+        _run(args, ctx)
 
     mock_tpe.assert_not_called()
 
@@ -1076,44 +1020,33 @@ def test_concurrency_one_uses_sequential_path(
 
 
 class TestConventionalPaths:
-    def _layout(self, data_dir: Path, run_id: str = TEST_RUN_ID) -> None:
-        catalogue = layout.deduplicated_path(data_dir)
-        catalogue.parent.mkdir(parents=True, exist_ok=True)
-        _write_works_jsonl(catalogue, [_make_work("W1", abstract="about oceans")])
-        verdicts_path = layout.eligibility_verdicts_path(data_dir, run_id)
-        verdicts_path.parent.mkdir(parents=True, exist_ok=True)
-        _write_eligibility_verdicts_jsonl(
-            verdicts_path, [EligibilityVerdict(work_id="W1", eligible=True)]
+    def _layout(self, data_dir: Path, analysis_run_id: str = TEST_ANALYSIS_RUN_ID) -> None:
+        corpus = layout.corpus_dir(data_dir)
+        _write_corpus(
+            corpus, [_make_work("W1", abstract="about oceans")], analysis_run_id=analysis_run_id
+        )
+        _write_eligibility(
+            layout.eligibility_verdicts_path(data_dir, analysis_run_id),
+            [EligibilityVerdict(work_id="W1", eligible=True)],
+            corpus,
         )
         extractions = layout.extractions_path(data_dir)
         extractions.parent.mkdir(parents=True, exist_ok=True)
-        _write_full_text_for(extractions, extractions.parent, ["W1"])
+        _write_full_text_for(extractions, ["W1"], corpus)
 
     def _bare_args(self, data_dir: Path) -> argparse.Namespace:
         args = _make_run_args(
             data_dir,
-            catalogue=Path("unused"),
+            corpus_dir=Path("unused"),
             eligibility_verdicts=Path("unused"),
             extractions=Path("unused"),
         )
-        args.catalogue = None
+        args.corpus_dir = None
         args.eligibility_verdicts = None
         args.extractions = None
         args.extraction_output_dir = None
         args.run_id = None
         return args
-
-    def _run(self, args: argparse.Namespace, ctx: CodebookContext) -> None:
-        mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
-        with (
-            patch(
-                "laglitsynth.extraction_codebook.extract.chat_client",
-                return_value=mock_client,
-            ),
-        ):
-            from laglitsynth.extraction_codebook.extract import run
-
-            run(args)
 
     def _meta(self, data_dir: Path, run_id: str) -> dict[str, Any]:
         out_dir = data_dir / layout.EXTRACTION_CODEBOOK_SUBDIR / run_id
@@ -1126,71 +1059,62 @@ class TestConventionalPaths:
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
         self._layout(tmp_path)
-        _write_manifest(tmp_path)
 
-        self._run(self._bare_args(tmp_path), ctx)
+        _run(self._bare_args(tmp_path), ctx)
 
-        meta = self._meta(tmp_path, TEST_RUN_ID)
-        assert meta["input_catalogue"] == str(layout.deduplicated_path(tmp_path))
+        meta = self._meta(tmp_path, TEST_ANALYSIS_RUN_ID)
         assert meta["input_eligibility_verdicts"] == str(
-            layout.eligibility_verdicts_path(tmp_path, TEST_RUN_ID)
+            layout.eligibility_verdicts_path(tmp_path, TEST_ANALYSIS_RUN_ID)
         )
         assert meta["input_extractions"] == str(layout.extractions_path(tmp_path))
         assert meta["input_count"] == 1
 
+    def test_run_id_defaults_to_corpus_analysis_run_id(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        self._layout(tmp_path, analysis_run_id="analysis-xyz")
+
+        _run(self._bare_args(tmp_path), ctx)
+
+        assert self._meta(tmp_path, "analysis-xyz")["input_count"] == 1
+
     def test_explicit_flags_win(self, tmp_path: Path, ctx: CodebookContext) -> None:
         self._layout(tmp_path)
-        _write_manifest(tmp_path, run_id="from-manifest")
-
-        explicit_catalogue = tmp_path / "explicit-catalogue.jsonl"
-        _write_works_jsonl(explicit_catalogue, [_make_work("W1", abstract="abs")])
-        explicit_verdicts = tmp_path / "explicit-verdicts.jsonl"
-        _write_eligibility_verdicts_jsonl(
-            explicit_verdicts, [EligibilityVerdict(work_id="W1", eligible=True)]
+        explicit_verdicts = tmp_path / "explicit" / "verdicts.jsonl"
+        _write_eligibility(
+            explicit_verdicts,
+            [EligibilityVerdict(work_id="W1", eligible=True)],
+            layout.corpus_dir(tmp_path),
         )
         args = self._bare_args(tmp_path)
-        args.catalogue = explicit_catalogue
         args.eligibility_verdicts = explicit_verdicts
         args.run_id = "explicit-run-id"
-        self._run(args, ctx)
+
+        _run(args, ctx)
 
         assert not (
-            tmp_path / layout.EXTRACTION_CODEBOOK_SUBDIR / "from-manifest"
+            tmp_path / layout.EXTRACTION_CODEBOOK_SUBDIR / TEST_ANALYSIS_RUN_ID
         ).exists()
         meta = self._meta(tmp_path, "explicit-run-id")
-        assert meta["input_catalogue"] == str(explicit_catalogue)
         assert meta["input_eligibility_verdicts"] == str(explicit_verdicts)
 
     def test_missing_eligibility_verdicts_names_upstream_and_flag(
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
         self._layout(tmp_path)
-        layout.eligibility_verdicts_path(tmp_path, TEST_RUN_ID).unlink()
-        _write_manifest(tmp_path)
+        layout.eligibility_verdicts_path(tmp_path, TEST_ANALYSIS_RUN_ID).unlink()
 
         with pytest.raises(SystemExit) as exc_info:
-            self._run(self._bare_args(tmp_path), ctx)
+            _run(self._bare_args(tmp_path), ctx)
         msg = str(exc_info.value)
         assert "run fulltext-eligibility first" in msg
         assert "--eligibility-verdicts" in msg
 
-    def test_missing_catalogue_names_upstream_and_flag(
+    def test_missing_corpus_names_upstream_and_flag(
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
-        _write_manifest(tmp_path)
-
         with pytest.raises(SystemExit) as exc_info:
-            self._run(self._bare_args(tmp_path), ctx)
+            _run(self._bare_args(tmp_path), ctx)
         msg = str(exc_info.value)
-        assert "run catalogue-dedup first" in msg
-        assert "--catalogue" in msg
-
-    def test_no_manifest_and_no_run_id_exits(
-        self, tmp_path: Path, ctx: CodebookContext
-    ) -> None:
-        self._layout(tmp_path)
-
-        with pytest.raises(SystemExit) as exc_info:
-            self._run(self._bare_args(tmp_path), ctx)
-        assert "--run-id" in str(exc_info.value)
-        assert not (tmp_path / layout.EXTRACTION_CODEBOOK_SUBDIR).exists()
+        assert "run corpus-assemble first" in msg
+        assert "--corpus-dir" in msg

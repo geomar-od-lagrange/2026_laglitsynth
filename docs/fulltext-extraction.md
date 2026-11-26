@@ -1,7 +1,8 @@
 # Full-text extraction
 
-Parse retrieved PDFs into structured sections. Stage 5 (retrieval)
-produces the input (PDFs on disk); downstream stages (eligibility, data
+Parse the corpus PDFs into structured sections. `corpus-assemble`
+produces the input (the PDF copies in `data/corpus/pdfs/`, listed in
+`data/corpus/provenance.jsonl`); downstream stages (eligibility, data
 extraction) consume the output. Separating extraction from retrieval
 means:
 
@@ -58,8 +59,8 @@ From [grobid-lessons.md](grobid-lessons.md):
 GROBID's TEI XML output is saved to disk as the canonical extraction
 artefact — one `.tei.xml` per PDF. The stored `ExtractedDocument`
 record carries only `work_id`, `tei_path` (relative to the output
-directory), `content_sha256` of the TEI bytes, and the
-`extracted_at` timestamp. Section text, figures, citations, and
+directory), `content_sha256` of the TEI bytes, `pdf_sha256` of the corpus
+PDF it came from, and the `extracted_at` timestamp. Section text, figures, citations, and
 bibliography are not persisted in the JSONL; they are parsed lazily
 from the TEI on demand (see "Reading TEI" below).
 
@@ -108,6 +109,7 @@ class ExtractedDocument(BaseModel):
     work_id: str                 # OpenAlex ID
     tei_path: str                # relative to output_dir, e.g. "tei/W123.tei.xml"
     content_sha256: str          # sha256 hex digest of the TEI bytes on disk
+    pdf_sha256: str              # CorpusPdf.content_sha256 of the source PDF
     extracted_at: str            # per-record wall-clock timestamp
 
     def open_tei(self, output_dir: Path) -> TeiDocument:
@@ -124,6 +126,11 @@ Consumers join with their `output_dir` at read time — typically via
 time. The hash becomes the stable identity for a given extraction
 across re-runs (a newer GROBID version may emit different TEI for the
 same `work_id`).
+
+`pdf_sha256` is the corpus copy's `content_sha256` at extraction time.
+`extraction.jsonl` is appended to, so a work re-extracted after its PDF
+changed has several records; the last one counts. Stages 7 and 8 use a
+record only when its `pdf_sha256` matches the current corpus copy.
 
 For works where GROBID fails, no `ExtractedDocument` is created — the
 absence is the signal.
@@ -170,12 +177,15 @@ on the first accessor call.
 class ExtractionMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run: RunMeta      # tool, tool_version, run_at, validation_skipped
+    corpus_id: str    # CorpusMeta.corpus_id of the corpus the PDFs came from
     grobid_version: str
-    total_pdfs: int
+    total_pdfs: int   # corpus works with a PDF
     extracted_count: int
     failed_count: int
-    invalid_stem_count: int
 ```
+
+Stages 7 and 8 exit when `extraction-meta.json` is missing or names
+another `corpus_id` than the current corpus.
 
 `grobid_version` is read from the GROBID `/api/version` probe at startup;
 if that probe fails it falls back to the literal string `"unknown"`.
@@ -202,7 +212,7 @@ consumed by downstream stages (eligibility, data extraction).
 
 ```
 laglitsynth fulltext-extraction \
-    [--pdf-dir data/pdfs/] \
+    [--corpus-dir data/corpus/] \
     [--output-dir data/fulltext-extraction/] \
     [--data-dir data/] \
     [--grobid-url http://localhost:8070] \
@@ -213,8 +223,9 @@ laglitsynth fulltext-extraction \
 
 ### Arguments
 
-- `--pdf-dir`: directory containing retrieved PDFs. Defaults to the PDF
-  store `<data-dir>/pdfs/`; exits naming `fulltext-retrieval` when absent.
+- `--corpus-dir`: the corpus written by `corpus-assemble`. Defaults to
+  `<data-dir>/corpus/`; exits naming `corpus-assemble` when its
+  `corpus-meta.json` is absent.
 - `--output-dir`: where to write extraction records, metadata, and TEI
   files. Defaults to `<data-dir>/fulltext-extraction/`.
 - `--data-dir`: bucket root the two defaults above hang off (default:
@@ -223,8 +234,9 @@ laglitsynth fulltext-extraction \
   `http://localhost:8070`.
 - `--timeout`: per-paper GROBID timeout in seconds. Optional; defaults to
   `120.0`.
-- `--skip-existing`: do not re-extract PDFs that already have an
-  `ExtractedDocument` record.
+- `--skip-existing`: do not re-extract a work whose latest
+  `ExtractedDocument` has the `pdf_sha256` of its current corpus copy. A
+  work whose PDF changed in a re-assembly is extracted again.
 - `--consolidate-citations`: GROBID's `consolidateCitations` form field,
   one of `0` or `1`. Optional; defaults to `0` (off). `1` instructs GROBID
   to enrich extracted references with DOIs via Crossref / Semantic Scholar
@@ -233,15 +245,16 @@ laglitsynth fulltext-extraction \
 
 ### Flow
 
-1. List all PDFs in `--pdf-dir`.
+1. Read the `CorpusPdf` rows of `<corpus-dir>/provenance.jsonl` that
+   carry a `pdf_path`; works without a PDF are not listed.
 2. Load existing `extraction.jsonl` if present (for `--skip-existing`).
-3. For each unprocessed PDF:
-   a. Submit to GROBID.
-   b. Save TEI XML to `tei/<work_id>.tei.xml`.
+3. For each work not skipped:
+   a. Submit `<corpus-dir>/<pdf_path>` to GROBID.
+   b. Save TEI XML to `tei/<stem>.tei.xml`.
    c. Hash the TEI bytes (`sha256`).
-   d. Write `ExtractedDocument(work_id, tei_path, content_sha256,
-      extracted_at)` to `extraction.jsonl`.
-4. Write `ExtractionMeta`.
+   d. Append `ExtractedDocument(work_id, tei_path, content_sha256,
+      pdf_sha256, extracted_at)` to `extraction.jsonl`.
+4. Write `ExtractionMeta` with the corpus's `corpus_id`.
 5. Print summary: extracted count, failed count.
 
 ### GROBID availability
@@ -260,8 +273,8 @@ docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0  # restart GROBID
 laglitsynth fulltext-extraction --skip-existing
 ```
 
-Already-extracted PDFs (those with an `ExtractedDocument` record in
-`extraction.jsonl`) are skipped. See [external-services.md](external-services.md)
+Works whose latest `ExtractedDocument` in `extraction.jsonl` matches the
+current corpus PDF are skipped. See [external-services.md](external-services.md)
 for the macOS/Apple Silicon Rosetta workaround if GROBID fails to start.
 
 ## What to build now

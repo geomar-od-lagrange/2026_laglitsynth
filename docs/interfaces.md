@@ -22,33 +22,39 @@ full design rationale.
 
 ### Resolution
 
-Stage 7, stage 8 and `fulltext-retrieval-export` each join the deduplicated
-catalogue against an upstream verdict sidecar to determine their active work
-set (stage 7 and the export at a caller-supplied threshold). This logic lives
-in a small file-local helper in each module. Stage 5 (`fulltext-retrieval`)
-joins nothing: it runs over the whole catalogue.
+`corpus-assemble` and `fulltext-retrieval-export` join the deduplicated
+catalogue against the screening verdicts. Stages 6 and 7 read the corpus
+works (stage 6 only those with a PDF); stage 8 joins the corpus works
+against stage 7's verdicts and keeps only `eligible=True` ones. Stage 5
+(`fulltext-retrieval`) joins nothing: it runs over the whole catalogue.
 
-A catalogue work absent from the upstream verdicts file is **silently
-dropped** — it never enters the active set and produces no output row or
-count. In stage 7 and the export the join walks the catalogue and skips any
-work with no screening verdict (`_active_works` does `if sv is None: continue`);
-in stage 8 the join walks the eligibility verdicts and keeps only
-`eligible=True` ones, so a work without a verdict simply never appears.
-The practical consequence is the same in all of them: running against a
-partial or stale verdicts file yields fewer works than the catalogue
-holds, with no warning. (Stage 8 does raise on the opposite
-inconsistency — a verdict whose `work_id` is missing from the catalogue.)
+The export's join walks the catalogue and **silently drops** any work with
+no screening verdict (`_active_works` does `if sv is None: continue`).
+`corpus-assemble` exits instead, unless `--allow-unscreened` includes such
+works. Stage 8 exits on a verdict whose `work_id` is not in the corpus.
+
+Analysis outputs record the `corpus_id` they ran on and check it:
+`extraction-meta.json`, `eligibility-meta.json` and
+`extraction-codebook-meta.json` each carry it. Stages 7 and 8 exit when
+`extraction-meta.json` names another corpus and use an extraction only
+when its `pdf_sha256` matches the corpus copy. Stage 8 also exits when
+`eligibility-meta.json` is missing, names another corpus, or records
+another `prompt_sha256` than its own `--eligibility-criteria`. With
+`--skip-existing`, stages 7 and 8 refuse to resume a run whose own meta
+names another corpus, and stage 6 re-extracts a work whose corpus PDF
+changed.
 
 The screening threshold is a CLI flag (`--screening-threshold`, a `float`)
-on stage 7, `fulltext-retrieval-export` and `corpus-assemble`; the export
+on `fulltext-retrieval-export` and `corpus-assemble`; the export
 and the corpus record it in their metas. Screening itself applies no
 threshold and records none.
 
 ## Artifact map
 
 Every path below is where a stage reads or writes by default; each can be
-passed explicitly to override. The run-id leaf comes from
-`data/manifest.json` — see [run-manifest.md](run-manifest.md).
+passed explicitly to override. The screening run-id leaf comes from
+`data/manifest.json`, the analysis run-id leaf of stages 7 and 8 from
+`data/corpus/corpus-meta.json` — see [run-manifest.md](run-manifest.md).
 
 | Path | Model | Description |
 |---|---|---|
@@ -82,8 +88,8 @@ The meta files stay as per-run provenance records — they are not merged.
 | `data/screening-abstracts/<run-id>/screening-meta.json` | [`ScreeningMeta`](../src/laglitsynth/screening_abstracts/models.py) | LLM fingerprint (`LlmMeta`), counts |
 
 Verdicts cover all works in the deduplicated catalogue, not just accepted
-ones. The accept/reject decision is derived from the relevance score and
-the `--screening-threshold` flag of the stage that reads the verdicts. No
+ones. The accept/reject decision is made by `corpus-assemble` from the
+relevance score and its `--screening-threshold` flag. No
 `screened.jsonl` or `rejected.jsonl` — the verdict sidecar is the only
 output.
 
@@ -132,8 +138,8 @@ afresh otherwise. The readers for stages 6–8 are in
 
 | Path | Model | Description |
 |---|---|---|
-| `data/fulltext-extraction/extraction.jsonl` | [`ExtractedDocument`](../src/laglitsynth/fulltext_extraction/models.py) | Per-work index: `tei_path` + `content_sha256` + `extracted_at` |
-| `data/fulltext-extraction/extraction-meta.json` | [`ExtractionMeta`](../src/laglitsynth/fulltext_extraction/models.py) | GROBID version, counts |
+| `data/fulltext-extraction/extraction.jsonl` | [`ExtractedDocument`](../src/laglitsynth/fulltext_extraction/models.py) | Per-work index: `tei_path` + `content_sha256` + `pdf_sha256` of the corpus PDF + `extracted_at`; appended, the last record per work counts |
+| `data/fulltext-extraction/extraction-meta.json` | [`ExtractionMeta`](../src/laglitsynth/fulltext_extraction/models.py) | `corpus_id`, GROBID version, counts |
 | `data/fulltext-extraction/tei/<work_id>.tei.xml` | (XML) | Canonical GROBID TEI output — read lazily via [`TeiDocument`](../src/laglitsynth/fulltext_extraction/tei.py) |
 
 ### Stage 7 — fulltext-eligibility *(exists)*
@@ -141,13 +147,12 @@ afresh otherwise. The readers for stages 6–8 are in
 | Path | Model | Description |
 |---|---|---|
 | `data/fulltext-eligibility/<run-id>/verdicts.jsonl` | [`EligibilityVerdict`](../src/laglitsynth/fulltext_eligibility/models.py) | Per-work decisions-endpoint probability and `eligible = probability >= 0.5` (tri-state with sentinel reasons; no `source_basis` — full-text-only) |
-| `data/fulltext-eligibility/<run-id>/eligibility-meta.json` | [`EligibilityMeta`](../src/laglitsynth/fulltext_eligibility/models.py) | Sentinel counts + the predicate instructions as `criterion`, nested `run` + `llm` |
+| `data/fulltext-eligibility/<run-id>/eligibility-meta.json` | [`EligibilityMeta`](../src/laglitsynth/fulltext_eligibility/models.py) | `corpus_id`, sentinel counts + the predicate instructions as `criterion`, nested `run` + `llm` |
 | `data/fulltext-eligibility/<run-id>/config.yaml` | (YAML) | Resolved CLI+config, criteria inlined |
 
-Stage 7 joins the deduplicated catalogue against stage 3's `verdicts.jsonl`
-at the `--screening-threshold` cutoff, then gates that active set on
-extraction presence — it is full-text-only, so works without an
-`ExtractedDocument` are skipped (no verdict row, no count), not flagged.
+Stage 7 assesses the corpus works that have a current extraction — it is
+full-text-only, so works without one are skipped (no verdict row, no
+count), not flagged.
 `verdicts.jsonl` is the source of truth and the sole machine output; there
 is no derived `eligible.jsonl`.
 
@@ -156,11 +161,11 @@ is no derived `eligible.jsonl`.
 | Path | Model | Description |
 |---|---|---|
 | `<data-dir>/extraction-codebook/<run-id>/records.jsonl` | `ExtractionRecord` (built dynamically by [`build_record_model`](../src/laglitsynth/extraction_codebook/codebook.py); no `source_basis` — full-text-only) | One codebook record per processed work (successes and sentinels) |
-| `<data-dir>/extraction-codebook/<run-id>/extraction-codebook-meta.json` | [`ExtractionCodebookMeta`](../src/laglitsynth/extraction_codebook/models.py) | Sentinel counts, nested `run` + `llm` |
-| `<data-dir>/extraction-codebook/<run-id>/config.yaml` | resolved CLI+config (codebook inlined) | Self-contained run snapshot; see [configs.md](configs.md) |
+| `<data-dir>/extraction-codebook/<run-id>/extraction-codebook-meta.json` | [`ExtractionCodebookMeta`](../src/laglitsynth/extraction_codebook/models.py) | `corpus_id`, `eligibility_prompt_sha256`, sentinel counts, nested `run` + `llm` |
+| `<data-dir>/extraction-codebook/<run-id>/config.yaml` | resolved CLI+config (codebook and eligibility criteria inlined) | Self-contained run snapshot; see [configs.md](configs.md) |
 | `<data-dir>/extraction-codebook/<run-id>/review.xlsx` | (XLSX, on demand) | `extraction-codebook-export` review workbook (Index + per-work tabs) |
 
-Stage 8 joins the deduplicated catalogue against stage 7's `verdicts.jsonl`
+Stage 8 joins the corpus works against stage 7's `verdicts.jsonl`
 to determine eligible works, then gates that set on extraction presence —
 it is full-text-only, so eligible works without an `ExtractedDocument` are
 skipped (no record row, no count). Every processed work produces exactly
@@ -194,8 +199,10 @@ spot-check artifact written by `extraction-codebook-export`.
 
 Input and output paths are shown where they default under `--data-dir`
 (itself defaulting to `data/`); every one can be overridden with the flag
-named. `--run-id` on stages 3, 5, 7, 8 defaults to the `run_id` in
-`<data-dir>/manifest.json` — see [run-manifest.md](run-manifest.md).
+named. `--run-id` on stage 3 and the export, and `--screening-run-id` on
+`corpus-assemble`, default to the `run_id` in `<data-dir>/manifest.json`;
+`--run-id` on stages 7 and 8 defaults to `analysis_run_id` in
+`<data-dir>/corpus/corpus-meta.json` — see [run-manifest.md](run-manifest.md).
 
 ```sh
 # Review setup — once per data dir
@@ -253,17 +260,16 @@ laglitsynth corpus-assemble \
 
 # Stage 6 — fulltext-extraction
 laglitsynth fulltext-extraction \
-    [--pdf-dir data/pdfs/] \
+    [--corpus-dir data/corpus/] \
     [--output-dir data/fulltext-extraction/] \
     [--data-dir DIR] [--grobid-url URL] [--skip-existing]
 
 # Stage 7 — fulltext-eligibility
 laglitsynth fulltext-eligibility \
-    [--catalogue data/catalogue-dedup/deduplicated.jsonl] \
-    [--screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl] \
+    [--corpus-dir data/corpus/] \
     [--extractions data/fulltext-extraction/extraction.jsonl] \
     [--extraction-output-dir data/fulltext-extraction/] \
-    [--screening-threshold 50] [--data-dir DIR] [--run-id ID] \
+    [--data-dir DIR] [--run-id ID] \
     [--eligibility-criteria FILE] [--config FILE] \
     [--skip-existing] [--max-records N] [--dry-run] \
     --base-url URL --model MODEL [--api-key KEY] [--decisions-url URL] \
@@ -271,20 +277,21 @@ laglitsynth fulltext-eligibility \
 
 # Stage 8 — extraction-codebook
 laglitsynth extraction-codebook \
-    [--catalogue data/catalogue-dedup/deduplicated.jsonl] \
+    [--corpus-dir data/corpus/] \
     [--eligibility-verdicts data/fulltext-eligibility/<run-id>/verdicts.jsonl] \
+    [--eligibility-criteria FILE] \
     [--extractions data/fulltext-extraction/extraction.jsonl] \
     [--extraction-output-dir data/fulltext-extraction/] \
     [--data-dir DIR] [--run-id ID] \
     [--codebook FILE] [--config FILE] \
     [--skip-existing] [--max-records N] [--dry-run] \
     --base-url URL --model MODEL [--api-key KEY] \
-    [--concurrency N]
+    [--reasoning-effort low|medium|high] [--concurrency N]
 
 # Stage 8 — extraction-codebook-export (human review, XLSX only)
 laglitsynth extraction-codebook-export \
     --records data/extraction-codebook/<run-id>/records.jsonl \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    [--catalogue data/corpus/works.jsonl] \
     [--codebook FILE] [--meta PATH] [--output PATH] \
     [--n-subset N] [--subset-seed N]
 ```
@@ -297,7 +304,8 @@ OpenAI-compatible base, including `/v1`) and `--model` are required (the
 stage exits naming the missing flag), `--api-key` falls back to
 `LLM_API_KEY` in the environment, then in `.env`, and is never written to
 `config.yaml`; stages 3 and 7 also take `--decisions-url` (default
-`<base-url>/decisions`). `--concurrency` (default `1`) sets the number of
+`<base-url>/decisions`), stage 8 `--reasoning-effort` (`low`, `medium`,
+`high`; unset sends none). `--concurrency` (default `1`) sets the number of
 in-flight LLM requests. See [llm-concurrency.md](llm-concurrency.md).
 
 Stages 1 and 3 use positional arguments; the rest use keyword flags.

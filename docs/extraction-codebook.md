@@ -2,8 +2,8 @@
 
 One LLM pass per paper that fills a structured codebook record
 capturing numerical choices, reproducibility indicators, and
-sub-discipline tags. The stage joins the deduplicated catalogue against
-the stage 7 eligibility verdict sidecar to determine eligible works,
+sub-discipline tags. The stage joins the corpus works against the
+stage 7 eligibility verdict sidecar to determine eligible works,
 extracts from the full text, and emits a record sidecar in the same
 flag-don't-filter shape as [screening](screening-abstracts.md) and
 [eligibility](eligibility.md). Like stage 7, it is **full-text-only**:
@@ -50,20 +50,26 @@ any one component.
 
 The stage consumes:
 
-- The deduplicated catalogue
-  ([`Work`](../src/laglitsynth/catalogue_fetch/models.py) records
-  from [stage 2](catalogue-dedup.md)).
+- The corpus written by `corpus-assemble`: its works
+  (`<corpus-dir>/works.jsonl`), the PDF hashes in `provenance.jsonl`, and
+  `corpus_id` from `corpus-meta.json`.
 - The stage 7 eligibility verdict sidecar
   ([`EligibilityVerdict`](../src/laglitsynth/fulltext_eligibility/models.py)
-  records). The stage joins this against the catalogue to obtain the
-  eligible work set; the catalogue is required for the verdict↔catalogue
-  consistency check and for the bibliographic block the review export
-  attaches to each record.
+  records). The stage joins it against the corpus works to obtain the
+  eligible work set and exits when a verdict names a work outside the
+  corpus. It also exits when the `eligibility-meta.json` beside the
+  verdicts is missing, names another `corpus_id`, or records another
+  `prompt_sha256` than
+  [`criteria_sha256`](../src/laglitsynth/fulltext_eligibility/eligibility.py)
+  of `--eligibility-criteria`.
 - The extraction JSONL
   ([`ExtractedDocument`](../src/laglitsynth/fulltext_extraction/models.py)
-  records from [stage 6](fulltext-extraction.md)).
+  records from [stage 6](fulltext-extraction.md)), checked as stage 7
+  checks it: the stage exits when `extraction-meta.json` is missing or
+  names another `corpus_id`, and ignores a record whose `pdf_sha256`
+  differs from the corpus copy.
 
-Only eligible works with a matching `ExtractedDocument` are processed:
+Only eligible works with a current `ExtractedDocument` are processed:
 the eligible set is gated on extraction presence, so a work without full
 text never enters the loop, produces no record row, and is not counted.
 A work whose extraction parses but renders empty TEI is recorded with a
@@ -73,7 +79,7 @@ A work whose extraction parses but renders empty TEI is recorded with a
 
 ### ExtractionRecord (built dynamically)
 
-One per catalogue work reaching this stage. Every input work produces
+One per corpus work reaching this stage. Every input work produces
 exactly one record, successes and failures alike — `records.jsonl` is
 the complete run record. See [codebook.md](codebook.md) for the field
 list and
@@ -111,7 +117,8 @@ class ExtractionCodebookMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run: RunMeta
     llm: LlmMeta
-    input_catalogue: str
+    corpus_id: str                   # CorpusMeta.corpus_id of the corpus read
+    eligibility_prompt_sha256: str   # prompt_sha256 of the eligibility verdicts read
     input_eligibility_verdicts: str
     input_extractions: str
     input_count: int
@@ -125,7 +132,8 @@ class ExtractionCodebookMeta(BaseModel):
 `run` and `llm` are the shared reproducibility nests from
 [`src/laglitsynth/models.py`](../src/laglitsynth/models.py); they
 carry `tool`, `tool_version`, `run_at`, `validation_skipped`, `model`,
-`base_url`, `decisions_url` (`None` here), and `prompt_sha256`. `prompt_sha256` covers the
+`base_url`, `decisions_url` (`None` here), `reasoning_effort` (the
+`--reasoning-effort` sent, `None` when none was), and `prompt_sha256`. `prompt_sha256` covers the
 rendered codebook system prompt and `USER_TEMPLATE`, so any prompt or
 codebook change shifts the hash.
 
@@ -142,7 +150,8 @@ model, so the meta does not duplicate it.
 <data-dir>/extraction-codebook/<run-id>/
   records.jsonl                          # one ExtractionRecord per input work
   extraction-codebook-meta.json          # ExtractionCodebookMeta
-  config.yaml                            # resolved CLI+config, codebook inlined
+  config.yaml                            # resolved CLI+config, codebook and
+                                         # eligibility criteria inlined
 ```
 
 See [configs.md](configs.md) for the run-id directory model and
@@ -156,7 +165,7 @@ and stages 10–12 read `records.jsonl` directly.
 
 The eligible set is gated on extraction presence before the loop, so
 each work reaching `_extract_one` has an `ExtractedDocument`. For each
-such work, in catalogue order:
+such work, in verdict order:
 
 1. Render the TEI. If it raises `lxml.etree.XMLSyntaxError`, record a
    `tei-parse-failure` sentinel (no LLM call).
@@ -199,8 +208,9 @@ phase 3 identifies which fields suffer from attention dilution.
 
 ```
 laglitsynth extraction-codebook \
-    [--catalogue data/catalogue-dedup/deduplicated.jsonl] \
+    [--corpus-dir data/corpus/] \
     [--eligibility-verdicts data/fulltext-eligibility/<run-id>/verdicts.jsonl] \
+    [--eligibility-criteria examples/eligibility-criteria/lagrangian-oceanography.yaml] \
     [--extractions data/fulltext-extraction/extraction.jsonl] \
     [--extraction-output-dir data/fulltext-extraction/] \
     [--data-dir data/] [--run-id <iso>_<12hex>] \
@@ -208,7 +218,7 @@ laglitsynth extraction-codebook \
     [--config <run-dir>/config.yaml] \
     [--skip-existing] [--max-records N] [--dry-run] \
     --base-url URL --model MODEL [--api-key KEY] \
-    [--concurrency 1]
+    [--reasoning-effort {low,medium,high}] [--concurrency 1]
 ```
 
 The resolved output directory is `<data-dir>/extraction-codebook/<run-id>/`.
@@ -218,16 +228,21 @@ to run (see [run-manifest.md](run-manifest.md)).
 
 ### Arguments
 
-- `--catalogue`: the deduplicated catalogue (`Work` records from stage 2).
-  Required for the verdict↔catalogue consistency check (every eligibility
-  verdict must name a work the catalogue contains) and for the
-  bibliographic block the review export attaches to each record.
+- `--corpus-dir`: the corpus written by `corpus-assemble` (default:
+  `<data-dir>/corpus/`). Every eligibility verdict must name one of its
+  works.
 - `--eligibility-verdicts`: the stage 7 verdict sidecar (`EligibilityVerdict`
-  records). The stage joins this against the catalogue to build the eligible
-  work set. The default path uses the resolved `--run-id`.
-- `--extractions`: the extraction JSONL (`ExtractedDocument` records).
-  Eligible works without a matching record are skipped (not processed,
-  not counted).
+  records), with `eligibility-meta.json` beside it. The stage joins it
+  against the corpus works to build the eligible work set. The default
+  path uses the resolved `--run-id`.
+- `--eligibility-criteria`: the eligibility-criteria YAML the verdicts were
+  made with (default:
+  `examples/eligibility-criteria/lagrangian-oceanography.yaml`). Its
+  `criteria_sha256` must equal `prompt_sha256` in `eligibility-meta.json`.
+  Inlined into `config.yaml` on save, like the codebook.
+- `--extractions`: the extraction JSONL (`ExtractedDocument` records),
+  with `extraction-meta.json` beside it. Eligible works without a current
+  record are skipped (not processed, not counted).
 - `--extraction-output-dir`: directory that
   `ExtractedDocument.tei_path` is relative to. Defaults to the parent
   of `--extractions`. See
@@ -235,8 +250,7 @@ to run (see [run-manifest.md](run-manifest.md)).
   stored relative.
 - `--data-dir`: bucket root for stage outputs (default: `data/`).
 - `--run-id`: run identifier, shared with the eligibility run whose verdicts
-  are read. Default: the `run_id` in `<data-dir>/manifest.json`; the stage
-  exits when neither is available.
+  are read. Default: `analysis_run_id` in `<corpus-dir>/corpus-meta.json`.
 - `--codebook`: path to the codebook YAML carrying the LLM system
   prompt and the field list. Default:
   `examples/codebooks/lagrangian-oceanography.yaml`. The codebook
@@ -252,16 +266,18 @@ to run (see [run-manifest.md](run-manifest.md)).
   records are appended to the existing sidecar. If
   `extraction-codebook-meta.json` already exists and its recorded
   `prompt_sha256` differs from the hash the current invocation would
-  produce, the run aborts with an error — mixing records from
-  different prompt versions in one file would silently corrupt any
-  downstream analysis.
-- `--max-records`: process only the first N works from the eligible
-  catalogue.
+  produce, or its `corpus_id` differs from the current corpus, the run
+  aborts with an error — mixing records from different prompt versions or
+  corpora in one file would silently corrupt any downstream analysis.
+- `--max-records`: process only the first N eligible works.
 - `--dry-run`: print summaries to stderr without writing any output.
 - `--base-url`, `--model`: the OpenAI-compatible base URL (including
   `/v1`) and the chat model. Both required.
 - `--api-key`: the key; falls back to `LLM_API_KEY` in the environment,
   then in `.env`. Never written to `config.yaml`.
+- `--reasoning-effort`: `low`, `medium` or `high`, sent as the chat
+  request's `reasoning_effort` and recorded in `meta.llm`. Unset (the
+  default), no effort is sent and the provider's default applies.
 - `--concurrency`: number of in-flight LLM requests (default: `1`).
   See [llm-concurrency.md](llm-concurrency.md).
 
@@ -295,7 +311,7 @@ fields:
     description: >-
       Sub-discipline tag. Free text — use the paper's own phrasing ...
     context_description: Short verbatim excerpt from the paper supporting the sub_discipline tag.
-  # ... 13 more paired fields ...
+  # ... 14 more paired fields, rationale among them ...
   - name: in_text_locations
     description: >-
       Where in THIS PAPER the extracted values were found ...
@@ -376,7 +392,7 @@ used.
 ```
 laglitsynth extraction-codebook-export \
     --records data/extraction-codebook/<run-id>/records.jsonl \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
+    [--catalogue data/corpus/works.jsonl] \
     [--codebook examples/codebooks/lagrangian-oceanography.yaml] \
     [--meta data/extraction-codebook/<run-id>/extraction-codebook-meta.json] \
     [--output <records parent>/review.xlsx] \

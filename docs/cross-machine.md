@@ -156,16 +156,19 @@ guard against exactly this — a single writer (A) means
 collaborators hand back folders of PDFs that A integrates serially, not a
 rewritten store.
 
-## The run-id travels in the manifest
+## The run-ids travel with the data
 
-Stages 3, 7, and 8 write under a `<run-id>/` leaf, and a coherent run needs
-the same run-id across all three, including across machines: if NESH runs
-eligibility and the laptop later runs extraction, both must use the same one.
-`data/manifest.json` carries it. `laglitsynth manifest-init` mints the run-id
-once, and every run-id-aware stage adopts it when `--run-id` is omitted, so
-the string travels with `data/` under rsync instead of living in operator
-memory and shell history. An explicit `--run-id` still wins where a stage
-needs to target a different leaf. See [run-manifest.md](run-manifest.md).
+Stage 3 writes under a screening `<run-id>/` leaf that `corpus-assemble` and
+the export read, and stages 7 and 8 write under an analysis `<run-id>/` leaf
+they share. Both must be the same across machines: if NESH runs eligibility
+and the laptop later runs extraction, both must use the same analysis run-id.
+`data/manifest.json` carries the screening run-id: `laglitsynth
+manifest-init` mints it once, and the screening-side stages adopt it when no
+run-id is passed. `data/corpus/corpus-meta.json` carries the analysis
+run-id, which stages 7 and 8 adopt when `--run-id` is omitted. Both strings
+travel with `data/` under rsync instead of living in operator memory and
+shell history. An explicit run-id still wins where a stage needs to target
+a different leaf. See [run-manifest.md](run-manifest.md).
 
 The manifest is written once and never rewritten, so it is the one file under
 `data/` with no sync direction to get wrong: copy it with the rest of the

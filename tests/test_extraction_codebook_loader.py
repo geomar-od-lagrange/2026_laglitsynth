@@ -57,6 +57,8 @@ Fields:
 - "code_analysis_context": Short verbatim excerpt supporting code_analysis.
 - "config_available": Whether runtime parameters (domain, resolution, forcing) are given in the paper itself. Describe availability in words, not as a yes/no boolean.
 - "config_available_context": Short verbatim excerpt supporting config_available.
+- "rationale": Reasons the paper states for its numerical choices (integration scheme, time step, interpolation, diffusion, software), in the authors\' own terms. Free text; null when the paper gives none.
+- "rationale_context": Short verbatim excerpt supporting rationale.
 - "in_text_locations": Where in THIS PAPER the extracted values were found — section headings, figure/table numbers, or nearby phrases that help a human reviewer locate them. Not the paper\'s subject matter; not geographic place names in the paper\'s content.
 - "extraction_notes": What was ambiguous, surprising, or hard to classify about this paper\'s methods. Free text.
 
@@ -148,3 +150,15 @@ def test_load_codebook_from_inlined_dict() -> None:
 def test_load_codebook_from_path() -> None:
     spec, _model = load_codebook(DEFAULT_CODEBOOK_PATH)
     assert spec.id == "lagrangian-oceanography"
+
+
+def test_example_codebook_yields_rationale_with_context() -> None:
+    """The example codebook carries a ``rationale`` field with verbatim context (RQ1.3)."""
+    _spec, model = load_codebook(DEFAULT_CODEBOOK_PATH)
+    assert "rationale" in model.model_fields
+    assert "rationale_context" in model.model_fields
+    obj = model.model_validate(
+        {"rationale": "RK4 for accuracy", "rationale_context": "We chose RK4 because"}
+    )
+    assert obj.rationale == "RK4 for accuracy"  # type: ignore[attr-defined]
+    assert obj.rationale_context == "We chose RK4 because"  # type: ignore[attr-defined]

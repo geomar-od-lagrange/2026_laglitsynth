@@ -83,9 +83,11 @@ Derived from the research questions and domain terms in the
 Every extracted value is paired with a verbatim context snippet from the
 source paper. The context snippet preserves the interpretive context that
 a bare value loses: surrounding sentences that explain, qualify, or
-constrain the value. This pattern replaces separate "method details" and
-"rationale" sections — context snippets make human adjudication possible
-without re-reading whole papers.
+constrain the value. This pattern replaces a separate "method details"
+section — context snippets make human review possible without re-reading
+whole papers. The stated reasons behind numerical choices get their own
+`rationale` field (RQ1.3), because they are spread across a paper rather
+than attached to one value.
 
 In the tables below, each value field has a companion `*_context` field
 of type `str or None`. The context is a short verbatim excerpt from the
@@ -136,6 +138,13 @@ not state the information, both the value and context are `None`.
 | config_available | free text → enum | Whether runtime parameters (domain, resolution, forcing) are given. |
 | config_available_context | str or None | Verbatim excerpt. |
 
+### RQ1.3 — Rationale
+
+| Field | Type | Notes |
+|---|---|---|
+| rationale | free text or None | Reasons the paper states for its numerical choices (integration scheme, time step, interpolation, diffusion, software), in the authors' own terms. `None` when the paper gives none. |
+| rationale_context | str or None | Verbatim excerpt. |
+
 ### Extraction metadata
 
 | Field | Type | Notes |
@@ -148,8 +157,9 @@ not state the information, both the value and context are `None`.
 ### Value + context snippet as default field structure
 
 Every extracted value is paired with a verbatim context snippet from the
-source paper. This replaces the earlier approach of separate "rationale"
-and "method details" sections. Context snippets are cheap to store and
+source paper. This replaces the earlier approach of a separate "method
+details" section; the stated reasons behind numerical choices are the one
+exception and keep a `rationale` field of their own. Context snippets are cheap to store and
 solve two problems at once: they make human adjudication possible without
 re-reading whole papers, and they preserve the interpretive context that
 bare values lose. Reporting quality is not assessed as a separate

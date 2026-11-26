@@ -3,8 +3,10 @@
 Every stage writes to, and reads from, a conventional path under
 ``--data-dir``. A stage whose input flag is omitted looks here for the
 upstream output; see [docs/run-manifest.md](../../docs/run-manifest.md).
-Only the run-id leaf of stages 3, 7, and 8 is not derivable from the
-layout, and the manifest (``laglitsynth.manifest``) carries that.
+Only the run-id leaves of stages 3, 7, and 8 are not derivable from the
+layout: the manifest (``laglitsynth.manifest``) carries the screening
+run-id of stage 3, and ``corpus-meta.json`` the analysis run-id of stages
+7 and 8.
 """
 
 from __future__ import annotations
@@ -108,6 +110,21 @@ def resolve_screening_inputs(
         screening_verdicts, flag="--screening-verdicts", upstream="screening-abstracts"
     )
     return catalogue, screening_verdicts
+
+
+def resolve_analysis_run_id(corpus: Path, flag_value: str | None) -> str:
+    """Return the run-id of stages 7 and 8: the flag, else the corpus's.
+
+    ``corpus-assemble`` keeps ``CorpusMeta.analysis_run_id`` while the
+    corpus is unchanged and mints a new one otherwise, so a changed corpus
+    never writes into earlier analysis output. Exits when the corpus meta
+    is missing or invalid.
+    """
+    if flag_value is not None:
+        return flag_value
+    from laglitsynth.corpus.load import load_corpus_meta
+
+    return load_corpus_meta(corpus).analysis_run_id
 
 
 def warn_existing_run_dir(output_dir: Path, filename: str) -> None:

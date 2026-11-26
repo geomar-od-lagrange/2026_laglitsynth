@@ -1,6 +1,6 @@
 # Eligibility
 
-Full-text assessment of whether each included work meets the review's
+Full-text assessment of whether each corpus work meets the review's
 inclusion criteria. Distinct from [screening](screening-abstracts.md),
 which uses only title and abstract. Reading the full text may reveal
 that a paper is not actually about computational Lagrangian methods, or
@@ -29,27 +29,23 @@ through, not to be the final filter. Both must hold:
 
 ## Input
 
-The stage consumes three artifacts:
+The stage consumes two artifacts:
 
-- The deduplicated catalogue ([`Work`](../src/laglitsynth/catalogue_fetch/models.py)
-  records from [`catalogue-dedup`](catalogue-dedup.md)).
-- The stage 3 screening verdict sidecar ([`ScreeningVerdict`](../src/laglitsynth/screening_abstracts/models.py)
-  records), plus a `--screening-threshold` cutoff. The stage joins these at
-  read time to determine which works to assess. The join walks the catalogue
-  and **silently drops** any work absent from the screening verdicts file
-  (`_active_works` does `if sv is None: continue`): a work with no screening
-  verdict is not assessed, produces no verdict row, and is not counted — with
-  no warning. Running against a partial or stale verdicts file therefore
-  assesses fewer works than the catalogue holds.
+- The corpus written by `corpus-assemble`: its works
+  (`<corpus-dir>/works.jsonl`), the PDF hashes in `provenance.jsonl`, and
+  `corpus_id` from `corpus-meta.json`. The screening threshold was applied
+  there; this stage applies none.
 - The extraction JSONL ([`ExtractedDocument`](../src/laglitsynth/fulltext_extraction/models.py)
-  records from [`fulltext-extraction`](fulltext-extraction.md)).
+  records from [`fulltext-extraction`](fulltext-extraction.md)) with its
+  `extraction-meta.json`. The stage exits when that meta is missing or
+  names another `corpus_id`, and ignores a record whose `pdf_sha256`
+  differs from the corpus copy (its PDF changed since extraction).
 
-Only works that have an `ExtractedDocument` are assessed: the active set
-fed to the LLM is gated on extraction presence, so a work without a
-matching extraction never enters the loop, produces no verdict row, and
-is not counted. (The "what is still missing" gap is already visible
-upstream in the stage 5 `missing` provenance records — flagging absent
-full text again here would be redundant.) A work whose extraction parses
+Only works that have a current `ExtractedDocument` are assessed: the
+active set fed to the LLM is gated on extraction presence, so a work
+without a matching extraction never enters the loop, produces no verdict
+row, and is not counted. (The gap is already visible in the corpus
+provenance — flagging absent full text again here would be redundant.) A work whose extraction parses
 but renders empty TEI is recorded with a `tei-parse-failure` sentinel,
 since a paper we hold a PDF for but cannot read is a broken extraction
 worth surfacing.
@@ -58,7 +54,7 @@ worth surfacing.
 
 ### EligibilityVerdict
 
-One per catalogue work that reached this stage (i.e. that had a
+One per corpus work that reached this stage (i.e. that had a
 full-text extraction).
 
 ```python
@@ -89,8 +85,7 @@ class EligibilityMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run: RunMeta
     llm: LlmMeta
-    input_catalogue: str
-    input_screening_verdicts: str
+    corpus_id: str        # CorpusMeta.corpus_id of the corpus read
     input_extractions: str
     input_count: int
     eligible_count: int
@@ -105,7 +100,8 @@ class EligibilityMeta(BaseModel):
 `run` and `llm` are the shared reproducibility nests from
 [`src/laglitsynth/models.py`](../src/laglitsynth/models.py) — they
 carry `tool`, `tool_version`, `run_at`, `validation_skipped`, `model`,
-`base_url`, `decisions_url`, and `prompt_sha256`. `prompt_sha256` is
+`base_url`, `decisions_url`, `reasoning_effort` (always `None` here), and
+`prompt_sha256`. `prompt_sha256` is
 [`criteria_sha256`](../src/laglitsynth/fulltext_eligibility/eligibility.py)
 of the criteria: the sha256 of the `decision` block's canonical JSON +
 `"\n"` + `USER_TEMPLATE`, so any change to the question shifts the hash.
@@ -132,8 +128,10 @@ the criteria YAML.
 
 See [configs.md](configs.md) for the run-id directory model and
 `config.yaml` semantics. `verdicts.jsonl` is the source of truth and the
-sole output of this stage. Downstream stages that need the eligible work
-set join the catalogue against this sidecar at their own read time.
+sole output of this stage. [Extraction-codebook](extraction-codebook.md)
+joins the corpus works against it at read time, and refuses it when
+`eligibility-meta.json` names another `corpus_id` or another
+`prompt_sha256` than its own `--eligibility-criteria`.
 
 ## Per-work flow
 
@@ -151,7 +149,7 @@ work:
 ## Sentinel reasons
 
 All sentinels set `probability=None` and `eligible=None`. Downstream consumers
-join the catalogue against `verdicts.jsonl` filtering for `eligible is True`,
+join the corpus works against `verdicts.jsonl` filtering for `eligible is True`,
 so sentinel records are naturally excluded from the active work set.
 
 | Reason | Trigger |
@@ -182,9 +180,7 @@ sentinel (there is no abstract fallback).
 
 ```
 laglitsynth fulltext-eligibility \
-    [--catalogue data/catalogue-dedup/deduplicated.jsonl] \
-    [--screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl] \
-    [--screening-threshold 50] \
+    [--corpus-dir data/corpus/] \
     [--extractions data/fulltext-extraction/extraction.jsonl] \
     [--extraction-output-dir data/fulltext-extraction/] \
     [--data-dir data/] [--run-id <iso>_<12hex>] \
@@ -196,30 +192,28 @@ laglitsynth fulltext-eligibility \
 ```
 
 The resolved output directory is `<data-dir>/fulltext-eligibility/<run-id>/`.
-The three input flags default to the paths shown under `--data-dir`; an
+The two input flags default to the paths shown under `--data-dir`; an
 omitted flag whose default does not exist exits naming the upstream stage
 to run (see [run-manifest.md](run-manifest.md)).
 
 ### Arguments
 
-- `--catalogue`: the deduplicated catalogue (`Work` records from stage 2).
-- `--screening-verdicts`: the stage 3 verdict sidecar
-  (`ScreeningVerdict` records). The stage joins this against the catalogue
-  at the `--screening-threshold` cutoff to determine which works to assess.
-  The default path uses the resolved `--run-id`.
-- `--screening-threshold`: relevance score cutoff 0–100 (default: 50).
-  Works whose stage 3 score is at or above this threshold are assessed.
-- `--extractions`: the extraction JSONL (`ExtractedDocument` records).
-  Works without a matching record are skipped (not assessed, not counted).
+- `--corpus-dir`: the corpus written by `corpus-assemble` (default:
+  `<data-dir>/corpus/`). Its works are the ones assessed.
+- `--extractions`: the extraction JSONL (`ExtractedDocument` records),
+  with `extraction-meta.json` beside it. Works without a current record
+  are skipped (not assessed, not counted).
 - `--extraction-output-dir`: directory that
   `ExtractedDocument.tei_path` is relative to. Defaults to the parent
   of `--extractions`. See
   [`tei-wrapper`](../plans/done/tei-wrapper.md) for why the path is
   stored relative.
 - `--data-dir`: bucket root for stage outputs (default: `data/`).
-- `--run-id`: run identifier, shared with the screening run whose verdicts
-  are read. Default: the `run_id` in `<data-dir>/manifest.json`; the stage
-  exits when neither is available.
+- `--run-id`: run identifier, shared with the extraction-codebook run that
+  reads these verdicts. Default: `analysis_run_id` in
+  `<corpus-dir>/corpus-meta.json`, which changes whenever the corpus does,
+  so a changed corpus never writes into earlier output. Pass it to make a
+  variant run on the same corpus, for example with other criteria.
 - `--eligibility-criteria`: path to the YAML carrying the `decision`
   block (default:
   `examples/eligibility-criteria/lagrangian-oceanography.yaml`). The
@@ -231,10 +225,11 @@ to run (see [run-manifest.md](run-manifest.md)).
   pointed at by `--run-id`) and skip already-assessed `work_id`s. The
   verdict sidecar is appended to on completion. If `eligibility-meta.json`
   already exists and its recorded `prompt_sha256` differs from the hash the
-  current invocation would produce, the run aborts with an error — mixing
-  verdicts from different prompt versions in one file would silently corrupt
+  current invocation would produce, or its `corpus_id` differs from the
+  current corpus, the run aborts with an error — mixing verdicts from
+  different prompt versions or corpora in one file would silently corrupt
   any downstream analysis.
-- `--max-records`: process only the first N works from the catalogue.
+- `--max-records`: process only the first N corpus works.
 - `--dry-run`: print verdicts to stderr without writing any output.
 - `--base-url`, `--model`: the OpenAI-compatible base URL (including
   `/v1`) and the decisions model. Both required. The full rendered text is sent; a

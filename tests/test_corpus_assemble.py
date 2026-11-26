@@ -42,6 +42,7 @@ def _screening_meta() -> ScreeningMeta:
             model="m",
             base_url="https://llm.example/v1",
             decisions_url="https://llm.example/v1/decisions",
+            reasoning_effort=None,
             prompt_sha256="0" * 64,
         ),
         input_path="catalogue.jsonl",

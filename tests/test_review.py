@@ -73,6 +73,7 @@ def test_emit_full_config_round_trips(tmp_path: Path) -> None:
                 "screening": "decider",
                 "eligibility": "decider",
                 "extraction": "chatter",
+                "extraction_reasoning_effort": "high",
             },
             "concurrency": {"llm": 4, "extraction": 1},
         },
@@ -93,6 +94,7 @@ def test_emit_full_config_round_trips(tmp_path: Path) -> None:
     assert parsed["CFG_SCREENING_MODEL"] == "decider"
     assert parsed["CFG_ELIGIBILITY_MODEL"] == "decider"
     assert parsed["CFG_EXTRACTION_MODEL"] == "chatter"
+    assert parsed["CFG_EXTRACTION_REASONING_EFFORT"] == "high"
     assert parsed["CFG_LLM_CONCURRENCY"] == "4"
     assert parsed["CFG_EXTRACTION_CONCURRENCY"] == "1"
 
@@ -116,6 +118,7 @@ def test_emit_none_fields_are_empty(tmp_path: Path) -> None:
         "CFG_SCREENING_MODEL",
         "CFG_ELIGIBILITY_MODEL",
         "CFG_EXTRACTION_MODEL",
+        "CFG_EXTRACTION_REASONING_EFFORT",
         "CFG_LLM_CONCURRENCY",
         "CFG_EXTRACTION_CONCURRENCY",
     ):
@@ -221,3 +224,10 @@ def test_shipped_example_config_validates() -> None:
 def test_api_key_is_not_a_review_config_key() -> None:
     with pytest.raises(ValidationError):
         ReviewConfig.model_validate({"query": "x", "llm_api_key": "secret"})
+
+
+def test_reasoning_effort_values_validated() -> None:
+    with pytest.raises(ValidationError):
+        ReviewConfig.model_validate(
+            {"query": "x", "models": {"extraction_reasoning_effort": "extreme"}}
+        )

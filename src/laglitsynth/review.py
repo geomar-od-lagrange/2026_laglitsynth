@@ -3,8 +3,8 @@
 A *review config* is one handwritten YAML that captures the
 review-defining knobs the runner ([scripts/run-pipeline.sh]) needs:
 the query, the year window and record cap, the three criteria/codebook
-files, the screening threshold, the LLM endpoint URLs, and the
-per-stage models and concurrency. The API key is never part of it. It is distinct from the per-stage ``config.yaml``
+files, the screening threshold, the LLM endpoint URLs, the per-stage
+models with stage 8's reasoning effort, and concurrency. The API key is never part of it. It is distinct from the per-stage ``config.yaml``
 run-snapshots written by the LLM stages (see ``laglitsynth.config`` and
 [docs/configs.md]) — those record one resolved stage invocation; this
 describes a whole review up front and drives the runner.
@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import shlex
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict
@@ -38,6 +39,7 @@ class _Models(BaseModel):
     screening: str | None = None
     eligibility: str | None = None
     extraction: str | None = None
+    extraction_reasoning_effort: Literal["low", "medium", "high"] | None = None
 
 
 class _Concurrency(BaseModel):
@@ -125,6 +127,7 @@ def emit_cfg_lines(config: ReviewConfig) -> list[str]:
         ("CFG_SCREENING_MODEL", config.models.screening),
         ("CFG_ELIGIBILITY_MODEL", config.models.eligibility),
         ("CFG_EXTRACTION_MODEL", config.models.extraction),
+        ("CFG_EXTRACTION_REASONING_EFFORT", config.models.extraction_reasoning_effort),
         ("CFG_LLM_CONCURRENCY", config.concurrency.llm),
         ("CFG_EXTRACTION_CONCURRENCY", config.concurrency.extraction),
     ]
