@@ -149,7 +149,7 @@ Each run produces three files in `<data-dir>/screening-abstracts/<run-id>/`:
   and `llm` blocks, threshold, input path, input count, `criterion` (the
   loaded `system_prompt`), and above/below/skipped counts. Written upfront
   with zeroed counts when the run starts and rewritten with the real counts
-  at the end, so a mid-run reviewer export still sees the criterion + LLM
+  at the end, so a mid-run reader still sees the criterion + LLM
   fingerprint.
 - **`config.yaml`** — fully-resolved CLI+config values for this run,
   excluding `run_id` and `--config` itself. Replay via
@@ -231,8 +231,8 @@ The meta sidecar nests two shared blocks:
   `--pass-all` run.
 
 The loaded `system_prompt` (or the rendered decision question) is also
-stored verbatim on the meta as `criterion`, so the reviewer export embeds
-the exact question the model saw.
+stored verbatim on the meta as `criterion`, so the exact question the
+model saw is on record.
 
 Alongside `above_threshold_count`, `below_threshold_count`, and
 `skipped_count`, the meta records two failure counters:
@@ -272,86 +272,3 @@ seed, so two runs that differ only in their per-call seeds produce the same
 hash. Use `prompt_sha256` to confirm prompt identity across runs; accept
 score variance as inherent to non-zero temperature. If full reproducibility
 is needed, set `temperature=0` and note that this changes the hash.
-
-## Human review export
-
-`laglitsynth screening-abstracts-export` joins `verdicts.jsonl` with the
-dedup catalogue and writes an XLSX review workbook for human
-spot-checking. The export is XLSX-only — `verdicts.jsonl` is the
-machine-readable form, the workbook is the human one. (The earlier CSV
-path existed only to round-trip `reviewer_decision` / `reviewer_reason`
-into a stage-4 ingestor that the verdicts-only cutover deleted; it has
-been retired along with the `--format` flag.)
-
-The workbook has one `Index` sheet plus one tab per included work. The
-per-work tab puts the bibliographic block (title, authors, journal,
-year, doi, openalex link, abstract) at the top, the screening criterion
-+ reviewer-score cells in the middle, and the LLM verdict in a collapsed
-group at the bottom — so the reviewer scores without being primed by the
-LLM's number, with the LLM's verdict one click away for cross-check.
-
-```bash
-laglitsynth screening-abstracts-export \
-    --verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl
-
-# Spot-check a reproducible random sample of 30 works.
-laglitsynth screening-abstracts-export \
-    --verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    --n-subset 30 --subset-seed 1
-```
-
-Default output: `<verdicts parent>/review.xlsx`. Override with `--output`.
-`--meta` defaults to `<verdicts parent>/screening-meta.json` and is read
-to embed the screening criterion (the loaded `system_prompt`) and the LLM
-fingerprint (`model`, `temperature`, `prompt_sha256`) into each per-work
-sheet. A `work_id` present in the verdicts file but absent from the
-catalogue aborts the export — the two inputs are expected to come from
-the same pipeline run.
-
-### Sampling
-
-`--n-subset N` draws a uniform random sample of `N` verdicts using
-`--subset-seed` (default: `0`) and emits them in their original verdict-file
-order. When `N >= len(verdicts)` or `--n-subset` is unset the whole set is
-emitted — the same command covers both "spot-check 30" and "all of them."
-
-### Sheet layout
-
-The `Index` sheet has three reviewer-identity rows above the table —
-`reviewer_name`, `reviewer_email`, `review_date` — followed by the
-header row at row 5 and one data row per included work from row 6:
-`work_id`, `title`, `authors`, `journal`, `year`, `sheet` (hyperlink
-into the per-work tab). The Index carries no LLM-derived columns:
-the reviewer triages by bibliography only and forms an opinion before
-seeing what the LLM said.
-
-Each per-work `W<id>` sheet uses a vertical `Field | Value` layout:
-
-- Row 1: `← back to Index` hyperlink.
-- Rows 3–9: `title`, `authors`, `journal`, `publication_year`, `doi`
-  (clickable), `openalex` (clickable), `abstract` (wrapped).
-- Row 11: `criterion` — the loaded `system_prompt` verbatim from
-  `screening-meta.json`.
-- Row 12: `scoring_instructions` — `Score 0% (not relevant) to 100%
-  (perfectly relevant)`.
-- Rows 13–15: `reviewer_score`, `reviewer_reason`, `reviewer_remarks`
-  (free-form general feedback on the record), pre-filled with
-  placeholder strings the reviewer overwrites.
-- Row 17: `LLM details (expand to peek)` — header for a collapsed
-  block that holds `llm_score` (percent), `llm_reason`, `llm_model`,
-  `llm_temperature`, `llm_prompt_sha256`, `llm_raw_response`. Excel,
-  LibreOffice and Numbers all honour openpyxl's row outlining; the
-  reviewer has to actively expand to see the LLM's verdict.
-
-Sheet names are the trailing OpenAlex id (e.g. `W3213722062`);
-collisions are suffixed `_2`, `_3`, …. `no-abstract` verdicts are
-filtered out — there is nothing for the human to score from. The
-other null-score sentinels (`llm-parse-failure`, `llm-timeout`) still
-get a per-work sheet because the abstract is present: `llm_score` is
-blank, `llm_reason` carries the sentinel string, and `llm_raw_response`
-is blank for `llm-timeout` and carries the malformed text for
-`llm-parse-failure`.
-
-The export is read-only: edits to LLM cells are ignored at ingest.

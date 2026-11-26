@@ -129,8 +129,8 @@ counted nor flagged. Per-sentinel counts (`tei_parse_failure_count`,
 run without re-reading `verdicts.jsonl`. There is no `no_source_count`
 or `by_source_basis` — with full-text the only basis, a per-basis
 breakdown carries no information. `criterion` records the criteria
-system prompt verbatim so the review export can embed the same question
-the LLM saw without re-loading the criteria YAML.
+system prompt verbatim, so the question the LLM saw is readable without
+re-loading the criteria YAML.
 
 ## Storage layout
 
@@ -284,40 +284,6 @@ User: full_text:
 `response_format={"type": "json_object"}`, `temperature=0.8`, per-call
 random seed recorded on the verdict. Same shape as
 [`screening-abstracts`](screening-abstracts.md).
-
-## Review export
-
-`fulltext-eligibility-export` writes an XLSX review workbook
-([`export.py`](../src/laglitsynth/fulltext_eligibility/export.py)) for
-human spot-checking the LLM stage and tuning its prompt. It is XLSX-only
-— the JSONL sidecar is the machine-readable form. The workbook has an
-`Index` sheet and one tab per sampled work. The `Index` opens with three
-reviewer-identity rows (`reviewer_name` / `reviewer_email` /
-`review_date`, with placeholder values to fill in) above a table with one
-row per sampled work (bibliographic columns, the `eligible` / `llm_reason`
-verdict inline, and a hyperlink to the per-work tab, as a light navigation
-aid). The per-work tab is the working surface: a back-to-Index link, a
-bibliographic block, the eligibility criterion pulled verbatim from
-`eligibility-meta.json` so the reviewer sees the same question the LLM saw,
-a structured reviewer block (`reviewer_eligible` / `reviewer_reason` /
-`reviewer_remarks`, pre-filled with placeholders), and finally a collapsed
-LLM-verdict block (the model's `eligible`, `reason`, seed, and fingerprint
-hidden behind an outline toggle).
-
-```
-laglitsynth fulltext-eligibility-export \
-    --verdicts data/fulltext-eligibility/<run-id>/verdicts.jsonl \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    [--meta data/fulltext-eligibility/<run-id>/eligibility-meta.json] \
-    [--output <verdicts parent>/review.xlsx] \
-    [--n-subset N] [--subset-seed 0]
-```
-
-`--n-subset` / `--subset-seed` draw a reproducible random sample (the
-intended workflow is digging into a subset and generalizing, not a wide
-all-works scan); unset or `>=` the verdict count emits the full set in
-verdict order. A verdict whose `work_id` is absent from the catalogue
-raises a `ValueError` naming the offending id.
 
 ## What to defer
 

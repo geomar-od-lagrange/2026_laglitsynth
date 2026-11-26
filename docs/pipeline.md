@@ -15,13 +15,11 @@ stages are still referenced by their original numbers throughout the pipeline.
 |---|---|---|
 | 1 | [catalogue-fetch](#1-catalogue-fetch) | catalogue |
 | 2 | [catalogue-dedup](#2-catalogue-dedup) | catalogue |
-| 2b | [abstract-lookup](#2b-abstract-lookup) | catalogue |
 | 3 | [screening-abstracts](#3-screening-abstracts) | catalogue |
 | 5 | [fulltext-retrieval](#5-fulltext-retrieval) | catalogue → corpus |
 | 6 | [fulltext-extraction](#6-fulltext-extraction) | corpus |
 | 7 | [fulltext-eligibility](#7-fulltext-eligibility) | corpus |
 | 8 | [extraction-codebook](#8-extraction-codebook) | corpus |
-| 9 | [extraction-adjudication](#9-extraction-adjudication) | corpus |
 | 10 | [synthesis-quantitative](#10-synthesis-quantitative) | synthesis |
 | 11 | [synthesis-thematic](#11-synthesis-thematic) | synthesis |
 | 12 | [synthesis-narrative](#12-synthesis-narrative) | synthesis |
@@ -47,18 +45,6 @@ work appears under different OpenAlex IDs. Deduplication operates on metadata
 
 - **Consumes:** retrieved catalogue
 - **Produces:** deduplicated catalogue
-
-### 2b. abstract-lookup
-
-Backfills missing abstracts by DOI so screening always has text. For each work
-with no abstract and a DOI, it looks one up via Semantic Scholar → OpenAlex →
-Crossref, stopping at the first non-empty result, and writes the abstract to a
-sidecar keyed by work id — the deduplicated catalogue is never rewritten in
-place. Works without a DOI are skipped and reported. See
-[abstract-lookup.md](abstract-lookup.md).
-
-- **Consumes:** deduplicated catalogue, Semantic Scholar / OpenAlex / Crossref APIs
-- **Produces:** abstract sidecar (per-work resolved abstract and source)
 
 ### 3. screening-abstracts
 
@@ -131,24 +117,6 @@ sentinel reasons, and [codebook.md](codebook.md) for the seed field list.
   full-text corpus, codebook
 - **Produces:** extraction records — one structured record per paper
 
-### 9. extraction-adjudication
-
-A human reviewer spot-checks a sample of extraction records, verifying that
-each extracted value matches the verbatim context the model cited for it. The
-reviewer works in the XLSX workbook that `extraction-codebook-export` writes,
-filling its `reviewer_correction` column. Stage 9 reads those corrections back
-and records agreement between human and model to support methodological
-transparency in the eventual publication. The stage is not implemented, and
-its output contract is open — see
-[adjudication-extraction.md](adjudication-extraction.md).
-
-- **Consumes:** extraction records, reviewer-filled review workbook
-- **Produces:** corrections recorded alongside the extraction records, not a
-  corrected copy of them
-
-*Optional: findings may feed back to the codebook and trigger re-extraction.
-See [Optional extensions](#optional-extensions).*
-
 ### 10. synthesis-quantitative
 
 Validated extraction records are aggregated to produce quantitative answers to
@@ -186,13 +154,12 @@ papers, low-confidence extraction records) are explicitly flagged.
 
 ## Human spot-checking
 
-Every LLM-driven stage (screening-abstracts, fulltext-eligibility, extraction-codebook)
-produces an XLSX review workbook for human spot-checking
-(`<stage>-export` subcommands). Each workbook samples a random subset
-(`--n-subset` / `--subset-seed`) and gives each work its own tab as the
+Stage 8 (extraction-codebook) produces an XLSX review workbook for human
+spot-checking (`extraction-codebook-export`). The workbook samples a random
+subset (`--n-subset` / `--subset-seed`) and gives each work its own tab as the
 working surface, with an Index sheet for navigation; the JSONL sidecars
-remain the machine-readable form. This is the general pattern for human
-oversight: export a sample, review, feed corrections back.
+remain the machine-readable form. Screening and eligibility verdicts are
+inspected directly on their `verdicts.jsonl`.
 
 ## Shared resources
 
@@ -216,13 +183,6 @@ Human review of screening verdicts feeds back to refine the search strategy
 or false positives reveal gaps in the search strategy. Requires convergence
 criteria to avoid endless iteration.
 
-### Extract–codebook feedback loop
-
-Adjudication of extraction records (stage 9) feeds back to revise the
-codebook and trigger re-extraction (stage 8). Useful when the codebook
-categories turn out to be too coarse or when unanticipated numerical choices
-emerge. Again requires convergence criteria.
-
 ### Citation-network analysis
 
 The citation graph embedded in the work records can identify foundational
@@ -244,7 +204,7 @@ to make the scholarly accountability step visible.
 Rounded yellow nodes are human steps, blue nodes run a local LLM, grey
 cylinders are data on disk. Dashed nodes are designed but not implemented.
 Of the human steps, only the PDF handoff loop writes back into the data;
-the XLSX review workbooks are read-only surfaces until stage 9 exists.
+the XLSX review workbook is a read-only surface.
 
 ```mermaid
 flowchart TD
@@ -260,10 +220,8 @@ flowchart TD
 
     FETCH[1 catalogue-fetch<br/>one run per query]
     FETCH --> DEDUP[2 catalogue-dedup<br/>id / DOI / title+year]
-    DEDUP --> ALOOK[2b abstract-lookup<br/>S2 → OpenAlex → Crossref]
-    ALOOK --> SCREEN[3 screening-abstracts]:::llm
-    SCREEN --> SX[screening-abstracts-export<br/>XLSX sample]
-    SX --> H3([Reviewer: inspect scores<br/>flag, don't filter]):::human
+    DEDUP --> SCREEN[3 screening-abstracts]:::llm
+    SCREEN --> H3([Reviewer: inspect scores<br/>flag, don't filter]):::human
 
     SCREEN -->|score ≥ threshold| RETR[5 fulltext-retrieval<br/>OA links → Unpaywall]
     RETR --> PDFS[(data/pdfs/<br/>provenance.jsonl)]:::store
@@ -276,16 +234,14 @@ flowchart TD
 
     PDFS --> GROBID[6 fulltext-extraction<br/>GROBID]
     GROBID --> ELIG[7 fulltext-eligibility]:::llm
-    ELIG --> EX[fulltext-eligibility-export<br/>XLSX sample]
-    EX --> H7([Reviewer: check<br/>inclusion verdicts]):::human
+    ELIG --> H7([Reviewer: check<br/>inclusion verdicts]):::human
 
     ELIG -->|eligible| CODE[8 extraction-codebook]:::llm
     CODE --> CX[extraction-codebook-export<br/>XLSX sample]
     CX --> H8([Reviewer: verify values<br/>against context excerpts]):::human
 
-    H8 -.-> ADJ[9 extraction-adjudication<br/>record corrections]:::planned
-    ADJ -.-> QS[10 synthesis-quantitative]:::planned
-    ADJ -.-> TS[11 synthesis-thematic]:::planned
+    CODE -.-> QS[10 synthesis-quantitative]:::planned
+    CODE -.-> TS[11 synthesis-thematic]:::planned
     TS -.-> H11([Reviewer: assign<br/>taxonomy labels]):::human
     QS -.-> NARR[12 synthesis-narrative]:::planned
     H11 -.-> NARR

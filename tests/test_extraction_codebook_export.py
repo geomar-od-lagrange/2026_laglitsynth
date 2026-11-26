@@ -111,7 +111,7 @@ def test_unique_sheet_name_collision_suffix() -> None:
 def test_work_sheet_lists_every_codebook_field(
     tmp_path: Path, ctx: CodebookContext
 ) -> None:
-    """The per-work tab lists each codebook field with value/context/reviewer
+    """The per-work tab lists each codebook field with value/context
     columns, driven off the codebook field list (in spec order)."""
     work = _make_work("https://openalex.org/W1", title="The Title")
     record = _make_record(
@@ -131,7 +131,7 @@ def test_work_sheet_lists_every_codebook_field(
     assert ws["A12"].value == "field"
     assert ws["B12"].value == "value"
     assert ws["C12"].value == "context"
-    assert ws["D12"].value == "reviewer_correction"
+    assert ws["D12"].value is None
 
     # The field rows follow the codebook's spec field order.
     spec_field_names = [f.name for f in ctx.spec.fields]
@@ -141,10 +141,10 @@ def test_work_sheet_lists_every_codebook_field(
         listed.append(ws.cell(row=row, column=1).value)
         row += 1
     assert listed == spec_field_names
-    # The first field carries its extracted value and a reviewer placeholder.
+    # The first field carries its extracted value and nothing in column D.
     first_value_row = 13 + spec_field_names.index("integration_scheme")
     assert ws.cell(row=first_value_row, column=2).value == "RK4"
-    assert "<correct the value" in ws.cell(row=first_value_row, column=4).value
+    assert ws.cell(row=first_value_row, column=4).value is None
 
 
 def test_work_sheet_follows_non_default_codebook(tmp_path: Path) -> None:

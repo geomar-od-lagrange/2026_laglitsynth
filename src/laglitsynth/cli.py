@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 
 from laglitsynth.bake_model import build_subparser as build_bake_model_subparser
-from laglitsynth.abstract_lookup.lookup import build_subparser as build_abstract_lookup_subparser
 from laglitsynth.catalogue_dedup.dedup import build_subparser as build_dedup_subparser
 from laglitsynth.catalogue_dedup.sample import build_subparser as build_sample_subparser
 from laglitsynth.catalogue_fetch.fetch import build_subparser as build_fetch_subparser
@@ -15,7 +14,6 @@ from laglitsynth.config import load_config
 from laglitsynth.extraction_codebook.export import build_subparser as build_extraction_codebook_export_subparser
 from laglitsynth.extraction_codebook.extract import build_subparser as build_extraction_codebook_subparser
 from laglitsynth.fulltext_eligibility.eligibility import build_subparser as build_eligibility_subparser
-from laglitsynth.fulltext_eligibility.export import build_subparser as build_eligibility_export_subparser
 from laglitsynth.fulltext_extraction.extract import build_subparser as build_extraction_subparser
 from laglitsynth.fulltext_retrieval.export import build_subparser as build_retrieval_export_subparser
 from laglitsynth.fulltext_retrieval.import_ import build_subparser as build_retrieval_import_subparser
@@ -23,7 +21,6 @@ from laglitsynth.fulltext_retrieval.retrieve import build_subparser as build_ret
 from laglitsynth.ids import build_subparser as build_run_id_subparser
 from laglitsynth.manifest import build_subparser as build_manifest_init_subparser
 from laglitsynth.review import build_subparser as build_review_config_subparser
-from laglitsynth.screening_abstracts.export import build_subparser as build_screening_export_subparser
 from laglitsynth.screening_abstracts.screen import build_subparser as build_screening_subparser
 
 _BUILDERS = (
@@ -31,15 +28,12 @@ _BUILDERS = (
     build_fetch_subparser,
     build_dedup_subparser,
     build_sample_subparser,
-    build_abstract_lookup_subparser,
     build_screening_subparser,
-    build_screening_export_subparser,
     build_retrieval_subparser,
     build_retrieval_export_subparser,
     build_retrieval_import_subparser,
     build_extraction_subparser,
     build_eligibility_subparser,
-    build_eligibility_export_subparser,
     build_extraction_codebook_subparser,
     build_extraction_codebook_export_subparser,
     build_manifest_init_subparser,

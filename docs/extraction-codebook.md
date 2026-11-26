@@ -12,8 +12,8 @@ an eligible work without a usable full-text extraction is not processed
 numerical-method detail abstracts do not carry.
 
 This is the first real run of phase 2 of the codebook: a best-guess
-schema populated by the LLM against real papers. Records feed stage 9
-(human adjudication) and stages 10–12 (synthesis). Schema churn is
+schema populated by the LLM against real papers. Records feed stages
+10–12 (synthesis). Schema churn is
 expected once phase 3 human review begins.
 
 ## Prerequisites
@@ -377,9 +377,8 @@ values to fill in) above a table with one row per sampled work
 (bibliographic columns plus a hyperlink to the per-work tab, as a light
 navigation aid). The per-work tab is the working surface: a back-to-Index
 link, a bibliographic block, the embedded criterion, then one row per
-codebook field with columns `field | value | context |
-reviewer_correction` (the correction column pre-filled with a
-"leave blank if right" placeholder), a `reviewer_remarks` row, and
+codebook field with columns `field | value | context`, a
+`reviewer_remarks` row, and
 finally a collapsed LLM-meta block (reason, seed, truncated, model,
 temperature, prompt_sha256, raw_response — hidden behind an outline
 toggle). The field list is driven off the codebook
@@ -408,9 +407,7 @@ laglitsynth extraction-codebook-export \
 intended workflow is digging into a subset and generalizing, not a wide
 all-works scan); unset or `>=` the record count emits the full set in
 record order. A record whose `work_id` is absent from the catalogue
-raises a `ValueError` naming the offending id. Stage 9
-(`extraction-adjudication`) will read the reviewer columns back in — that
-ingestion is a separate plan.
+raises a `ValueError` naming the offending id.
 
 ## What to defer
 

@@ -18,18 +18,14 @@ scores already exist in the verdict sidecar. Downstream stages re-run
 with `--skip-existing` and only process newly-included works.
 
 See [retuning-propagation.md](../plans/done/retuning-propagation.md) for the
-full design rationale. Multi-run consensus (running LLM stages multiple
-times and combining results) is a planned optional extension; see
-[multi-run-consensus.md](../plans/multi-run-consensus.md).
+full design rationale.
 
 ### Resolution
 
 Stages 5, 7, and 8 each join the deduplicated catalogue against an upstream
 verdict sidecar at a caller-supplied threshold to determine their active work
 set. This logic lives in a small file-local `_active_works` helper in each
-stage's runner — three copies by design. A shared `laglitsynth.resolve`
-module is deferred until stage 9 adds a fourth consumer; see the
-[Resolve module](#resolve-module) note under "Gaps" below.
+stage's runner — three copies by design.
 
 A catalogue work absent from the upstream verdicts file is **silently
 dropped** — it never enters the active set and produces no output row or
@@ -77,19 +73,6 @@ The meta files stay as per-run provenance records — they are not merged.
 | `data/catalogue-dedup/dropped.jsonl` | [`DroppedRecord`](../src/laglitsynth/catalogue_dedup/models.py) | Dropped duplicates with the matching rule and the surviving work's ID |
 | `data/catalogue-dedup/dedup-meta.json` | [`DeduplicationMeta`](../src/laglitsynth/catalogue_dedup/models.py) | Counts by matching rule |
 | `data/catalogue-dedup/sample-<n>-seed<seed>.jsonl` | [`Work`](../src/laglitsynth/catalogue_fetch/models.py) | Optional seeded subset written by `catalogue-sample`, passed downstream as `--catalogue`; `.meta.json` sidecar is a [`SampleMeta`](../src/laglitsynth/catalogue_dedup/models.py) |
-
-### Stage 2b — abstract-lookup *(exists)*
-
-| Path | Model | Description |
-|---|---|---|
-| `data/abstract-lookup/abstracts.jsonl` | [`AbstractRecord`](../src/laglitsynth/abstract_lookup/models.py) | Per-work resolved abstract and source (`None` when still missing) |
-| `data/abstract-lookup/abstract-lookup-meta.json` | [`AbstractLookupMeta`](../src/laglitsynth/abstract_lookup/models.py) | Counts: filled, still-missing, no-DOI, by source |
-
-Reads the deduplicated catalogue; for each `Work` with `abstract is None` and a
-DOI it looks one up via Semantic Scholar → OpenAlex → Crossref (first non-empty
-wins) and writes the abstract to the sidecar keyed by work id. The catalogue
-file is never rewritten; downstream stages join the sidecar at read time. See
-[abstract-lookup.md](abstract-lookup.md).
 
 ### Stage 3 — screening-abstracts *(exists)*
 
@@ -139,15 +122,13 @@ export's `pdf-manifest.csv`.
 | `data/fulltext-eligibility/<run-id>/verdicts.jsonl` | [`EligibilityVerdict`](../src/laglitsynth/fulltext_eligibility/models.py) | Per-work eligibility decision (tri-state with sentinel reasons; no `source_basis` — full-text-only) |
 | `data/fulltext-eligibility/<run-id>/eligibility-meta.json` | [`EligibilityMeta`](../src/laglitsynth/fulltext_eligibility/models.py) | Sentinel counts + verbatim `criterion`, nested `run` + `llm` |
 | `data/fulltext-eligibility/<run-id>/config.yaml` | (YAML) | Resolved CLI+config, criteria inlined |
-| `data/fulltext-eligibility/<run-id>/review.xlsx` | (XLSX, on demand) | `fulltext-eligibility-export` review workbook (Index + per-work tabs) |
 
 Stage 7 joins the deduplicated catalogue against stage 3's `verdicts.jsonl`
 at the `--screening-threshold` cutoff, then gates that active set on
 extraction presence — it is full-text-only, so works without an
 `ExtractedDocument` are skipped (no verdict row, no count), not flagged.
 `verdicts.jsonl` is the source of truth and the sole machine output; there
-is no derived `eligible.jsonl`. The optional `review.xlsx` is a human
-spot-check artifact written by `fulltext-eligibility-export`.
+is no derived `eligible.jsonl`.
 
 ### Stage 8 — extraction-codebook *(exists)*
 
@@ -164,18 +145,9 @@ it is full-text-only, so eligible works without an `ExtractedDocument` are
 skipped (no record row, no count). Every processed work produces exactly
 one record; sentinel records carry `None` in all content fields and a
 `reason` from the vocabulary in
-[extraction-codebook.md](extraction-codebook.md). Stage 9 and stages 10–12
+[extraction-codebook.md](extraction-codebook.md). Stages 10–12
 read `records.jsonl` directly. The optional `review.xlsx` is a human
 spot-check artifact written by `extraction-codebook-export`.
-
-### Stage 9 — extraction-adjudication
-
-Stage 9 has no output contract yet. Its input is the reviewer-filled
-`review.xlsx` from `extraction-codebook-export`, paired with stage 8's
-`records.jsonl`; the paths and models it writes are open questions listed in
-[adjudication-extraction.md](adjudication-extraction.md). Corrections will be
-stored alongside the original extraction records rather than replacing them,
-so downstream stages apply them at read time.
 
 ### Stage 10 — synthesis-quantitative
 
@@ -223,13 +195,6 @@ laglitsynth catalogue-sample --n N --seed N \
     [--input data/catalogue-dedup/deduplicated.jsonl] \
     [--output data/catalogue-dedup/sample-<n>-seed<seed>.jsonl]
 
-# Stage 2b — abstract-lookup
-laglitsynth abstract-lookup \
-    --input data/catalogue-dedup/deduplicated.jsonl \
-    --output-dir data/abstract-lookup/ \
-    --email EMAIL \
-    [--api-key KEY] [--skip-existing]
-
 # Stage 3 — screening-abstracts
 laglitsynth screening-abstracts [data/catalogue-dedup/deduplicated.jsonl] \
     [--screening-criteria FILE] \
@@ -238,12 +203,6 @@ laglitsynth screening-abstracts [data/catalogue-dedup/deduplicated.jsonl] \
     [--decisions-url URL] [--screening-threshold FLOAT] \
     [--base-url URL] [--max-records N] [--concurrency N] [--dry-run] \
     [--pass-all]
-
-# Stage 3 — screening-abstracts-export (human review, XLSX only)
-laglitsynth screening-abstracts-export \
-    --verdicts data/screening-abstracts/<run-id>/verdicts.jsonl \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    [--meta PATH] [--output PATH] [--n-subset N] [--subset-seed N]
 
 # Stage 5 — fulltext-retrieval (automatic OA + Unpaywall into data/pdfs/)
 laglitsynth fulltext-retrieval \
@@ -284,12 +243,6 @@ laglitsynth fulltext-eligibility \
     [--skip-existing] [--max-records N] [--dry-run] \
     [--model MODEL] [--base-url URL] \
     [--concurrency N] [--num-ctx N]
-
-# Stage 7 — fulltext-eligibility-export (human review, XLSX only)
-laglitsynth fulltext-eligibility-export \
-    --verdicts data/fulltext-eligibility/<run-id>/verdicts.jsonl \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    [--meta PATH] [--output PATH] [--n-subset N] [--subset-seed N]
 
 # Stage 8 — extraction-codebook
 laglitsynth extraction-codebook \
@@ -337,10 +290,6 @@ model names, thresholds) are CLI-only. Driver scripts
 tool — this is still the recommended pattern for wrapper invocations.
 
 ### Planned subcommands
-
-Stage 9 is omitted here: its inputs come from a reviewer-filled workbook, so
-its flags depend on contract questions that
-[adjudication-extraction.md](adjudication-extraction.md) leaves open.
 
 ```sh
 # Stage 10 — synthesis-quantitative
@@ -406,10 +355,10 @@ laglitsynth fulltext-eligibility
 laglitsynth extraction-codebook
 ```
 
-#### STOP HERE — stages 9–12 are not yet implemented
+#### STOP HERE — stages 10–12 are not yet implemented
 
-Stages 9–12 (extraction adjudication, quantitative synthesis, thematic
-synthesis, narrative synthesis) are specified in
+Stages 10–12 (quantitative synthesis, thematic synthesis, narrative
+synthesis) are specified in
 [pipeline.md](pipeline.md) but not yet built. Users running an
 end-to-end pipeline stop after stage 8.
 
@@ -478,7 +427,7 @@ context-window change produces a different digest. Stage 8 also folds
 | Category | Policy | Models |
 |---|---|---|
 | OpenAlex-sourced | `extra="ignore"` — upstream may add fields | `Work`, `Author`, `Authorship`, `Institution`, `Source`, `Location`, `OpenAccess`, `Biblio`, `TopicHierarchy`, `Topic`, `Keyword` |
-| Internally owned | `extra="forbid"` — unexpected fields are bugs | All `*Meta`, `RunMeta`, `LlmMeta`, `ScreeningVerdict`, `DroppedRecord`, `PdfProvenanceRecord`, `PdfSource`, `ExtractedDocument`, `Section`, `Figure`, `Citation`, `BibReference`, `EligibilityVerdict`, `ExtractionRecord`, `AbstractRecord`, `AbstractLookupMeta` |
+| Internally owned | `extra="forbid"` — unexpected fields are bugs | All `*Meta`, `RunMeta`, `LlmMeta`, `ScreeningVerdict`, `DroppedRecord`, `PdfProvenanceRecord`, `PdfSource`, `ExtractedDocument`, `Section`, `Figure`, `Citation`, `BibReference`, `EligibilityVerdict`, `ExtractionRecord` |
 
 ## Model dependency graph
 
@@ -502,16 +451,11 @@ context-window change produces a different digest. Stage 8 also folds
 | [`Section`](../src/laglitsynth/fulltext_extraction/tei.py), [`Figure`](../src/laglitsynth/fulltext_extraction/tei.py), [`Citation`](../src/laglitsynth/fulltext_extraction/tei.py), [`BibReference`](../src/laglitsynth/fulltext_extraction/tei.py) | `laglitsynth.fulltext_extraction.tei` | 7, 8 (lazy views over TEI) |
 | [`EligibilityVerdict`](../src/laglitsynth/fulltext_eligibility/models.py) | `laglitsynth.fulltext_eligibility.models` | 7 |
 | [`EligibilityMeta`](../src/laglitsynth/fulltext_eligibility/models.py) | `laglitsynth.fulltext_eligibility.models` | 7 |
-| `ExtractionRecord` (dynamic; [`build_record_model`](../src/laglitsynth/extraction_codebook/codebook.py)) | `laglitsynth.extraction_codebook.codebook` | 8, 9, 10, 11 |
+| `ExtractionRecord` (dynamic; [`build_record_model`](../src/laglitsynth/extraction_codebook/codebook.py)) | `laglitsynth.extraction_codebook.codebook` | 8, 10, 11 |
 | [`ExtractionCodebookMeta`](../src/laglitsynth/extraction_codebook/models.py) | `laglitsynth.extraction_codebook.models` | 8 |
 | [`CodebookSpec`](../src/laglitsynth/extraction_codebook/codebook.py) | `laglitsynth.extraction_codebook.codebook` | 8 (codebook YAML schema) |
-| [`AbstractRecord`](../src/laglitsynth/abstract_lookup/models.py) | `laglitsynth.abstract_lookup.models` | 2b |
-| [`AbstractLookupMeta`](../src/laglitsynth/abstract_lookup/models.py) | `laglitsynth.abstract_lookup.models` | 2b |
 
 ### Models not yet defined
-
-Stage 9 defines no models here. Its correction record and meta shape are open
-questions in [adjudication-extraction.md](adjudication-extraction.md).
 
 | Model | Planned module | Stage |
 |---|---|---|
@@ -524,13 +468,11 @@ questions in [adjudication-extraction.md](adjudication-extraction.md).
 |---|---|---|
 | 1. catalogue-fetch | — | Work, FetchMeta |
 | 2. catalogue-dedup | Work | Work, DroppedRecord, DeduplicationMeta |
-| 2b. abstract-lookup | Work | AbstractRecord, AbstractLookupMeta |
 | 3. screening-abstracts | Work | ScreeningVerdict, ScreeningMeta |
 | 5. fulltext-retrieval | Work + ScreeningVerdict (inline join) | PdfProvenanceRecord, RetrievalMeta |
 | 6. fulltext-extraction | (PDFs) | ExtractedDocument, ExtractionMeta |
 | 7. fulltext-eligibility | Work + ScreeningVerdict (inline join), ExtractedDocument | EligibilityVerdict, EligibilityMeta |
 | 8. extraction-codebook | Work + EligibilityVerdict (inline join), ExtractedDocument | ExtractionRecord, ExtractionCodebookMeta |
-| 9. extraction-adjudication | ExtractionRecord, reviewer-filled `review.xlsx` | (contract open) |
 | 10. synthesis-quantitative | ExtractionRecord (via resolve) | SynthesisStatistics |
 | 11. synthesis-thematic | ExtractionRecord (via resolve) | RationaleTaxonomy |
 | 12. synthesis-narrative | SynthesisStatistics, RationaleTaxonomy | (markdown) |
@@ -556,6 +498,4 @@ questions in [adjudication-extraction.md](adjudication-extraction.md).
 
 Stages 5, 7, and 8 each perform an inline join of the deduplicated catalogue
 against upstream verdict sidecars at a caller-supplied threshold. This logic
-is currently duplicated per stage. A shared `laglitsynth.resolve` module is
-planned to consolidate it once a fourth consumer would otherwise add another
-copy (expected when stage 9 lands).
+is duplicated per stage.

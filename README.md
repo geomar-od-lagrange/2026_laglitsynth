@@ -211,42 +211,24 @@ Notes:
   extraction (which are cheap to redo with `--skip-existing`), then
   submit a second job with stages 7..8.
 
-### Reviewer exports
+### Reviewer export
 
-The pipeline writes JSONL only — no human-readable spreadsheets are
-produced automatically. To spot-check the LLM stages, run the matching
-`*-export` subcommand after the pipeline lands its output. The exports
-are XLSX-only: an Index sheet for navigation plus one tab per work as
-the working surface, with `--n-subset` / `--subset-seed` for a
+The pipeline writes JSONL only. To spot-check stage 8, run
+`extraction-codebook-export` after the pipeline lands its output. It
+writes an XLSX workbook: an Index sheet for navigation plus one tab per
+work as the working surface, with `--n-subset` / `--subset-seed` for a
 reproducible random sample.
 
 ```bash
-# Stage 3 — abstract screening verdicts
-laglitsynth screening-abstracts-export \
-    --verdicts data/run/screening-abstracts/<run-id>/verdicts.jsonl \
-    --catalogue data/run/catalogue-dedup/deduplicated.jsonl
-
-# Stage 7 — full-text eligibility verdicts
-laglitsynth fulltext-eligibility-export \
-    --verdicts data/run/fulltext-eligibility/<run-id>/verdicts.jsonl \
-    --catalogue data/run/catalogue-dedup/deduplicated.jsonl
-
 # Stage 8 — codebook extraction records (needs the run's --codebook)
 laglitsynth extraction-codebook-export \
     --records data/run/extraction-codebook/<run-id>/records.jsonl \
-    --catalogue data/run/catalogue-dedup/deduplicated.jsonl
-
-# Reproducible random subset of 30 works (any of the above)
-laglitsynth screening-abstracts-export \
-    --verdicts data/run/screening-abstracts/<run-id>/verdicts.jsonl \
     --catalogue data/run/catalogue-dedup/deduplicated.jsonl \
     --n-subset 30 --subset-seed 1
 ```
 
-See [docs/screening-abstracts.md](docs/screening-abstracts.md),
-[docs/eligibility.md](docs/eligibility.md), and
-[docs/extraction-codebook.md](docs/extraction-codebook.md) for the full
-export schemas.
+See [docs/extraction-codebook.md](docs/extraction-codebook.md) for the
+export schema.
 
 ## OpenAlex API key
 

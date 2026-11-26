@@ -94,13 +94,13 @@ Update this file when a plan is written, implemented, or archived.
 - [DOI → abstract lookup](done/doi-abstract-lookup.md) — `abstract-lookup`
   stage backfills missing abstracts by DOI (Semantic Scholar → OpenAlex →
   Crossref, first non-empty wins) into an
-  [`AbstractRecord`](../src/laglitsynth/abstract_lookup/models.py) sidecar keyed
+  `AbstractRecord` sidecar keyed
   by work id; the deduplicated catalogue is never rewritten in place. Runs
   between `catalogue-dedup` and `screening-abstracts`. Source clients take an
   injected `httpx.Client` (tested via `httpx.MockTransport`, no network);
   `--email`/`--api-key` with `.env` fallback, `Retry-After` honoured with a
-  bounded backoff, `--skip-existing` re-processes only gaps. See
-  [abstract-lookup.md](../docs/abstract-lookup.md).
+  bounded backoff, `--skip-existing` re-processes only gaps. Removed again
+  by the [pipeline restructure](pipeline-restructure.md).
 
 - [Diversifying full-text retrieval](done/fulltext-retrieval-diversified.md) —
   stage 5 now maintains a persistent, work-keyed PDF store at
@@ -236,15 +236,6 @@ Title-based import matching for returned PDFs that embed no DOI
 tuned against the measured publisher-PDF corpus rather than an invented
 threshold.
 
-## Deferred until pipeline is feature-complete
-
-- [Multi-run consensus](multi-run-consensus.md) — plan exists but is
-  deferred until stages 7–12 have landed. Consensus only becomes
-  meaningful once there's an end-to-end answer to compare robustness
-  against; running it earlier tunes a knob whose downstream effect
-  isn't observable yet. Plan text also predates the cutover and
-  needs freshening when picked back up.
-
 ## Queued — driven by future stages
 
 - Stages 9–12 (`extraction-adjudication`, `synthesis-quantitative`,
@@ -288,7 +279,12 @@ dropped and why, so the same idea is not re-proposed from the gap it leaves.
 - **Stage 9 as a pass-through.** The design that copied stage 8 records to a
   `validated.jsonl` unchanged died with the stage 4 pass-through it was
   modelled on. Reviewer corrections arrive through the stage 8 XLSX workbook
-  instead; see [adjudication-extraction.md](../docs/adjudication-extraction.md).
+  instead; stage 9 itself is dropped by the
+  [pipeline restructure](pipeline-restructure.md).
+- **Multi-run consensus.** Running the LLM stages several times and
+  combining the results was planned as an optional robustness check. The
+  [pipeline restructure](pipeline-restructure.md) drops consensus runs, and
+  the plan is deleted.
 - **Zotero export probe.** Withdrawn with the Zotero-import open question,
   under [Cross-machine + storage convention](#in-flight) above.
 
