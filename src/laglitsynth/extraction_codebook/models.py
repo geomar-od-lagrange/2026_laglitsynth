@@ -20,7 +20,8 @@ class ExtractionCodebookMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run: RunMeta
     llm: LlmMeta
-    input_catalogue: str
+    corpus_id: str  # CorpusMeta.corpus_id of the corpus the works came from
+    eligibility_prompt_sha256: str  # prompt_sha256 of the eligibility verdicts read
     input_eligibility_verdicts: str
     input_extractions: str
     input_count: int
@@ -28,4 +29,4 @@ class ExtractionCodebookMeta(BaseModel):
     skipped_count: int  # tei-parse-failure only
     llm_parse_failure_count: int
     llm_timeout_count: int = 0
-    truncated_count: int
+    llm_rejected_count: int = 0

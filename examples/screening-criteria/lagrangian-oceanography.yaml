@@ -1,28 +1,20 @@
 id: lagrangian-oceanography
 description: |
   Relevance criterion for a systematic review of numerical methods in
-  computational Lagrangian oceanography. Used by the stage-3 abstract
-  screening classifier as the system prompt.
-system_prompt: |-
-  You are a relevance classifier for academic paper abstracts.
-
-  The user will provide a standard literature listing — title, authors,
-  year, and abstract. Score how relevant the work is to the following
-  criterion:
-
-  On a scale from 0% (not relevant) to 100% (perfectly relevant), how
-  relevant is this work to Lagrangian particle tracking in oceanography?
-
-  Return a JSON object with exactly two fields:
-  - "relevance_score": an integer from 0 to 100 indicating how relevant
-    the work is to the criterion (0 = not relevant at all, 100 = perfectly
-    relevant)
-  - "reason": a short string (one sentence) explaining your score
-
-  Return ONLY the JSON object, nothing else.
-
-# The same criterion as a yes/no decision, for `--backend decisions`.
-# Scope wording is tracked in issue #26; keep the two in step.
+  computational Lagrangian oceanography. Used by stage-3 abstract
+  screening as the predicate question sent to the decisions endpoint.
+# Scope wording is tracked in issue #26.
+#
+# Known weakness: this asks whether the abstract shows the work tracking
+# particles. When an abstract doesn't name its method (e.g. a larval
+# connectivity or migration study), the model answers "false" with high
+# confidence, so a low score doesn't mean "confidently out" and the
+# threshold can't be read as a recall guarantee. A recall-oriented
+# variant asks the inverse, e.g. "Could the full text use or develop
+# Lagrangian particle tracking in an ocean flow? Answer false only if the
+# abstract makes clear it does not." Re-screen with that wording and
+# compare both against full-text eligibility verdicts before relying on
+# a threshold.
 decision:
   instructions: >-
     Is this work relevant to Lagrangian particle tracking in oceanography?

@@ -1,4 +1,11 @@
-"""LLM-based full-text eligibility assessment via Ollama."""
+"""Full-text eligibility assessment on the decisions endpoint.
+
+Reads the works of ``data/corpus/`` and their stage 6 extractions. Each
+work's rendered full text is sent as the ``input`` of one decision whose
+predicate question comes from the eligibility-criteria YAML's ``decision``
+block. The answer's probability is stored on the verdict and cut at 0.5
+into ``eligible``.
+"""
 
 from __future__ import annotations
 
@@ -6,32 +13,31 @@ import argparse
 import hashlib
 import json
 import logging
-import random
 import sys
 import time
 from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
+import httpx
 from lxml import etree
-from openai import APIConnectionError, APITimeoutError, OpenAI
-from pydantic import ValidationError
 
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.concurrency import map_concurrent
-from laglitsynth.config import register_config_arg, resolve_yaml_arg, save_resolved_config
+from laglitsynth.config import register_config_arg, save_resolved_config
+from laglitsynth.corpus.load import (
+    load_corpus_meta,
+    read_corpus_pdfs,
+    read_corpus_works,
+    read_current_extractions,
+)
 from laglitsynth.fulltext_eligibility.models import (
     TOOL_NAME,
     EligibilityMeta,
     EligibilityVerdict,
-    _EligibilityPayload,
 )
-from laglitsynth.fulltext_eligibility.prompts import (
-    USER_TEMPLATE,
-    build_user_message,
-    load_system_prompt,
-    render_fulltext,
-)
+from laglitsynth.fulltext_eligibility.prompts import USER_TEMPLATE, render_fulltext
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
 from laglitsynth.io import (
     JsonlReadStats,
@@ -41,14 +47,20 @@ from laglitsynth.io import (
 )
 from laglitsynth.layout import (
     ELIGIBILITY_SUBDIR,
+    corpus_dir,
     extractions_path,
     require_input,
-    resolve_screening_inputs,
+    resolve_analysis_run_id,
 )
-from laglitsynth.manifest import resolve_run_id
-from laglitsynth.models import LlmMeta, RunMeta
-from laglitsynth.ollama import preflight
-from laglitsynth.screening_abstracts.models import ScreeningVerdict
+from laglitsynth.llm import (
+    LlmEndpoint,
+    add_endpoint_args,
+    decide,
+    decisions_client,
+    resolve_endpoint,
+)
+from laglitsynth.models import RunMeta
+from laglitsynth.prompts import DecisionQuestion, load_decision_question
 
 logger = logging.getLogger(__name__)
 
@@ -56,104 +68,56 @@ DEFAULT_ELIGIBILITY_CRITERIA = Path(
     "examples/eligibility-criteria/lagrangian-oceanography.yaml"
 )
 
-_TEMPERATURE = 0.8
-_DEFAULT_NUM_CTX = 32768
-_LLM_TIMEOUT_SECONDS = 300
-_LLM_MAX_RETRIES = 3
+META_FILENAME = "eligibility-meta.json"
+
+_LLM_TIMEOUT_SECONDS = 300.0
+
+# Answer name of the eligibility predicate question.
+QUESTION_NAME = "eligible"
+
+# Probability at or above which a work is eligible. Any other cut is made
+# ad hoc on verdicts.jsonl, which keeps the probability.
+ELIGIBLE_AT = 0.5
 
 
-def _active_works(
-    catalogue_path: Path,
-    screening_verdicts_path: Path,
-    screening_threshold: float,
-    stats: JsonlReadStats | None = None,
-) -> Iterator[Work]:
-    """Yield Works that pass the screening threshold gate.
+def question_sha256(question: DecisionQuestion) -> str:
+    """Prompt hash of a decisions stage: question JSON + input marker."""
+    return hashlib.sha256(
+        (question.canonical_json() + "\n" + USER_TEMPLATE).encode("utf-8")
+    ).hexdigest()
 
-    Works whose ``ScreeningVerdict.relevance_score`` is None (sentinels:
-    ``no-abstract``, ``llm-parse-failure``, ``llm-timeout``) are never
-    filtered — absence of a score is not evidence of irrelevance.  Only an
-    explicit numeric score strictly below ``screening_threshold`` excludes.
 
-    Works present in the catalogue but absent from the verdicts file are also
-    excluded (they were never screened).
+def criteria_sha256(spec: str | Path | dict[str, Any]) -> str:
+    """The ``prompt_sha256`` stage 7 records for an eligibility-criteria spec.
+
+    Raises ``ValueError`` naming the spec when it has no ``decision`` block.
     """
-    verdicts = {
-        v.work_id: v
-        for v in read_jsonl(screening_verdicts_path, ScreeningVerdict, stats)
-    }
-    for w in read_jsonl(catalogue_path, Work, stats):
-        sv = verdicts.get(w.id)
-        if sv is None:
-            continue
-        if sv.relevance_score is not None and sv.relevance_score < screening_threshold:
-            continue
-        yield w
+    return question_sha256(load_decision_question(spec))
 
 
 def classify_eligibility(
     work_id: str,
-    prompt: str,
+    text: str,
     *,
-    model: str,
-    client: OpenAI,
-    system_prompt: str,
-    num_ctx: int = _DEFAULT_NUM_CTX,
+    endpoint: LlmEndpoint,
+    client: httpx.Client,
+    question: DecisionQuestion,
 ) -> EligibilityVerdict:
-    """Call the LLM, validate the payload, compose the verdict.
+    """Decide one work on its rendered full text and compose the verdict.
 
-    On JSON parse error or ``ValidationError`` returns a
-    ``reason="llm-parse-failure"`` sentinel with ``eligible=None``,
-    ``seed=None``, and the raw response attached for audit. Mirrors
-    stage 8's ``extract_codebook`` shape and error handling.
+    ``eligible`` is ``probability >= 0.5``. A sentinel from ``decide``
+    (``llm-timeout``, ``llm-rejected``, ``llm-parse-failure``) leaves both
+    ``None`` and lands in ``reason``.
     """
-    seed = random.randint(0, 2**31 - 1)
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=_TEMPERATURE,
-            seed=seed,
-            extra_body={"options": {"num_ctx": num_ctx}},
-        )
-    except (APITimeoutError, APIConnectionError) as exc:
-        logger.warning("LLM timeout for %s: %s", work_id, exc)
-        return EligibilityVerdict(
-            work_id=work_id,
-            eligible=None,
-            reason="llm-timeout",
-            seed=None,
-            raw_response=None,
-        )
-    content = response.choices[0].message.content or "{}"
-    try:
-        payload = _EligibilityPayload.model_validate_json(content)
-    except (ValidationError, ValueError) as exc:
-        logger.warning("LLM parse failure for %s: %s", work_id, exc)
-        return EligibilityVerdict(
-            work_id=work_id,
-            eligible=None,
-            reason="llm-parse-failure",
-            seed=None,
-            raw_response=content,
-        )
+    decision = decide(client, endpoint, input=text, name=QUESTION_NAME, question=question)
+    probability = decision.probability
     return EligibilityVerdict(
         work_id=work_id,
-        eligible=payload.eligible,
-        reason=payload.reason,
-        seed=seed,
-        raw_response=content,
+        probability=probability,
+        eligible=None if probability is None else probability >= ELIGIBLE_AT,
+        reason=decision.reason,
+        raw_response=decision.raw_response,
     )
-
-
-def _load_extractions(
-    path: Path, stats: JsonlReadStats
-) -> dict[str, ExtractedDocument]:
-    return {rec.work_id: rec for rec in read_jsonl(path, ExtractedDocument, stats)}
 
 
 def assess_works(
@@ -161,11 +125,10 @@ def assess_works(
     extractions: dict[str, ExtractedDocument],
     extraction_output_dir: Path,
     *,
-    client: OpenAI,
-    model: str,
-    num_ctx: int = _DEFAULT_NUM_CTX,
+    client: httpx.Client,
+    endpoint: LlmEndpoint,
     max_records: int | None,
-    system_prompt: str,
+    question: DecisionQuestion,
     skip_ids: set[str] | None = None,
     concurrency: int = 1,
 ) -> Iterator[EligibilityVerdict]:
@@ -174,9 +137,9 @@ def assess_works(
     for work in works:
         if work.id in skip_ids:
             continue
-        # Full-text-only: a work without an extraction never enters the
-        # loop — no verdict row, no count. The gap is already visible
-        # upstream (stage 5/6 provenance), so we don't flag it here.
+        # Full-text-only: a work without a current extraction never enters
+        # the loop — no verdict row, no count. The gap is visible in the
+        # corpus provenance and the stage 6 meta, so we don't flag it here.
         if work.id not in extractions:
             continue
         if max_records is not None and len(eligible) >= max_records:
@@ -185,7 +148,7 @@ def assess_works(
 
     def _call_one(work: Work) -> EligibilityVerdict:
         return _assess_one(
-            work, extractions, extraction_output_dir, client, model, system_prompt, num_ctx
+            work, extractions, extraction_output_dir, client, endpoint, question
         )
 
     yield from map_concurrent(_call_one, eligible, max_workers=concurrency)
@@ -195,10 +158,9 @@ def _assess_one(
     work: Work,
     extractions: dict[str, ExtractedDocument],
     extraction_output_dir: Path,
-    client: OpenAI,
-    model: str,
-    system_prompt: str,
-    num_ctx: int = _DEFAULT_NUM_CTX,
+    client: httpx.Client,
+    endpoint: LlmEndpoint,
+    question: DecisionQuestion,
 ) -> EligibilityVerdict:
     # Full text or nothing: the active set is already gated on extraction
     # presence, so ``extractions[work.id]`` is always set here.
@@ -214,7 +176,6 @@ def _assess_one(
             work_id=work.id,
             eligible=None,
             reason="tei-parse-failure",
-            seed=None,
         )
     if not rendered:
         # Valid XML but empty body: broken extraction on a paper we do
@@ -226,16 +187,13 @@ def _assess_one(
             work_id=work.id,
             eligible=None,
             reason="tei-parse-failure",
-            seed=None,
         )
-    prompt = build_user_message(rendered)
     return classify_eligibility(
         work.id,
-        prompt,
+        rendered,
+        endpoint=endpoint,
         client=client,
-        model=model,
-        system_prompt=system_prompt,
-        num_ctx=num_ctx,
+        question=question,
     )
 
 
@@ -244,31 +202,22 @@ def build_subparser(
 ) -> argparse.ArgumentParser:
     parser = subparsers.add_parser(
         "fulltext-eligibility",
-        help="Assess full-text eligibility of included works using a local LLM.",
+        help="Assess full-text eligibility of included works on the decisions endpoint.",
     )
     parser.add_argument(
-        "--catalogue",
+        "--corpus-dir",
         type=Path,
         default=None,
-        help="Deduplicated catalogue JSONL (default: <data-dir>/catalogue-dedup/deduplicated.jsonl).",
-    )
-    parser.add_argument(
-        "--screening-verdicts",
-        type=Path,
-        default=None,
-        help="Stage 3 verdicts JSONL (default: <data-dir>/screening-abstracts/<run-id>/verdicts.jsonl).",
-    )
-    parser.add_argument(
-        "--screening-threshold",
-        type=float,
-        default=50.0,
-        help="Relevance score cutoff, 0-100 (default: 50)",
+        help="Corpus written by corpus-assemble (default: <data-dir>/corpus/).",
     )
     parser.add_argument(
         "--extractions",
         type=Path,
         default=None,
-        help="Extraction JSONL (default: <data-dir>/fulltext-extraction/extraction.jsonl).",
+        help=(
+            "Extraction JSONL, with extraction-meta.json beside it "
+            "(default: <data-dir>/fulltext-extraction/extraction.jsonl)."
+        ),
     )
     parser.add_argument(
         "--extraction-output-dir",
@@ -289,44 +238,25 @@ def build_subparser(
         "--run-id",
         default=None,
         help=(
-            "Run identifier, shared with the screening run whose verdicts are "
-            "read (default: the run_id in <data-dir>/manifest.json)."
+            "Run identifier, shared with the extraction-codebook run that reads "
+            "these verdicts (default: analysis_run_id in <corpus-dir>/corpus-meta.json)."
         ),
     )
     parser.add_argument(
         "--eligibility-criteria",
         default=str(DEFAULT_ELIGIBILITY_CRITERIA),
         help=(
-            f"Eligibility-criteria YAML — path to a spec on the CLI; on "
-            f"reload from a saved snapshot, the inlined mapping is "
-            f"consumed directly (default: {DEFAULT_ELIGIBILITY_CRITERIA})."
+            f"Eligibility-criteria YAML carrying a 'decision' block — path to "
+            f"a spec on the CLI; on reload from a saved snapshot, the inlined "
+            f"mapping is consumed directly (default: {DEFAULT_ELIGIBILITY_CRITERIA})."
         ),
     )
-    parser.add_argument(
-        "--model",
-        default="gemma3:4b",
-        help="Ollama model name (default: gemma3:4b)",
-    )
-    parser.add_argument(
-        "--base-url",
-        default="http://localhost:11434",
-        help="Ollama API base URL (default: http://localhost:11434)",
-    )
-    parser.add_argument(
-        "--num-ctx",
-        type=int,
-        default=_DEFAULT_NUM_CTX,
-        dest="num_ctx",
-        help=(
-            "Ollama context-window hint passed via extra_body (default: 32768). "
-            "Only fully reliable when the model is Modelfile-baked with the same value."
-        ),
-    )
+    add_endpoint_args(parser, decisions=True)
     parser.add_argument(
         "--max-records",
         type=int,
         default=None,
-        help="Process only the first N catalogue works",
+        help="Process only the first N corpus works",
     )
     parser.add_argument(
         "--skip-existing",
@@ -338,17 +268,6 @@ def build_subparser(
         action="store_true",
         help="Print verdicts to stderr without writing output",
     )
-    parser.add_argument(
-        "--concurrency",
-        type=int,
-        default=1,
-        help=(
-            "In-flight LLM requests (default: 1). Stage 7 benefits more from "
-            "concurrency than stage 8 because its prompts are less prefill-heavy. "
-            "Must not exceed the Ollama server's OLLAMA_NUM_PARALLEL for actual "
-            "parallelism. See docs/llm-concurrency.md."
-        ),
-    )
     register_config_arg(parser)
     parser.set_defaults(run=run)
     return parser
@@ -356,20 +275,21 @@ def build_subparser(
 
 def run(args: argparse.Namespace) -> None:
     data_dir: Path = Path(args.data_dir)
-    args.run_id = resolve_run_id(data_dir, args.run_id)
-    args.catalogue, args.screening_verdicts = resolve_screening_inputs(
-        data_dir, args.catalogue, args.screening_verdicts, args.run_id
+    args.corpus_dir = (
+        Path(args.corpus_dir) if args.corpus_dir is not None else corpus_dir(data_dir)
     )
+    corpus_meta = load_corpus_meta(args.corpus_dir)
+    args.run_id = resolve_analysis_run_id(args.corpus_dir, args.run_id)
     args.extractions = require_input(
         args.extractions if args.extractions is not None else extractions_path(data_dir),
         flag="--extractions",
         upstream="fulltext-extraction",
     )
+    endpoint = resolve_endpoint(args)
 
-    preflight(base_url=args.base_url, model=args.model)
     output_dir: Path = data_dir / ELIGIBILITY_SUBDIR / args.run_id
     verdicts_path = output_dir / "verdicts.jsonl"
-    meta_path = output_dir / "eligibility-meta.json"
+    meta_path = output_dir / META_FILENAME
 
     extraction_output_dir: Path = (
         Path(args.extraction_output_dir)
@@ -377,14 +297,15 @@ def run(args: argparse.Namespace) -> None:
         else Path(args.extractions).parent
     )
 
-    criteria_spec = resolve_yaml_arg(args.eligibility_criteria)
-    system_prompt = load_system_prompt(criteria_spec)
+    # Pass the un-resolved spec so a missing block names the file.
+    try:
+        question = load_decision_question(args.eligibility_criteria)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    prompt_sha256 = question_sha256(question)
 
-    prompt_sha256 = hashlib.sha256(
-        (system_prompt + "\n" + USER_TEMPLATE + "\n" + str(args.num_ctx)).encode("utf-8")
-    ).hexdigest()
-
-    # Prompt-hash guard: refuse --skip-existing when the recorded hash differs.
+    # Resume guards: refuse --skip-existing when the recorded prompt hash
+    # or corpus differs, so verdicts.jsonl never mixes either.
     if args.skip_existing and meta_path.exists():
         try:
             recorded = json.loads(meta_path.read_text())
@@ -400,22 +321,22 @@ def run(args: argparse.Namespace) -> None:
                 f"refusing --skip-existing to avoid mixing prompt versions in "
                 f"{verdicts_path}"
             )
+        if recorded.get("corpus_id") != corpus_meta.corpus_id:
+            raise SystemExit(
+                f"{meta_path} was made on corpus {recorded.get('corpus_id')}, but "
+                f"the corpus is now {corpus_meta.corpus_id}; refusing "
+                f"--skip-existing (pass another --run-id for a fresh run)"
+            )
 
     stats = JsonlReadStats()
-    extractions = _load_extractions(args.extractions, stats)
+    extractions = read_current_extractions(
+        args.extractions, corpus_meta, read_corpus_pdfs(args.corpus_dir), stats
+    )
 
-    # Full-text-only: gate on extraction presence so works without a PDF
-    # never enter the assessed set, get no verdict row, and are not
-    # counted. The gap is already visible in upstream provenance.
+    # Full-text-only: gate on a current extraction so works without a PDF
+    # never enter the assessed set, get no verdict row, and are not counted.
     active: list[Work] = [
-        work
-        for work in _active_works(
-            args.catalogue,
-            args.screening_verdicts,
-            args.screening_threshold,
-            stats,
-        )
-        if work.id in extractions
+        work for work in read_corpus_works(args.corpus_dir) if work.id in extractions
     ]
     total = len(active)
 
@@ -431,7 +352,7 @@ def run(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
 
-    print(f"Assessing {total} works with model {args.model}", file=sys.stderr)
+    print(f"Assessing {total} works with model {endpoint.model}", file=sys.stderr)
     if not args.dry_run:
         print(f"Output dir: {output_dir}", file=sys.stderr)
 
@@ -443,50 +364,44 @@ def run(args: argparse.Namespace) -> None:
     if not args.dry_run and not args.skip_existing and verdicts_path.exists():
         verdicts_path.unlink()
 
-    client = OpenAI(
-        base_url=f"{args.base_url}/v1",
-        api_key="ollama",
-        timeout=_LLM_TIMEOUT_SECONDS,
-        max_retries=_LLM_MAX_RETRIES,
-    )
+    client = decisions_client(endpoint, _LLM_TIMEOUT_SECONDS)
 
     t0 = time.monotonic()
     index = 0
     new_verdicts: list[EligibilityVerdict] = []
 
-    for verdict in assess_works(
-        active,
-        extractions,
-        extraction_output_dir,
-        client=client,
-        model=args.model,
-        num_ctx=args.num_ctx,
-        max_records=args.max_records,
-        system_prompt=system_prompt,
-        skip_ids=skip_ids,
-        concurrency=args.concurrency,
-    ):
-        index += 1
-        new_verdicts.append(verdict)
-        if not args.dry_run:
-            append_jsonl(verdict, verdicts_path)
+    try:
+        for verdict in assess_works(
+            active,
+            extractions,
+            extraction_output_dir,
+            client=client,
+            endpoint=endpoint,
+            max_records=args.max_records,
+            question=question,
+            skip_ids=skip_ids,
+            concurrency=args.concurrency,
+        ):
+            index += 1
+            new_verdicts.append(verdict)
+            if not args.dry_run:
+                append_jsonl(verdict, verdicts_path)
 
-        if verdict.eligible is True:
-            print(
-                f"  [{index}/{total}] eligible — {verdict.work_id[-12:]}",
-                file=sys.stderr,
-            )
-        elif verdict.eligible is False:
-            print(
-                f"  [{index}/{total}] excluded — {verdict.work_id[-12:]}",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                f"  [{index}/{total}] skipped ({verdict.reason})"
-                f" — {verdict.work_id[-12:]}",
-                file=sys.stderr,
-            )
+            if verdict.eligible is None:
+                print(
+                    f"  [{index}/{total}] skipped ({verdict.reason})"
+                    f" — {verdict.work_id[-12:]}",
+                    file=sys.stderr,
+                )
+            else:
+                label = "eligible" if verdict.eligible else "excluded"
+                print(
+                    f"  [{index}/{total}] {label} (p={verdict.probability:.2f})"
+                    f" — {verdict.work_id[-12:]}",
+                    file=sys.stderr,
+                )
+    finally:
+        client.close()
 
     elapsed = time.monotonic() - t0
 
@@ -503,18 +418,23 @@ def run(args: argparse.Namespace) -> None:
     llm_timeout_count = sum(
         1 for v in all_verdicts if v.reason == "llm-timeout"
     )
+    llm_rejected_count = sum(
+        1 for v in all_verdicts if v.reason == "llm-rejected"
+    )
 
     skipped_total = (
         tei_parse_failure_count
         + llm_parse_failure_count
         + llm_timeout_count
+        + llm_rejected_count
     )
     print(
         f"\nDone in {elapsed:.1f}s: {eligible_count} eligible, "
         f"{excluded_count} excluded, {skipped_total} skipped "
         f"({tei_parse_failure_count} tei-parse-failure, "
         f"{llm_parse_failure_count} llm-parse-failure, "
-        f"{llm_timeout_count} llm-timeout).",
+        f"{llm_timeout_count} llm-timeout, "
+        f"{llm_rejected_count} llm-rejected).",
         file=sys.stderr,
     )
 
@@ -526,18 +446,13 @@ def run(args: argparse.Namespace) -> None:
         run_at=datetime.now(UTC).isoformat(timespec="microseconds"),
         validation_skipped=stats.skipped,
     )
-    llm_meta = LlmMeta(
-        model=args.model,
-        temperature=_TEMPERATURE,
-        prompt_sha256=prompt_sha256,
-    )
+    llm_meta = endpoint.llm_meta(prompt_sha256)
     write_meta(
         meta_path,
         EligibilityMeta(
             run=run_meta,
             llm=llm_meta,
-            input_catalogue=str(args.catalogue),
-            input_screening_verdicts=str(args.screening_verdicts),
+            corpus_id=corpus_meta.corpus_id,
             input_extractions=str(args.extractions),
             input_count=total,
             eligible_count=eligible_count,
@@ -545,7 +460,8 @@ def run(args: argparse.Namespace) -> None:
             tei_parse_failure_count=tei_parse_failure_count,
             llm_parse_failure_count=llm_parse_failure_count,
             llm_timeout_count=llm_timeout_count,
-            criterion=system_prompt,
+            llm_rejected_count=llm_rejected_count,
+            criterion=question.render(),
         ),
     )
     print(f"Run dir: {output_dir}", file=sys.stderr)

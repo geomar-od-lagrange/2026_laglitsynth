@@ -46,10 +46,11 @@ lowercased with non-alphanumeric runs replaced by underscores.
 OpenAlex requires a free API key. Register at
 <https://openalex.org/settings/api>. When `--api-key` is not passed on the
 command line the tool reads `OPENALEX_API_KEY` from `.env` in the working
-directory and emits `Loaded OPENALEX_API_KEY from .env` to stderr. Wrapper
-scripts (`run-pipeline.sh`, `nesh-pipeline.sbatch`) source `.env` and pass
-`--api-key "$OPENALEX_API_KEY"` explicitly — the flag still takes precedence
-over any `.env` value.
+directory and emits `Loaded OPENALEX_API_KEY from .env` to stderr. The
+runner ([run-pipeline.sh](../scripts/run-pipeline.sh)) takes
+`OPENALEX_API_KEY` from the environment, else from `.env`, and passes
+`--api-key "$OPENALEX_API_KEY"` explicitly — the flag still takes
+precedence over any `.env` value.
 
 ## Abstract reconstruction
 

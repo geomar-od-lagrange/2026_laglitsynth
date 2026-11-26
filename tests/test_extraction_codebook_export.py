@@ -20,6 +20,8 @@ from laglitsynth.extraction_codebook.export import (
     sample_records,
     short_work_id,
 )
+from laglitsynth.extraction_codebook.models import ExtractionCodebookMeta
+from laglitsynth.models import LlmMeta, RunMeta
 
 from conftest import _make_work
 
@@ -56,8 +58,6 @@ def _make_record(ctx: CodebookContext, work_id: str, **values: Any) -> BaseModel
     return ctx.record_model(
         work_id=work_id,
         reason=None,
-        seed=1,
-        truncated=False,
         raw_response='{"x": "y"}',
         **payload_fields,
     )
@@ -111,7 +111,7 @@ def test_unique_sheet_name_collision_suffix() -> None:
 def test_work_sheet_lists_every_codebook_field(
     tmp_path: Path, ctx: CodebookContext
 ) -> None:
-    """The per-work tab lists each codebook field with value/context/reviewer
+    """The per-work tab lists each codebook field with value/context
     columns, driven off the codebook field list (in spec order)."""
     work = _make_work("https://openalex.org/W1", title="The Title")
     record = _make_record(
@@ -131,7 +131,7 @@ def test_work_sheet_lists_every_codebook_field(
     assert ws["A12"].value == "field"
     assert ws["B12"].value == "value"
     assert ws["C12"].value == "context"
-    assert ws["D12"].value == "reviewer_correction"
+    assert ws["D12"].value is None
 
     # The field rows follow the codebook's spec field order.
     spec_field_names = [f.name for f in ctx.spec.fields]
@@ -141,10 +141,10 @@ def test_work_sheet_lists_every_codebook_field(
         listed.append(ws.cell(row=row, column=1).value)
         row += 1
     assert listed == spec_field_names
-    # The first field carries its extracted value and a reviewer placeholder.
+    # The first field carries its extracted value and nothing in column D.
     first_value_row = 13 + spec_field_names.index("integration_scheme")
     assert ws.cell(row=first_value_row, column=2).value == "RK4"
-    assert "<correct the value" in ws.cell(row=first_value_row, column=4).value
+    assert ws.cell(row=first_value_row, column=4).value is None
 
 
 def test_work_sheet_follows_non_default_codebook(tmp_path: Path) -> None:
@@ -169,6 +169,65 @@ def test_work_sheet_follows_non_default_codebook(tmp_path: Path) -> None:
     assert ws["B14"].value == "B!"
     # No default-codebook field leaked in.
     assert ws["A15"].value == "reviewer_remarks"
+
+
+def test_llm_details_block_rows(tmp_path: Path) -> None:
+    """The collapsed LLM block lists its rows; there is no truncated row."""
+    alt_ctx = CodebookContext.from_spec(_ALT_CODEBOOK)
+    work = _make_work("https://openalex.org/W1")
+    record = _make_record(alt_ctx, "https://openalex.org/W1", alpha="A!", beta="B!")
+    records_path, catalogue_path, output_path = _write_inputs(
+        tmp_path, [work], [record]
+    )
+
+    meta_path = tmp_path / "extraction-codebook-meta.json"
+    meta_path.write_text(
+        ExtractionCodebookMeta(
+            run=RunMeta(tool="t", run_at="2026-01-01T00:00:00+00:00", validation_skipped=0),
+            llm=LlmMeta(
+                model="chatter",
+                base_url="https://llm.example.org/v1",
+                decisions_url=None,
+                reasoning_effort=None,
+                prompt_sha256="a" * 64,
+            ),
+            corpus_id="c",
+            eligibility_prompt_sha256="b" * 64,
+            input_eligibility_verdicts="v",
+            input_extractions="e",
+            input_count=1,
+            full_text_count=1,
+            skipped_count=0,
+            llm_parse_failure_count=0,
+        ).model_dump_json()
+    )
+
+    export_review_xlsx(
+        records_path,
+        catalogue_path,
+        output_path,
+        ctx=alt_ctx,
+        n_subset=None,
+        meta_path=meta_path,
+    )
+    ws = load_workbook(output_path)["W1"]
+
+    # reviewer_remarks on row 15, blank row, LLM header on row 17.
+    assert ws["A17"].value == "LLM details (expand to peek)"
+    rows = {
+        ws.cell(row=r, column=1).value: ws.cell(row=r, column=2).value
+        for r in range(18, 18 + 5)
+    }
+    assert list(rows) == [
+        "reason",
+        "llm_model",
+        "llm_base_url",
+        "llm_prompt_sha256",
+        "llm_raw_response",
+    ]
+    assert rows["llm_model"] == "chatter"
+    assert rows["llm_base_url"] == "https://llm.example.org/v1"
+    assert ws.cell(row=23, column=1).value is None
 
 
 # ── overview / Index sheet ──────────────────────────────────────────────────
@@ -260,3 +319,14 @@ def test_cli_default_output(tmp_path: Path, ctx: CodebookContext) -> None:
     )
 
     assert (tmp_path / "review.xlsx").exists()
+
+
+def test_catalogue_defaults_to_corpus_works() -> None:
+    import argparse
+
+    from laglitsynth.extraction_codebook.export import build_subparser
+
+    parser = argparse.ArgumentParser()
+    build_subparser(parser.add_subparsers())
+    args = parser.parse_args(["extraction-codebook-export", "--records", "r.jsonl"])
+    assert args.catalogue == Path("data/corpus/works.jsonl")

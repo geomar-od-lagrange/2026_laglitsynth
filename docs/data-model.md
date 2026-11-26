@@ -1,31 +1,28 @@
 # Data model
 
-Pydantic models in [`src/laglitsynth/catalogue_fetch/models.py`](../src/laglitsynth/catalogue_fetch/models.py).
-These are the contract between the fetch layer and all downstream consumers
-(BibTeX export, citation graph, filtering). See the source for the full schema.
+The pipeline builds on the OpenAlex data model. `Work` and its nested
+types (`Authorship`, `Source`, `Topic`, etc.) in
+[`src/laglitsynth/catalogue_fetch/models.py`](../src/laglitsynth/catalogue_fetch/models.py)
+are OpenAlex's schema expressed as Pydantic models, not a generic
+abstraction. Every stage that handles works consumes `Work` records: the
+deduplicated catalogue before the [corpus](corpus.md), and
+`data/corpus/works.jsonl` after it. See the source for the full schema.
 
-The pipeline builds on the OpenAlex data model. `Work` and its nested types
-(`Authorship`, `Source`, `Topic`, etc.) are OpenAlex's schema expressed as
-Pydantic models, not a generic abstraction. All downstream components consume
-`Work` records. The domain models are OpenAlex-specific; they carry
-`extra="ignore"` directly so upstream field additions do not cause validation
-errors.
-
-[`src/laglitsynth/models.py`](../src/laglitsynth/models.py) holds two shared
-types used by the pipeline's own internal records — `RunMeta` and `LlmMeta`
-— described below.
-
-Stage 2 deduplication introduces [`DroppedRecord`](../src/laglitsynth/catalogue_dedup/models.py)
-in [`src/laglitsynth/catalogue_dedup/models.py`](../src/laglitsynth/catalogue_dedup/models.py),
-with fields `dropped_work_id` (the dropped duplicate), `survived_work_id`
+The pipeline's own records are Pydantic models in each stage's
+`models.py`; [interfaces.md](interfaces.md#model-dependency-graph) lists
+them by stage. Stage 2 deduplication adds
+[`DroppedRecord`](../src/laglitsynth/catalogue_dedup/models.py), with
+fields `dropped_work_id` (the dropped duplicate), `survived_work_id`
 (the surviving record), and `rule` (the matching rule that triggered the
-drop: `openalex_id`, `doi`, or `title_author_year`).
+drop: `openalex_id`, `doi`, or `title_author_year`). `corpus-assemble`
+adds [`CorpusPdf` and `CorpusMeta`](../src/laglitsynth/corpus/models.py),
+described in [corpus.md](corpus.md).
 
 ## Shared run-level types
 
 `RunMeta` and `LlmMeta` in
 [`src/laglitsynth/models.py`](../src/laglitsynth/models.py) are the two
-shared types carried by every stage's `*Meta` sidecar.
+shared types carried by the stages' `*Meta` sidecars.
 
 `RunMeta` captures provenance for a single tool invocation:
 
@@ -39,24 +36,25 @@ class RunMeta(BaseModel):
 ```
 
 Every `*Meta` sidecar embeds `run: RunMeta` rather than repeating these
-four fields. The stage-specific `*_at` field names (`fetched_at`,
-`screened_at`, …) were removed in the reproducibility-meta refactor; the
-timestamp lives in `run.run_at`.
+four fields; the timestamp of a run lives in `run.run_at`.
 
-`LlmMeta` is added to stages that call an LLM (currently stages 3, 7, 8):
+`LlmMeta` is carried by the stages that call an LLM (3, 7, 8), and
+`CorpusMeta.screening_llm` copies stage 3's:
 
 ```python
 class LlmMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     model: str
-    temperature: float
-    prompt_sha256: str  # sha256(SYSTEM_PROMPT + "\n" + user prompt), full hex digest
+    base_url: str              # OpenAI-compatible base, including /v1
+    decisions_url: str | None  # None for chat stages
+    reasoning_effort: str | None  # stage 8's --reasoning-effort; None when none was sent
+    prompt_sha256: str  # sha256(prompt or question JSON + "\n" + USER_TEMPLATE), full hex digest
 ```
 
-Per-stage `*Meta` classes (e.g. `FetchMeta`, `ScreeningMeta`,
-`EligibilityMeta`, `ExtractionCodebookMeta`) each nest `run: RunMeta` and,
-where applicable, `llm: LlmMeta`. All pipeline-owned models carry
-`extra="forbid"` so schema drift is surfaced as a validation error.
+No temperature or seed is sent to the endpoint, so none is recorded, and
+the API key is never recorded. Per-stage `*Meta` classes (e.g.
+`FetchMeta`, `ScreeningMeta`, `EligibilityMeta`, `ExtractionCodebookMeta`)
+each nest `run: RunMeta` and, where applicable, `llm: LlmMeta`.
 
 ## Design decisions
 
@@ -64,8 +62,8 @@ where applicable, `llm: LlmMeta`. All pipeline-owned models carry
   `Source`, `Topic`, etc.). OpenAlex adds new fields regularly; unknown
   fields are silently dropped rather than causing errors.
 - **`extra="forbid"` on pipeline-owned models** (all `*Meta`, `*Verdict`,
-  `*Record`). Drift between the schema definition and the data on disk is
-  treated as a bug, not silently tolerated.
+  `*Record`, `CorpusPdf`). Drift between the schema definition and the
+  data on disk is treated as a bug, not silently tolerated.
 - **Nullable where OpenAlex is nullable.** Many fields that the OpenAlex schema
   documents as required can be `null` in practice (errata, old records, data
   quality issues). The models accept `None` rather than skipping records.
@@ -83,8 +81,8 @@ where applicable, `llm: LlmMeta`. All pipeline-owned models carry
   format; downstream code gets a real date object.
 - **Abstract stored as plain text.** Reconstructed from OpenAlex's inverted
   index at ingest time.
-- **`referenced_works` as `list[str]`.** These are OpenAlex IDs. Resolving them
-  to full records is the citation graph tool's job.
+- **`referenced_works` as `list[str]`.** These are OpenAlex IDs, kept as
+  delivered; no stage resolves them to records.
 - **No `concepts` field.** Deprecated by OpenAlex (replaced by `topics`).
 - **No `related_works`.** Algorithmically generated, changes frequently, inflates
   file size. Not useful for literature review.

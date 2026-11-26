@@ -378,6 +378,7 @@ class TestOpenTeiBridge:
             work_id="https://openalex.org/W1",
             tei_path="tei/W1.tei.xml",
             content_sha256="0" * 64,
+            pdf_sha256="0" * 64,
             extracted_at="2026-04-17T00:00:00.000000+00:00",
         )
         tei = rec.open_tei(output_dir)

@@ -9,7 +9,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from laglitsynth.catalogue_fetch.models import Location, Source, Work
-from laglitsynth.fulltext_retrieval.export import run, split_packs, write_export
+from laglitsynth.cli import main
+from laglitsynth.fulltext_retrieval.export import _active_works, run, split_packs, write_export
 from laglitsynth.fulltext_retrieval.models import (
     EXPORT_TOOL_NAME,
     ExportMeta,
@@ -144,6 +145,38 @@ class TestWriteExport:
         # Never the literal string "None".
         assert "None" not in manifest[0]["title"]
         assert "None" not in manifest[0]["year"]
+
+
+class TestRisRecord:
+    def test_an_ur_and_t2_lines(self, tmp_path: Path) -> None:
+        work = _work_with_journal(
+            "https://openalex.org/W1", doi="https://doi.org/10.1/A", journal="J. Ocean"
+        )
+        write_export([work], tmp_path)
+        lines = (tmp_path / "missing.ris").read_text().splitlines()
+        assert "AN  - W1" in lines
+        assert "UR  - https://doi.org/10.1/A" in lines
+        assert "T2  - J. Ocean" in lines
+        assert not any(line.startswith("JO  -") for line in lines)
+        assert lines[-1] == "ER  - "
+
+    def test_ur_falls_back_to_landing_page_without_doi(self, tmp_path: Path) -> None:
+        work = _work_with_journal("https://openalex.org/W2", doi=None)
+        assert work.primary_location is not None
+        work.primary_location.landing_page_url = "https://example.org/article/2"
+        write_export([work], tmp_path)
+        lines = (tmp_path / "missing.ris").read_text().splitlines()
+        assert "UR  - https://example.org/article/2" in lines
+        assert "AN  - W2" in lines
+        assert not any(line.startswith("DO  -") for line in lines)
+
+    def test_no_ur_without_doi_or_landing_page(self, tmp_path: Path) -> None:
+        work = _make_work("https://openalex.org/W3", doi=None)
+        write_export([work], tmp_path)
+        lines = (tmp_path / "missing.ris").read_text().splitlines()
+        assert not any(line.startswith("UR  -") for line in lines)
+        assert not any(line.startswith("T2  -") for line in lines)
+        assert "AN  - W3" in lines
 
 
 class TestNoDoiCsv:
@@ -290,6 +323,79 @@ class TestRun:
         assert ids == {"https://openalex.org/W1"}
 
 
+class TestUnfiltered:
+    """Without --screening-threshold the bundle is the whole catalogue's gap."""
+
+    def test_every_catalogue_work_without_a_pdf_is_listed(self, tmp_path: Path) -> None:
+        data_dir = tmp_path / "data"
+        works = [
+            _work_with_journal("https://openalex.org/W1", doi="10.1/a"),  # unscreened
+            _work_with_journal("https://openalex.org/W2", doi="10.1/b"),  # held
+            _work_with_journal("https://openalex.org/W3", doi=None),  # missing record
+        ]
+        catalogue_path = deduplicated_path(data_dir)
+        catalogue_path.parent.mkdir(parents=True)
+        _write_works_jsonl(catalogue_path, works)
+        write_provenance(
+            data_dir,
+            {
+                "https://openalex.org/W2": PdfProvenanceRecord(
+                    work_id="https://openalex.org/W2",
+                    stem="W2",
+                    doi="10.1/b",
+                    source=PdfSource.zotero_desktop,
+                    source_url=None,
+                    pdf_path="pdfs/W2.pdf",
+                    content_sha256="x",
+                    obtained_at="2026-01-01T00:00:00+00:00",
+                ),
+                "https://openalex.org/W3": PdfProvenanceRecord(
+                    work_id="https://openalex.org/W3",
+                    stem="W3",
+                    doi=None,
+                    source=PdfSource.missing,
+                    source_url=None,
+                    pdf_path=None,
+                    content_sha256=None,
+                    obtained_at="2026-01-01T00:00:00+00:00",
+                ),
+            },
+        )
+        # No manifest and no verdicts: the unfiltered export needs neither.
+
+        main(["fulltext-retrieval-export", "--data-dir", str(data_dir)])
+
+        rows = _read_manifest(export_dir(data_dir) / PDF_MANIFEST_FILENAME)
+        assert [r["work_id"] for r in rows] == [
+            "https://openalex.org/W1",
+            "https://openalex.org/W3",
+        ]
+        meta = ExportMeta.model_validate_json(
+            (export_dir(data_dir) / "export-meta.json").read_text()
+        )
+        assert meta.screening_threshold is None
+        assert meta.screening_verdicts is None
+        assert meta.run_id is None
+        assert meta.active_count == 3
+        assert meta.held_count == 1
+        assert meta.exported_count == 2
+
+    @pytest.mark.parametrize(
+        "flag",
+        [["--run-id", TEST_RUN_ID], ["--screening-verdicts", "v.jsonl"]],
+        ids=["run-id", "screening-verdicts"],
+    )
+    def test_verdict_flags_without_threshold_exit(
+        self, tmp_path: Path, flag: list[str]
+    ) -> None:
+        data_dir = tmp_path / "data"
+        with pytest.raises(SystemExit, match="--screening-threshold"):
+            main(
+                ["fulltext-retrieval-export", "--data-dir", str(data_dir), *flag]
+            )
+        assert not export_dir(data_dir).exists()
+
+
 class TestConventionalPaths:
     def _layout(self, data_dir: Path, run_id: str = TEST_RUN_ID) -> list[Work]:
         works = [
@@ -393,6 +499,102 @@ _BUNDLE_FILES = (
     "no-doi.csv",
     "README.md",
 )
+
+
+class TestActiveWorksJoin:
+    """Unit tests for the export's _active_works screening join."""
+
+    def test_active_works_threshold(self, tmp_path: Path) -> None:
+        """Works with a score at or above the threshold pass; those below are filtered."""
+        works = [
+            _make_work("https://openalex.org/W1"),
+            _make_work("https://openalex.org/W2"),
+            _make_work("https://openalex.org/W3"),
+        ]
+        verdicts = [
+            ScreeningVerdict(work_id="https://openalex.org/W1", relevance_score=80),
+            ScreeningVerdict(work_id="https://openalex.org/W2", relevance_score=49),
+            ScreeningVerdict(work_id="https://openalex.org/W3", relevance_score=50),
+        ]
+        catalogue_path = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        _write_works_jsonl(catalogue_path, works)
+        _write_verdicts_jsonl(verdicts_path, verdicts)
+
+        result = list(_active_works(catalogue_path, verdicts_path, screening_threshold=50.0))
+        ids = {w.id for w in result}
+        assert ids == {
+            "https://openalex.org/W1",
+            "https://openalex.org/W3",
+        }
+        assert "https://openalex.org/W2" not in ids
+
+    def test_null_score_sentinels_ride_through(self, tmp_path: Path) -> None:
+        """Works with relevance_score=None (sentinel reasons) always pass, regardless of threshold."""
+        works = [
+            _make_work("https://openalex.org/W1"),
+            _make_work("https://openalex.org/W2"),
+            _make_work("https://openalex.org/W3"),
+            _make_work("https://openalex.org/W4"),
+            _make_work("https://openalex.org/W5"),
+        ]
+        verdicts = [
+            ScreeningVerdict(
+                work_id="https://openalex.org/W1",
+                relevance_score=None,
+                reason="no-abstract",
+            ),
+            ScreeningVerdict(
+                work_id="https://openalex.org/W2",
+                relevance_score=None,
+                reason="llm-parse-failure",
+            ),
+            ScreeningVerdict(
+                work_id="https://openalex.org/W3",
+                relevance_score=None,
+                reason="llm-timeout",
+            ),
+            ScreeningVerdict(
+                work_id="https://openalex.org/W4",
+                relevance_score=80,
+            ),
+            ScreeningVerdict(
+                work_id="https://openalex.org/W5",
+                relevance_score=10,
+            ),
+        ]
+        catalogue_path = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        _write_works_jsonl(catalogue_path, works)
+        _write_verdicts_jsonl(verdicts_path, verdicts)
+
+        result = list(_active_works(catalogue_path, verdicts_path, screening_threshold=50.0))
+        ids = {w.id for w in result}
+        assert ids == {
+            "https://openalex.org/W1",
+            "https://openalex.org/W2",
+            "https://openalex.org/W3",
+            "https://openalex.org/W4",
+        }
+        assert "https://openalex.org/W5" not in ids
+
+    def test_works_without_verdicts_are_excluded(self, tmp_path: Path) -> None:
+        """Works present in the catalogue but absent from verdicts are excluded."""
+        works = [
+            _make_work("https://openalex.org/W1"),
+            _make_work("https://openalex.org/W2"),
+        ]
+        verdicts = [
+            ScreeningVerdict(work_id="https://openalex.org/W1", relevance_score=90),
+        ]
+        catalogue_path = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        _write_works_jsonl(catalogue_path, works)
+        _write_verdicts_jsonl(verdicts_path, verdicts)
+
+        result = list(_active_works(catalogue_path, verdicts_path, screening_threshold=50.0))
+        assert len(result) == 1
+        assert result[0].id == "https://openalex.org/W1"
 
 
 class TestSplitPacks:

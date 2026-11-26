@@ -5,7 +5,7 @@ an ``Index`` sheet plus one tab per sampled work. The Index sheet is a light
 navigation aid: one row per sampled work with bibliographic columns and a
 hyperlink to the per-work tab. Per-work tabs are the working surface: a
 vertical layout carrying the bibliographic block, then one row per codebook
-field with columns ``field | value | context | reviewer_correction``, then a
+field with columns ``field | value | context``, then a
 collapsed LLM-meta block. The field list is driven off the codebook (the
 record model is codebook-built), not hard-coded, so a non-default codebook's
 field set follows automatically. The criterion is read from the ``--codebook``
@@ -44,9 +44,6 @@ _SHEET_NAME_MAX_LEN = 31
 _FORBIDDEN_SHEET_CHARS = set("/\\?*[]:")
 _DEFAULT_SUBSET_SEED = 0
 
-_REVIEWER_CORRECTION_PLACEHOLDER = (
-    "<correct the value if wrong — leave blank if the value is right>"
-)
 _REVIEWER_REMARKS_PLACEHOLDER = (
     "<any general feedback on this record — extraction quality, "
     "metadata gaps, oddities — leave blank if none>"
@@ -188,10 +185,10 @@ def build_work_sheet(
     """Per-work sheet: biblio block, codebook field table, collapsed LLM-meta.
 
     ``field_names`` is the codebook's value-field list (in spec order);
-    each row pairs the extracted value with its verbatim ``*_context``
-    and an empty ``reviewer_correction`` column. ``criterion`` is the
+    each row pairs the extracted value with its verbatim ``*_context``.
+    ``criterion`` is the
     codebook system prompt, embedded verbatim. ``llm_meta`` carries the
-    model/temperature/prompt_sha256 from ``ExtractionCodebookMeta.llm``; it is
+    model/base_url/prompt_sha256 from ``ExtractionCodebookMeta.llm``; it is
     ``None`` when no meta file was found, in which case the fingerprint cells
     are left blank.
     """
@@ -260,7 +257,7 @@ def build_work_sheet(
     # Row 11: blank
 
     # Codebook field table header (row 12)
-    table_headers = ("field", "value", "context", "reviewer_correction")
+    table_headers = ("field", "value", "context")
     for col, header in enumerate(table_headers, start=1):
         cell = ws.cell(row=12, column=col, value=header)
         cell.font = _BOLD
@@ -278,10 +275,6 @@ def build_work_sheet(
             row=row, column=3, value=getattr(record, context_name, None)
         )
         context_cell.alignment = wrap_top_left
-        corr_cell = ws.cell(
-            row=row, column=4, value=_REVIEWER_CORRECTION_PLACEHOLDER
-        )
-        corr_cell.alignment = wrap_top_left
 
     next_row = first_field_row + len(field_names)
 
@@ -304,10 +297,8 @@ def build_work_sheet(
 
     llm_rows: list[tuple[str, object]] = [
         ("reason", record.reason or ""),
-        ("seed", record.seed),
-        ("truncated", record.truncated),
         ("llm_model", llm_meta.model if llm_meta else ""),
-        ("llm_temperature", llm_meta.temperature if llm_meta else None),
+        ("llm_base_url", llm_meta.base_url if llm_meta else ""),
         ("llm_prompt_sha256", llm_meta.prompt_sha256 if llm_meta else ""),
         ("llm_raw_response", record.raw_response or ""),
     ]
@@ -326,7 +317,6 @@ def build_work_sheet(
     ws.column_dimensions["A"].width = 28
     ws.column_dimensions["B"].width = 60
     ws.column_dimensions["C"].width = 60
-    ws.column_dimensions["D"].width = 40
     ws.freeze_panes = "B1"
 
 
@@ -414,6 +404,9 @@ def export_review_xlsx(
     return len(selected)
 
 
+_DEFAULT_CATALOGUE = Path("data/corpus/works.jsonl")
+
+
 def build_subparser(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> argparse.ArgumentParser:
@@ -430,8 +423,8 @@ def build_subparser(
     parser.add_argument(
         "--catalogue",
         type=Path,
-        required=True,
-        help="Path to the deduplicated catalogue JSONL",
+        default=_DEFAULT_CATALOGUE,
+        help=f"Works JSONL for the bibliographic block (default: {_DEFAULT_CATALOGUE}).",
     )
     parser.add_argument(
         "--codebook",

@@ -3,8 +3,8 @@
 A *review config* is one handwritten YAML that captures the
 review-defining knobs the runner ([scripts/run-pipeline.sh]) needs:
 the query, the year window and record cap, the three criteria/codebook
-files, and the per-stage thresholds, models, context windows, and
-concurrency. It is distinct from the per-stage ``config.yaml``
+files, the screening threshold, the LLM endpoint URLs, the per-stage
+models with stage 8's reasoning effort, and concurrency. The API key is never part of it. It is distinct from the per-stage ``config.yaml``
 run-snapshots written by the LLM stages (see ``laglitsynth.config`` and
 [docs/configs.md]) — those record one resolved stage invocation; this
 describes a whole review up front and drives the runner.
@@ -24,19 +24,14 @@ from __future__ import annotations
 import argparse
 import shlex
 from pathlib import Path
+from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, PositiveInt
 
 # Criteria/codebook fields whose relative values resolve against the
 # config file's own directory (mirrors ``config.load_config``).
 _PATH_FIELDS = ("screening_criteria", "eligibility_criteria", "codebook")
-
-
-class _Thresholds(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    retrieval: float | None = None
-    eligibility: float | None = None
 
 
 class _Models(BaseModel):
@@ -44,23 +39,14 @@ class _Models(BaseModel):
     screening: str | None = None
     eligibility: str | None = None
     extraction: str | None = None
-
-
-class _Backends(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    screening: str | None = None  # "ollama" | "decisions"
-
-
-class _NumCtx(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    eligibility: int | None = None
-    extraction: int | None = None
+    extraction_reasoning_effort: Literal["low", "medium", "high"] | None = None
 
 
 class _Concurrency(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    llm: int | None = None
-    extraction: int | None = None
+    llm: PositiveInt | None = None
+    extraction: PositiveInt | None = None
+    grobid: PositiveInt | None = None
 
 
 class ReviewConfig(BaseModel):
@@ -80,10 +66,10 @@ class ReviewConfig(BaseModel):
     screening_criteria: Path | None = None
     eligibility_criteria: Path | None = None
     codebook: Path | None = None
-    thresholds: _Thresholds = _Thresholds()
+    screening_threshold: float | None = None
+    llm_base_url: str | None = None
+    llm_decisions_url: str | None = None
     models: _Models = _Models()
-    backends: _Backends = _Backends()
-    num_ctx: _NumCtx = _NumCtx()
     concurrency: _Concurrency = _Concurrency()
 
 
@@ -136,16 +122,16 @@ def emit_cfg_lines(config: ReviewConfig) -> list[str]:
         ("CFG_SCREENING_CRITERIA", config.screening_criteria),
         ("CFG_ELIGIBILITY_CRITERIA", config.eligibility_criteria),
         ("CFG_CODEBOOK", config.codebook),
-        ("CFG_RETRIEVAL_THRESHOLD", config.thresholds.retrieval),
-        ("CFG_ELIGIBILITY_THRESHOLD", config.thresholds.eligibility),
+        ("CFG_SCREENING_THRESHOLD", config.screening_threshold),
+        ("CFG_LLM_BASE_URL", config.llm_base_url),
+        ("CFG_LLM_DECISIONS_URL", config.llm_decisions_url),
         ("CFG_SCREENING_MODEL", config.models.screening),
         ("CFG_ELIGIBILITY_MODEL", config.models.eligibility),
         ("CFG_EXTRACTION_MODEL", config.models.extraction),
-        ("CFG_SCREENING_BACKEND", config.backends.screening),
-        ("CFG_ELIGIBILITY_NUM_CTX", config.num_ctx.eligibility),
-        ("CFG_EXTRACTION_NUM_CTX", config.num_ctx.extraction),
+        ("CFG_EXTRACTION_REASONING_EFFORT", config.models.extraction_reasoning_effort),
         ("CFG_LLM_CONCURRENCY", config.concurrency.llm),
         ("CFG_EXTRACTION_CONCURRENCY", config.concurrency.extraction),
+        ("CFG_GROBID_CONCURRENCY", config.concurrency.grobid),
     ]
     return [f"{name}={_shell_value(value)}" for name, value in pairs]
 

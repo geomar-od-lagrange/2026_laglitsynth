@@ -1,9 +1,12 @@
 # Cross-machine and storage convention
 
-The pipeline runs across more than one machine: a laptop for the light,
-interactive stages; the [NESH HPC cluster](external-services.md#nesh-hpc-cluster)
-for the GPU- and storage-heavy stages; and one or more collaborators'
-machines for full-text retrieval behind their own institutional access.
+The pipeline runs across more than one machine: the operator's laptop
+for the pipeline stages, with GROBID in Docker and the LLM stages calling
+the review's hosted endpoint; and one or more collaborators' machines for
+full-text retrieval behind their own institutional access. The two halves
+of the [pipeline](pipeline.md) meet at the self-contained
+[corpus](corpus.md), so a machine running the
+analysis half needs `data/corpus/` and nothing else from the first half.
 This document states the conventions that make that work — the project
 boundary, the path contract, per-machine credentials, and the safe
 direction to sync each `data/` subdir. It is the written form of the
@@ -35,7 +38,8 @@ make this load-bearing:
   the repo root.
 - `.env` is read from the current directory by
   [`load_env_var`](../src/laglitsynth/dotenv.py) (`Path(".env")`), as a
-  fallback for `--api-key` / `--email` when the flag is omitted.
+  fallback for `--api-key` / `--email` when the flag (and, for the LLM
+  stages, the `LLM_API_KEY` environment variable) is absent.
 
 Stage outputs store **repo-relative** paths — for example a
 `PdfProvenanceRecord`'s `pdf_path` is `pdfs/<stem>.pdf` under `data/`,
@@ -57,7 +61,8 @@ machine by design. `.env` is also a credentials file and has no place in
 a synced data tree. Keep it out of any rsync of `data/` (it lives at the
 repo root, not under `data/`, so a `data/`-scoped sync already excludes
 it); when setting up a new machine, write a fresh `.env` there. The
-explicit `--api-key` / `--email` flags always win over `.env`, and the
+explicit `--api-key` / `--email` flags always win over `.env` (as does an
+exported `LLM_API_KEY` for the LLM stages), and the
 `.env` read is announced on stderr (`Loaded <KEY> from .env`), never
 silent — see [interfaces.md](interfaces.md#configuration-flags-first-env-fallback-for-credentials).
 
@@ -65,19 +70,18 @@ silent — see [interfaces.md](interfaces.md#configuration-flags-first-env-fallb
 
 The stage graph suggests a natural split across machines:
 
-- Laptop — [`catalogue-fetch`](interfaces.md#stage-1--catalogue-fetch-exists),
-  [`catalogue-dedup`](interfaces.md#stage-2--catalogue-dedup-exists), and
-  [`screening-abstracts`](interfaces.md#stage-3--screening-abstracts-exists)
-  (or screening against a tunneled GPU). Light data, interactive work.
-- NESH — the GPU- and storage-heavy stages
+- Laptop — every stage the operator drives:
+  [`catalogue-fetch`](interfaces.md#stage-1--catalogue-fetch-exists),
+  [`catalogue-dedup`](interfaces.md#stage-2--catalogue-dedup-exists),
+  [`screening-abstracts`](interfaces.md#stage-3--screening-abstracts-exists),
+  retrieval and `corpus-assemble`, and the analysis half
   ([`fulltext-extraction`](interfaces.md#stage-6--fulltext-extraction),
   [`fulltext-eligibility`](interfaces.md#stage-7--fulltext-eligibility-exists),
-  [`extraction-codebook`](interfaces.md#stage-8--extraction-codebook-exists)),
-  and ideally the corpus itself so the PDFs and TEI never have to come
-  home. Keeping the bulk where the disk is is as much the reason to use
-  NESH as the inference is. See the
-  [NESH section of external-services.md](external-services.md#nesh-hpc-cluster)
-  for the batch setup.
+  [`extraction-codebook`](interfaces.md#stage-8--extraction-codebook-exists)).
+  GROBID runs in Docker and the LLM stages call the review's hosted
+  endpoint (see [external-services.md](external-services.md)), so no stage
+  needs local GPU. Because the analysis half reads only the corpus, it can
+  move to any other machine with GROBID by copying `data/corpus/`.
 - Collaborators — full-text
   [`fulltext-retrieval`](interfaces.md#stage-5--fulltext-retrieval-exists)
   of paywalled PDFs via their own institutional access. This is the one
@@ -110,12 +114,27 @@ how they write. The categories:
   private `data/` submodule ([pdf-store.md](pdf-store.md)): A commits and
   pushes after retrieval or import, other machines `git pull` inside
   `data/`.
-- Bulk, fetch-once, union-safe — the TEI. A TEI file is GROBID's
-  deterministic output for one PDF, keyed by work and never rewritten in
-  place, so it only ever accumulates. Sync it by **union in either
-  direction** (rsync without `--delete`), and prefer to move it **once**
-  rather than round-trip the bulk. Never `rsync --delete` it — a stale
-  side would delete files the other side produced.
+- Rewritten whole — the corpus, `data/corpus/`. `corpus-assemble`
+  replaces it in one step on the machine that holds the store and the
+  screening verdicts. Move it from there as a unit: remove the far
+  side's old `data/corpus/` first and copy the new one in, since a copy
+  over the old one would leave PDFs of works no longer selected. Never
+  assemble on two machines and merge. Its
+  `corpus_id` tells both sides whether they hold the same corpus.
+- Bulk, accumulating, newest-extraction-wins — the TEI,
+  `data/fulltext-extraction/`. A TEI file is GROBID's output for one
+  corpus PDF, keyed by work. Stage 6's `--skip-existing` leaves it alone
+  while the work's corpus PDF is unchanged, but a work whose PDF changed
+  in a re-assembly is extracted again into the same `tei/<stem>.tei.xml`,
+  overwriting it, and a new record is appended to `extraction.jsonl`. So
+  a union sync is not safe in either direction: rsync from a machine that
+  extracted against an older corpus copies its old TEI over the new one,
+  which then no longer matches the `content_sha256` of the work's last
+  record. Sync `data/fulltext-extraction/` (the TEI and
+  `extraction.jsonl` together) **one way, from the machine that last ran
+  stage 6 on the current corpus**, and prefer to move it **once** rather
+  than round-trip the bulk. Never `rsync --delete` it — a stale side
+  would delete files the other side produced.
 - Per-run-id, authoritative-side-wins — the gate stages
   ([`screening-abstracts`](interfaces.md#stage-3--screening-abstracts-exists),
   [`fulltext-eligibility`](interfaces.md#stage-7--fulltext-eligibility-exists),
@@ -137,9 +156,9 @@ how they write. The categories:
 The spine — the deduplicated catalogue and its siblings under
 [`data/catalogue-dedup/`](../data) (`deduplicated.jsonl`, `dropped.jsonl`,
 the meta) — is machine-independent, small, and has no run-id. Rsync it
-once, early, and treat it as read-only on the downstream machines; every
-later stage joins against `deduplicated.jsonl`, so it must be identical
-everywhere. The stage-1 (`catalogue-fetch`) and stage-5
+once, early, and treat it as read-only on the downstream machines; the
+first-half stages and `corpus-assemble` read `deduplicated.jsonl`, so it
+must be identical everywhere they run. The stage-1 (`catalogue-fetch`) and stage-5
 (`fulltext-retrieval`) record files are likewise run-id-less whole-file
 outputs; sync them deliberately from the side that produced them, never
 with `--delete`.
@@ -147,8 +166,8 @@ with `--delete`.
 What makes a wrong-direction sync dangerous is the combination of
 whole-file outputs and `--delete`: rsyncing a stale `data/` over a fresh
 one with `--delete` removes outputs the fresh side produced. The rule is
-blunt and safe: **do not use `rsync --delete` on `data/` subdirs.** Union
-the bulk, and move per-run-id directories and the spine from their
+blunt and safe: **do not use `rsync --delete` on `data/` subdirs.** Move
+the TEI, the per-run-id directories and the spine from their
 authoritative side. For the PDF store specifically, the
 [drop-zone rule](#drop-zone-rule-for-collaborator-pdfs) is the stronger
 guard against exactly this — a single writer (A) means
@@ -156,16 +175,20 @@ guard against exactly this — a single writer (A) means
 collaborators hand back folders of PDFs that A integrates serially, not a
 rewritten store.
 
-## The run-id travels in the manifest
+## The run-ids travel with the data
 
-Stages 3, 7, and 8 write under a `<run-id>/` leaf, and a coherent run needs
-the same run-id across all three, including across machines: if NESH runs
-eligibility and the laptop later runs extraction, both must use the same one.
-`data/manifest.json` carries it. `laglitsynth manifest-init` mints the run-id
-once, and every run-id-aware stage adopts it when `--run-id` is omitted, so
-the string travels with `data/` under rsync instead of living in operator
-memory and shell history. An explicit `--run-id` still wins where a stage
-needs to target a different leaf. See [run-manifest.md](run-manifest.md).
+Stage 3 writes under a screening `<run-id>/` leaf that `corpus-assemble` and
+the export read, and stages 7 and 8 write under an analysis `<run-id>/` leaf
+they share. Both must be the same across machines: if one machine runs
+eligibility and another later runs extraction, both must use the same
+analysis run-id.
+`data/manifest.json` carries the screening run-id: `laglitsynth
+manifest-init` mints it once, and the screening-side stages adopt it when no
+run-id is passed. `data/corpus/corpus-meta.json` carries the analysis
+run-id, which stages 7 and 8 adopt when `--run-id` is omitted. Both strings
+travel with `data/` under rsync instead of living in operator memory and
+shell history. An explicit run-id still wins where a stage needs to target
+a different leaf. See [run-manifest.md](run-manifest.md).
 
 The manifest is written once and never rewritten, so it is the one file under
 `data/` with no sync direction to get wrong: copy it with the rest of the

@@ -3,8 +3,10 @@
 Every stage writes to, and reads from, a conventional path under
 ``--data-dir``. A stage whose input flag is omitted looks here for the
 upstream output; see [docs/run-manifest.md](../../docs/run-manifest.md).
-Only the run-id leaf of stages 3, 7, and 8 is not derivable from the
-layout, and the manifest (``laglitsynth.manifest``) carries that.
+Only the run-id leaves of stages 3, 7, and 8 are not derivable from the
+layout: the manifest (``laglitsynth.manifest``) carries the screening
+run-id of stage 3, and ``corpus-meta.json`` the analysis run-id of stages
+7 and 8.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ EXTRACTION_SUBDIR = "fulltext-extraction"
 ELIGIBILITY_SUBDIR = "fulltext-eligibility"
 EXTRACTION_CODEBOOK_SUBDIR = "extraction-codebook"
 EXPORT_SUBDIR = "pdfs/export"
+CORPUS_SUBDIR = "corpus"
 
 PDF_MANIFEST_FILENAME = "pdf-manifest.csv"
 
@@ -43,6 +46,10 @@ def screening_verdicts_path(data_dir: Path, run_id: str) -> Path:
     return data_dir / SCREENING_SUBDIR / run_id / "verdicts.jsonl"
 
 
+def corpus_dir(data_dir: Path) -> Path:
+    return data_dir / CORPUS_SUBDIR
+
+
 def extraction_dir(data_dir: Path) -> Path:
     return data_dir / EXTRACTION_SUBDIR
 
@@ -57,10 +64,6 @@ def eligibility_verdicts_path(data_dir: Path, run_id: str) -> Path:
 
 def export_dir(data_dir: Path) -> Path:
     return data_dir / EXPORT_SUBDIR
-
-
-def pdf_manifest_path(data_dir: Path) -> Path:
-    return export_dir(data_dir) / PDF_MANIFEST_FILENAME
 
 
 def require_input(path: Path, *, flag: str, upstream: str) -> Path:
@@ -83,7 +86,7 @@ def resolve_screening_inputs(
     screening_verdicts: Path | None,
     run_id: str | None,
 ) -> tuple[Path, Path]:
-    """Resolve the catalogue + screening-verdicts pair stages 5 and 7 join on.
+    """Resolve the catalogue + screening-verdicts pair that is joined on screening.
 
     Each omitted flag takes its conventional path; the verdicts path needs
     the run-id, which comes from ``run_id`` or the manifest.
@@ -103,6 +106,21 @@ def resolve_screening_inputs(
         screening_verdicts, flag="--screening-verdicts", upstream="screening-abstracts"
     )
     return catalogue, screening_verdicts
+
+
+def resolve_analysis_run_id(corpus: Path, flag_value: str | None) -> str:
+    """Return the run-id of stages 7 and 8: the flag, else the corpus's.
+
+    ``corpus-assemble`` keeps ``CorpusMeta.analysis_run_id`` while the
+    corpus is unchanged and mints a new one otherwise, so a changed corpus
+    never writes into earlier analysis output. Exits when the corpus meta
+    is missing or invalid.
+    """
+    if flag_value is not None:
+        return flag_value
+    from laglitsynth.corpus.load import load_corpus_meta
+
+    return load_corpus_meta(corpus).analysis_run_id
 
 
 def warn_existing_run_dir(output_dir: Path, filename: str) -> None:

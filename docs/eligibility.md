@@ -1,6 +1,6 @@
 # Eligibility
 
-Full-text assessment of whether each included work meets the review's
+Full-text assessment of whether each corpus work meets the review's
 inclusion criteria. Distinct from [screening](screening-abstracts.md),
 which uses only title and abstract. Reading the full text may reveal
 that a paper is not actually about computational Lagrangian methods, or
@@ -8,55 +8,50 @@ that it is a review article rather than primary research.
 
 ## Prerequisites
 
-See [external-services.md](external-services.md) for Ollama setup.
+An OpenAI-compatible endpoint and its key as `LLM_API_KEY`; see
+[external-services.md](external-services.md#llm-endpoint).
 
-## Prototype scope
+## Scope
 
-A single LLM pass over the extracted full text. Same flag-don't-filter
-pattern as [`screening-abstracts`](screening-abstracts.md): structured
-JSON output, Pydantic validation, verdicts stored in a sidecar keyed by
-`work_id`. This stage is **full-text-only** — a work without a usable
+A cheap full-text pass in front of [codebook extraction](extraction-codebook.md):
+one decision per paper on the decisions endpoint, with the rendered full
+text as `input`. Same flag-don't-filter pattern as
+[`screening-abstracts`](screening-abstracts.md): the probability is
+stored, verdicts live in a sidecar keyed by `work_id`. This stage is **full-text-only** — a work without a usable
 full-text extraction is not assessed at all (no verdict row, no count);
-the criteria here turn on numerical-method detail that abstracts do not
-carry, so an abstract is not a valid basis for an eligibility decision.
+the full text is the basis of the decision.
 
-The eligibility criteria below are provisional placeholders for the
-prototype. They are deliberately broad — designed to let papers through,
-not to be the final filter. The human turns knobs once the pipeline runs
-and produces reviewable output. False positives are acceptable in the
-prototype; false negatives are not.
+The shipped criteria are deliberately broad — designed to let papers
+through, not to be the final filter. Both must hold:
 
 1. The paper describes a computation that tracks particles, tracers, or
    objects in an ocean flow field.
 2. The paper is primary research (not a review, editorial, or commentary).
-3. The paper contains at least some description of the numerical methods
-   used. (Under discussion: lack of method description is poor practice
-   but may not disqualify a paper from relevance. This criterion may be
-   relaxed in a later iteration.)
+
+Whether the paper describes its numerical methods is not a criterion: a
+paper without a methods description stays in and counts as
+non-reproducible for RQ1.1. Both criteria overlap abstract screening, so
+the share of works this stage excludes shows whether it earns its place.
 
 ## Input
 
-The stage consumes three artifacts:
+The stage consumes two artifacts:
 
-- The deduplicated catalogue ([`Work`](../src/laglitsynth/catalogue_fetch/models.py)
-  records from [`catalogue-dedup`](catalogue-dedup.md)).
-- The stage 3 screening verdict sidecar ([`ScreeningVerdict`](../src/laglitsynth/screening_abstracts/models.py)
-  records), plus a `--screening-threshold` cutoff. The stage joins these at
-  read time to determine which works to assess. The join walks the catalogue
-  and **silently drops** any work absent from the screening verdicts file
-  (`_active_works` does `if sv is None: continue`): a work with no screening
-  verdict is not assessed, produces no verdict row, and is not counted — with
-  no warning. Running against a partial or stale verdicts file therefore
-  assesses fewer works than the catalogue holds.
+- The corpus written by `corpus-assemble`: its works
+  (`<corpus-dir>/works.jsonl`), the PDF hashes in `provenance.jsonl`, and
+  `corpus_id` from `corpus-meta.json`. The screening threshold was applied
+  there; this stage applies none.
 - The extraction JSONL ([`ExtractedDocument`](../src/laglitsynth/fulltext_extraction/models.py)
-  records from [`fulltext-extraction`](fulltext-extraction.md)).
+  records from [`fulltext-extraction`](fulltext-extraction.md)) with its
+  `extraction-meta.json`. The stage exits when that meta is missing or
+  names another `corpus_id`, and ignores a record whose `pdf_sha256`
+  differs from the corpus copy (its PDF changed since extraction).
 
-Only works that have an `ExtractedDocument` are assessed: the active set
-fed to the LLM is gated on extraction presence, so a work without a
-matching extraction never enters the loop, produces no verdict row, and
-is not counted. (The "what is still missing" gap is already visible
-upstream in the stage 5 `missing` provenance records — flagging absent
-full text again here would be redundant.) A work whose extraction parses
+Only works that have a current `ExtractedDocument` are assessed: the
+active set fed to the LLM is gated on extraction presence, so a work
+without a matching extraction never enters the loop, produces no verdict
+row, and is not counted. (The gap is already visible in the corpus
+provenance — flagging absent full text again here would be redundant.) A work whose extraction parses
 but renders empty TEI is recorded with a `tei-parse-failure` sentinel,
 since a paper we hold a PDF for but cannot read is a broken extraction
 worth surfacing.
@@ -65,35 +60,29 @@ worth surfacing.
 
 ### EligibilityVerdict
 
-One per catalogue work that reached this stage (i.e. that had a
+One per corpus work that reached this stage (i.e. that had a
 full-text extraction).
 
 ```python
 class EligibilityVerdict(BaseModel):
     model_config = ConfigDict(extra="forbid")
     work_id: str
-    eligible: bool | None              # None for sentinel-reason skips
-    reason: str | None                 # LLM free-text or sentinel
-    seed: int | None                   # Ollama seed used; None for sentinels
-    raw_response: str | None           # LLM's raw message content; None when no call was made
+    probability: float | None          # decisions-endpoint answer; None for sentinels
+    eligible: bool | None              # probability >= 0.5; None for sentinels
+    reason: str | None                 # sentinel reason; None on a decided verdict
+    raw_response: str | None           # response or error body; None when none was received
 ```
 
 Every verdict is full-text-based, so there is no `source_basis` field —
-the basis is implicit. `eligible` is tri-state. `True` and `False` are
-real LLM verdicts; `None` indicates a sentinel skip — the LLM was not
-called or its output could not be parsed. See
-[Sentinel reasons](#sentinel-reasons) below.
+the basis is implicit. `eligible` is tri-state: `True` and `False` are the
+probability cut at a fixed 0.5; `None` marks a sentinel. The probability
+is kept, so any other cut is made ad hoc on `verdicts.jsonl` without a
+re-run. The endpoint returns no justification, so `reason` is set only
+for sentinels. See [Sentinel reasons](#sentinel-reasons) below.
 
-`raw_response` captures the LLM's message text before parsing. Present
-on successful verdicts and on `llm-parse-failure` sentinels (so a
-reviewer can see what the model actually said); `None` on the
-`tei-parse-failure` sentinel that did not call the LLM.
-
-The LLM's response is validated through a private
-[`_EligibilityPayload`](../src/laglitsynth/fulltext_eligibility/models.py)
-pydantic submodel. A `mode="before"` validator drops unknown keys
-(LLMs at `temperature > 0` sprinkle extras) and coerces a `reason`
-returned as a list into a `" / "`-joined string.
+`raw_response` is the endpoint's response body on a decided verdict, the
+body on `llm-parse-failure` and the error body on `llm-rejected`; `None`
+on `tei-parse-failure` and `llm-timeout`.
 
 ### EligibilityMeta
 
@@ -102,8 +91,7 @@ class EligibilityMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run: RunMeta
     llm: LlmMeta
-    input_catalogue: str
-    input_screening_verdicts: str
+    corpus_id: str        # CorpusMeta.corpus_id of the corpus read
     input_extractions: str
     input_count: int
     eligible_count: int
@@ -111,26 +99,29 @@ class EligibilityMeta(BaseModel):
     tei_parse_failure_count: int
     llm_parse_failure_count: int
     llm_timeout_count: int
-    criterion: str        # the eligibility-criteria system prompt, verbatim
+    llm_rejected_count: int
+    criterion: str        # the predicate instructions sent, verbatim
 ```
 
 `run` and `llm` are the shared reproducibility nests from
 [`src/laglitsynth/models.py`](../src/laglitsynth/models.py) — they
 carry `tool`, `tool_version`, `run_at`, `validation_skipped`, `model`,
-`temperature`, and `prompt_sha256`. `prompt_sha256` covers the loaded
-eligibility-criteria system prompt, `USER_TEMPLATE`, and the Ollama
-`num_ctx` setting, so any prompt- or context-window change shifts the
-hash.
+`base_url`, `decisions_url`, `reasoning_effort` (always `None` here), and
+`prompt_sha256`. `prompt_sha256` is
+[`criteria_sha256`](../src/laglitsynth/fulltext_eligibility/eligibility.py)
+of the criteria: the sha256 of the `decision` block's canonical JSON +
+`"\n"` + `USER_TEMPLATE`, so any change to the question shifts the hash.
 
 `input_count` is the number of works that reached the stage (had a
 full-text extraction) — works skipped for lack of full text are neither
 counted nor flagged. Per-sentinel counts (`tei_parse_failure_count`,
-`llm_parse_failure_count`, `llm_timeout_count`) let operators diagnose a
+`llm_parse_failure_count`, `llm_timeout_count`, `llm_rejected_count`) let operators diagnose a
 run without re-reading `verdicts.jsonl`. There is no `no_source_count`
 or `by_source_basis` — with full-text the only basis, a per-basis
-breakdown carries no information. `criterion` records the criteria
-system prompt verbatim so the review export can embed the same question
-the LLM saw without re-loading the criteria YAML.
+breakdown carries no information. `criterion` records the predicate
+instructions sent (the `decision` block's `instructions` followed by its
+true and false criteria), so the question is readable without re-loading
+the criteria YAML.
 
 ## Storage layout
 
@@ -143,8 +134,10 @@ the LLM saw without re-loading the criteria YAML.
 
 See [configs.md](configs.md) for the run-id directory model and
 `config.yaml` semantics. `verdicts.jsonl` is the source of truth and the
-sole output of this stage. Downstream stages that need the eligible work
-set join the catalogue against this sidecar at their own read time.
+sole output of this stage. [Extraction-codebook](extraction-codebook.md)
+joins the corpus works against it at read time, and refuses it when
+`eligibility-meta.json` names another `corpus_id` or another
+`prompt_sha256` than its own `--eligibility-criteria`.
 
 ## Per-work flow
 
@@ -157,19 +150,23 @@ work:
 2. If the render is empty (valid XML, no body content), record a
    `tei-parse-failure` sentinel (no LLM call) — a paper we hold a PDF
    for but cannot read is a broken extraction.
-3. Otherwise call the LLM and record its verdict.
+3. Otherwise send the rendered text as one decision and record the verdict.
 
 ## Sentinel reasons
 
-All sentinels set `eligible=None` and `seed=None`. Downstream consumers
-join the catalogue against `verdicts.jsonl` filtering for `eligible is True`,
+All sentinels set `probability=None` and `eligible=None`. Downstream consumers
+join the corpus works against `verdicts.jsonl` filtering for `eligible is True`,
 so sentinel records are naturally excluded from the active work set.
 
 | Reason | Trigger |
 |---|---|
 | `tei-parse-failure` | `sections()` raises `lxml.etree.XMLSyntaxError`, or renders empty. A paper with a PDF but unreadable TEI is an operator-visible bug, unlike a plain absence of full text (which is silently skipped). |
-| `llm-parse-failure` | The LLM returned output that could not be parsed into `{"eligible": bool, "reason": str}`. |
-| `llm-timeout` | The OpenAI client raised `APITimeoutError` / `APIConnectionError` after all retries exhausted. The OpenAI client is constructed with `timeout=300s` and `max_retries=3` so a single hang on a long full-text prompt does not kill the stage. |
+| `llm-parse-failure` | A 2xx body without a probability in [0, 1] for the answer named `eligible`. |
+| `llm-timeout` | Transport errors, HTTP 5xx or 429 on every attempt (four, with a growing backoff; each request times out after 300 s). |
+| `llm-rejected` | The endpoint refused the request with another 4xx, for example a full text longer than the model's context. `raw_response` carries the error body. |
+
+HTTP 401, 402, 403 and 404 fail every work the same way, so the stage
+exits naming the decisions URL.
 
 There is no `no-source` sentinel: a work without full text is simply not
 processed, not flagged.
@@ -180,7 +177,7 @@ processed, not flagged.
 walks `tei.sections()` depth-first. Each section contributes a block
 whose first line is the title (when present) followed by its paragraphs
 (one per line); nested children contribute further blocks. Blocks are
-joined by blank lines. Figures and bibliography are dropped — the three
+joined by blank lines. Figures and bibliography are dropped — the
 criteria are answered from body text. Empty `sections()` returns the
 empty string, which the caller records as a `tei-parse-failure`
 sentinel (there is no abstract fallback).
@@ -189,141 +186,86 @@ sentinel (there is no abstract fallback).
 
 ```
 laglitsynth fulltext-eligibility \
-    [--catalogue data/catalogue-dedup/deduplicated.jsonl] \
-    [--screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl] \
-    [--screening-threshold 50] \
+    [--corpus-dir data/corpus/] \
     [--extractions data/fulltext-extraction/extraction.jsonl] \
     [--extraction-output-dir data/fulltext-extraction/] \
     [--data-dir data/] [--run-id <iso>_<12hex>] \
     [--eligibility-criteria examples/eligibility-criteria/lagrangian-oceanography.yaml] \
     [--config <run-dir>/config.yaml] \
     [--skip-existing] [--max-records N] [--dry-run] \
-    [--model gemma3:4b] [--base-url http://localhost:11434] \
-    [--concurrency 1] [--num-ctx 32768]
+    --base-url URL --model MODEL [--api-key KEY] [--decisions-url URL] \
+    [--concurrency 1]
 ```
 
 The resolved output directory is `<data-dir>/fulltext-eligibility/<run-id>/`.
-The three input flags default to the paths shown under `--data-dir`; an
+The two input flags default to the paths shown under `--data-dir`; an
 omitted flag whose default does not exist exits naming the upstream stage
 to run (see [run-manifest.md](run-manifest.md)).
 
 ### Arguments
 
-- `--catalogue`: the deduplicated catalogue (`Work` records from stage 2).
-- `--screening-verdicts`: the stage 3 verdict sidecar
-  (`ScreeningVerdict` records). The stage joins this against the catalogue
-  at the `--screening-threshold` cutoff to determine which works to assess.
-  The default path uses the resolved `--run-id`.
-- `--screening-threshold`: relevance score cutoff 0–100 (default: 50).
-  Works whose stage 3 score is at or above this threshold are assessed.
-- `--extractions`: the extraction JSONL (`ExtractedDocument` records).
-  Works without a matching record are skipped (not assessed, not counted).
+- `--corpus-dir`: the corpus written by `corpus-assemble` (default:
+  `<data-dir>/corpus/`). Its works are the ones assessed.
+- `--extractions`: the extraction JSONL (`ExtractedDocument` records),
+  with `extraction-meta.json` beside it. Works without a current record
+  are skipped (not assessed, not counted).
 - `--extraction-output-dir`: directory that
   `ExtractedDocument.tei_path` is relative to. Defaults to the parent
   of `--extractions`. See
   [`tei-wrapper`](../plans/done/tei-wrapper.md) for why the path is
   stored relative.
 - `--data-dir`: bucket root for stage outputs (default: `data/`).
-- `--run-id`: run identifier, shared with the screening run whose verdicts
-  are read. Default: the `run_id` in `<data-dir>/manifest.json`; the stage
-  exits when neither is available.
-- `--eligibility-criteria`: path to the YAML carrying the LLM system
-  prompt (default:
+- `--run-id`: run identifier, shared with the extraction-codebook run that
+  reads these verdicts. Default: `analysis_run_id` in
+  `<corpus-dir>/corpus-meta.json`, which changes whenever the corpus does,
+  so a changed corpus never writes into earlier output. Pass it to make a
+  variant run on the same corpus, for example with other criteria.
+- `--eligibility-criteria`: path to the YAML carrying the `decision`
+  block (default:
   `examples/eligibility-criteria/lagrangian-oceanography.yaml`). The
   file's contents are inlined into `config.yaml` on save so a run dir
   is a self-contained run snapshot. See [configs.md](configs.md).
 - `--config`: optional YAML config file whose values seed argparse
   defaults; explicit CLI flags still win. See [configs.md](configs.md).
 - `--skip-existing`: load any prior `verdicts.jsonl` (in the run dir
-  pointed at by `--run-id`) and skip already-assessed `work_id`s. The
-  verdict sidecar is appended to on completion. If `eligibility-meta.json`
+  pointed at by `--run-id`) and skip already-assessed `work_id`s. New
+  verdicts are appended to the existing `verdicts.jsonl` one record at a
+  time as they complete. If `eligibility-meta.json`
   already exists and its recorded `prompt_sha256` differs from the hash the
-  current invocation would produce, the run aborts with an error — mixing
-  verdicts from different prompt versions in one file would silently corrupt
+  current invocation would produce, or its `corpus_id` differs from the
+  current corpus, the run aborts with an error — mixing verdicts from
+  different prompt versions or corpora in one file would silently corrupt
   any downstream analysis.
-- `--max-records`: process only the first N works from the catalogue.
+- `--max-records`: process only the first N corpus works that have a
+  current extraction (and, under `--skip-existing`, no verdict yet).
 - `--dry-run`: print verdicts to stderr without writing any output.
-- `--model`, `--base-url`: Ollama configuration. `--base-url` is checked
-  at startup with the same preflight pattern as
-  [`screening-abstracts`](screening-abstracts.md).
-- `--num-ctx`: context window size passed to the model via `extra_body`
-  (default: `32768`). For a guaranteed context window, bake the model
-  first with [`bake-model`](bake-model.md) and pass the baked tag via
-  `--model`. See [external-services.md](external-services.md) for the
-  bake-vs-flag tradeoff.
+- `--base-url`, `--model`: the OpenAI-compatible base URL (including
+  `/v1`) and the decisions model. Both required. The full rendered text is sent; a
+  text longer than the model's context is the endpoint's to reject, which
+  gives `llm-rejected`.
+- `--api-key`: the key; falls back to `LLM_API_KEY` in the environment,
+  then in `.env`. Never written to `config.yaml`.
+- `--decisions-url`: the decisions endpoint (default:
+  `<base-url>/decisions`).
 - `--concurrency`: number of in-flight LLM requests (default: `1`).
-  Stage 7's prompts are less prefill-heavy than stage 8's, so it can
-  tolerate higher concurrency than stage 8 on the same GPU.
-  See [llm-concurrency.md](llm-concurrency.md).
+  See [interfaces.md](interfaces.md#llm-concurrency).
 
-## LLM prompt
+## Request
 
-Loaded at runtime from the YAML pointed at by `--eligibility-criteria`
-(default: the shipped Lagrangian-oceanography criterion). The file's
-`system_prompt` field is sent verbatim as the system message; the
-digest is recorded as `meta.llm.prompt_sha256`.
+The question is loaded at runtime from the `decision` block of the YAML
+pointed at by `--eligibility-criteria`; a file without one exits before
+any request, naming the file. One `POST` per work to the decisions URL,
+in OpenAI's Decisions shape:
 
-```
-System: You are assessing whether a scientific paper meets the inclusion
-criteria for a systematic review of numerical methods in Lagrangian
-oceanography.
-
-Criteria:
-1. The paper describes a computation that tracks particles, tracers, or
-   objects in an ocean flow field.
-2. The paper is primary research (not a review, editorial, or commentary).
-3. The paper contains at least some description of the numerical methods
-   used.
-
-Respond with JSON: {"eligible": true|false, "reason": "<one sentence>"}.
-
-User: full_text:
-<rendered text>
+```json
+{
+  "model": "<model>",
+  "input": "<rendered full text>",
+  "questions": [
+    {"type": "predicate", "name": "eligible",
+     "instructions": "<instructions>\n\nTrue if: <true>\nFalse if: <false>"}
+  ]
+}
 ```
 
-`response_format={"type": "json_object"}`, `temperature=0.8`, per-call
-random seed recorded on the verdict. Same shape as
-[`screening-abstracts`](screening-abstracts.md).
-
-## Review export
-
-`fulltext-eligibility-export` writes an XLSX review workbook
-([`export.py`](../src/laglitsynth/fulltext_eligibility/export.py)) for
-human spot-checking the LLM stage and tuning its prompt. It is XLSX-only
-— the JSONL sidecar is the machine-readable form. The workbook has an
-`Index` sheet and one tab per sampled work. The `Index` opens with three
-reviewer-identity rows (`reviewer_name` / `reviewer_email` /
-`review_date`, with placeholder values to fill in) above a table with one
-row per sampled work (bibliographic columns, the `eligible` / `llm_reason`
-verdict inline, and a hyperlink to the per-work tab, as a light navigation
-aid). The per-work tab is the working surface: a back-to-Index link, a
-bibliographic block, the eligibility criterion pulled verbatim from
-`eligibility-meta.json` so the reviewer sees the same question the LLM saw,
-a structured reviewer block (`reviewer_eligible` / `reviewer_reason` /
-`reviewer_remarks`, pre-filled with placeholders), and finally a collapsed
-LLM-verdict block (the model's `eligible`, `reason`, seed, and fingerprint
-hidden behind an outline toggle).
-
-```
-laglitsynth fulltext-eligibility-export \
-    --verdicts data/fulltext-eligibility/<run-id>/verdicts.jsonl \
-    --catalogue data/catalogue-dedup/deduplicated.jsonl \
-    [--meta data/fulltext-eligibility/<run-id>/eligibility-meta.json] \
-    [--output <verdicts parent>/review.xlsx] \
-    [--n-subset N] [--subset-seed 0]
-```
-
-`--n-subset` / `--subset-seed` draw a reproducible random sample (the
-intended workflow is digging into a subset and generalizing, not a wide
-all-works scan); unset or `>=` the verdict count emits the full set in
-verdict order. A verdict whose `work_id` is absent from the catalogue
-raises a `ValueError` naming the offending id.
-
-## What to defer
-
-- Fine-grained exclusion reasons (enum of why a paper was excluded).
-- Per-criterion verdicts (three booleans).
-- Calibration against human judgments.
-- Threshold-based re-eligibility (currently binary).
-- Chunking or retrieval over long papers; prompt length policy is
-  addressed as a follow-up in the stage 7 plan.
+The probability is read from the answer named `eligible`.

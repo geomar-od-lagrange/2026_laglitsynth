@@ -3,8 +3,8 @@
 The LLM stages — [screening-abstracts](screening-abstracts.md),
 [fulltext-eligibility](eligibility.md),
 [extraction-codebook](extraction-codebook.md) — share a sweep-friendly
-config and run-directory model. Each invocation produces a fresh
-self-contained run directory; every parameter that drives the run is
+config and run-directory model. Each invocation writes one
+self-contained run directory, named by its run-id; every parameter that drives the run is
 either a CLI flag, a key in a YAML config file, or both.
 
 ## Run directories
@@ -13,14 +13,18 @@ Resolved output dir is `<data-dir>/<stage-subdir>/<run-id>/`. `--data-dir`
 (default: `data/`) is the bucket root, swapped wholesale to repoint a
 sweep at a sibling tree. `<stage-subdir>` is hardcoded per stage:
 `screening-abstracts`, `fulltext-eligibility`, `extraction-codebook`.
-`--run-id` (default: the `run_id` in `<data-dir>/manifest.json`, see
-[run-manifest.md](run-manifest.md)) names the leaf; a minted id is a
+`--run-id` names the leaf. It defaults to the `run_id` in
+`<data-dir>/manifest.json` for screening and to `analysis_run_id` in
+`<data-dir>/corpus/corpus-meta.json` for eligibility and extraction-codebook
+(see [run-manifest.md](run-manifest.md)); a minted id is a
 `<iso-1s>_<12hex>` in UTC — the ISO timestamp is human-readable and the
-12-hex suffix removes concurrent-job collision risk on NESH or local
-sweeps. PDFs
-and TEIs (under `<data-dir>/fulltext-extraction/tei/` and so on) are
-not run-namespaced; they are a shared input cache populated
-incrementally via the existing `--skip-existing` paths.
+12-hex suffix removes collision risk between concurrent runs in a
+sweep. The PDF store, the [corpus](corpus.md) and the TEIs (under
+`<data-dir>/fulltext-extraction/tei/`) are not run-namespaced. The
+corpus is rewritten whole by each `corpus-assemble`; the TEIs are a
+shared cache filled incrementally through stage 6's `--skip-existing`.
+Every analysis meta records the `corpus_id` it ran on, so output from
+another corpus is refused rather than mixed in.
 
 ## Two roles for `config.yaml`
 
@@ -28,24 +32,33 @@ A YAML file in this project plays one of two roles depending on where
 it lives.
 
 **Input configs** are version-controlled or sweep-generated YAMLs that
-drive an invocation. They reference the codebook and
-eligibility-criteria YAMLs by path. Use cases: assembling NESH job
-submissions without 200-character `sbatch` strings; running a sweep
+drive an invocation. They reference the criteria and codebook YAMLs by
+path. Use cases: pinning a run's parameters in one file instead of a
+long string of env overrides; running a sweep
 where the only difference between 12 invocations is one parameter;
 shipping a paper's supplementary materials as one config file.
 
 **Run snapshots** are written automatically into every LLM-stage run
-directory. The codebook and eligibility-criteria contents are inlined
-as embedded mappings, so a year from now you can still tell what a
+directory. The criteria and codebook contents the stage read (screening
+criteria for stage 3, eligibility criteria for stage 7, codebook and
+eligibility criteria for stage 8) are inlined as embedded mappings, so a year from now you can still tell what a
 specific run was configured with — even if the upstream YAMLs have
 moved or been edited.
 
 The two share a file format and may even round-trip: feed a run
 snapshot back as `--config <run-dir>/config.yaml` and the inlined
-codebook is consumed directly. That isn't replay (LLM stochasticity
-makes record-level reproduction impossible at `temperature=0.8`), but
-it is "rerun with the same configuration," and for that purpose the
-shapes are interchangeable.
+criteria and codebook are consumed directly. That isn't replay (the endpoint's
+sampling is not pinned, so record-level reproduction is not
+guaranteed), but it is "rerun with the same configuration," and for that
+purpose the shapes are interchangeable. The API key is never part of a
+snapshot: `api_key` is dropped like `run_id` and `config`. Because
+`run_id` is dropped, a rerun resolves it as any run does — the
+manifest's `run_id` for screening, the corpus's `analysis_run_id` for
+eligibility and extraction-codebook — so a rerun without `--run-id`
+writes into the original run directory: it replaces that run's output,
+or, for eligibility and extraction-codebook with `skip_existing: true`
+in the snapshot, continues it. Pass
+`--run-id "$(laglitsynth generate-run-id)"` to keep the original run.
 
 ## CLI-config precedence
 
@@ -79,15 +92,18 @@ A per-review config is validated against the typed `ReviewConfig`
 [src/laglitsynth/review.py](../src/laglitsynth/review.py). Its fields are
 the query, the year window (`from_year` / `to_year`) and record cap
 (`max_records`), the three criteria/codebook paths (`screening_criteria`,
-`eligibility_criteria`, `codebook`), and nested per-stage groups for
-`thresholds.{retrieval,eligibility}`, `models.{screening,eligibility,extraction}`,
-`backends.screening` (`ollama` or `decisions`),
-`num_ctx.{eligibility,extraction}`, and `concurrency.{llm,extraction}`.
+`eligibility_criteria`, `codebook`), the `screening_threshold`, the
+endpoint URLs (`llm_base_url`, `llm_decisions_url`), and nested per-stage
+groups for `models.{screening,eligibility,extraction}` plus
+`models.extraction_reasoning_effort` (`low`, `medium` or `high`) and
+`concurrency.{llm,extraction,grobid}`.
 Only `query` is required; every other field is optional. An absent
 optional field means "fall back to the runner's built-in default" — it
 is not invented at validation time (None means None). The committed
 default is [examples/reviews/lagrangian-oceanography.yaml](../examples/reviews/lagrangian-oceanography.yaml),
-which reproduces the runner's historical smoke-run behaviour.
+the smoke-run config; it leaves `screening_threshold`, the LLM endpoint
+URLs and the models unset and names no provider. The API key is not a
+review-config field: it is `LLM_API_KEY` in the environment or `.env`.
 
 ### The `review-config` subcommand
 
@@ -105,11 +121,12 @@ The stable, documented name set is:
 | `CFG_SCREENING_CRITERIA` | `screening_criteria` |
 | `CFG_ELIGIBILITY_CRITERIA` | `eligibility_criteria` |
 | `CFG_CODEBOOK` | `codebook` |
-| `CFG_RETRIEVAL_THRESHOLD` / `CFG_ELIGIBILITY_THRESHOLD` | `thresholds.{retrieval,eligibility}` |
+| `CFG_SCREENING_THRESHOLD` | `screening_threshold` |
+| `CFG_LLM_BASE_URL` | `llm_base_url` |
+| `CFG_LLM_DECISIONS_URL` | `llm_decisions_url` |
 | `CFG_SCREENING_MODEL` / `CFG_ELIGIBILITY_MODEL` / `CFG_EXTRACTION_MODEL` | `models.{screening,eligibility,extraction}` |
-| `CFG_SCREENING_BACKEND` | `backends.screening` |
-| `CFG_ELIGIBILITY_NUM_CTX` / `CFG_EXTRACTION_NUM_CTX` | `num_ctx.{eligibility,extraction}` |
-| `CFG_LLM_CONCURRENCY` / `CFG_EXTRACTION_CONCURRENCY` | `concurrency.{llm,extraction}` |
+| `CFG_EXTRACTION_REASONING_EFFORT` | `models.extraction_reasoning_effort` |
+| `CFG_LLM_CONCURRENCY` / `CFG_EXTRACTION_CONCURRENCY` / `CFG_GROBID_CONCURRENCY` | `concurrency.{llm,extraction,grobid}` |
 
 The three criteria/codebook paths are resolved against the config file's
 own directory before emission (mirroring the
@@ -120,24 +137,33 @@ it references regardless of the invocation CWD.
 ### Runner precedence: env > config > default
 
 The runner `eval`s the emitted block, then resolves every knob as
-`VAR="${VAR:-${CFG_VAR:-default}}"`. So an environment variable (or a
-`sbatch --export=`) wins over the config file, which wins over the
+`VAR="${VAR:-${CFG_VAR:-default}}"`. So an environment variable wins
+over the config file, which wins over the
 runner's built-in default; an absent config field falls through to that
 default. The historical `QUERY` and `N` env overrides keep working
-through this same mechanism (`N` maps to `CFG_MAX_RECORDS`). The two
-corpus thresholds (`RETRIEVAL_THRESHOLD`, `ELIGIBILITY_THRESHOLD`) stay
-independently settable but share a common fallback `SCREENING_THRESHOLD`
-when neither the specific env var nor the config pins them. See
+through this same mechanism (`N` maps to `CFG_MAX_RECORDS`). The
+screening threshold has no built-in default: when the run reaches stage
+5, where `corpus-assemble` applies it, the runner exits unless
+`SCREENING_THRESHOLD` is set in the environment or `screening_threshold`
+in the config. The LLM endpoint has no default either: from stage 3 on the
+runner requires `LLM_BASE_URL` (env or `llm_base_url`), `LLM_API_KEY`
+(env, else `.env`) and the model of every stage it reaches, and
+exits naming whichever is missing. `LLM_DECISIONS_URL` is passed to stages
+3 and 7 as `--decisions-url` when set, and `EXTRACTION_REASONING_EFFORT`
+to stage 8 as `--reasoning-effort` when set; the key is never passed as a
+flag. `RUN_ID` names the screening run (stage 3, `corpus-assemble`, the
+export) and `ANALYSIS_RUN_ID`, unset by default, is passed as `--run-id`
+to stages 7 and 8, which otherwise take the corpus's `analysis_run_id`. See
 [README.md](../README.md#running-the-pipeline) for the invocation.
 
 ## Quick recipes
 
 ```bash
 # run with defaults: inputs at their conventional paths under data/,
-# run-id from data/manifest.json, default codebook YAML
+# run-id from data/corpus/corpus-meta.json, default codebook YAML
 laglitsynth extraction-codebook
 
-# write under a run-id other than the manifest's
+# write under a run-id other than the corpus's
 laglitsynth extraction-codebook --run-id 2026-05-03T14-30-00_abc123def456
 
 # rerun a saved snapshot from its config

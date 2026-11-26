@@ -1,7 +1,8 @@
 # Full-text extraction
 
-Parse retrieved PDFs into structured sections. Stage 5 (retrieval)
-produces the input (PDFs on disk); downstream stages (eligibility, data
+Parse the corpus PDFs into structured sections. `corpus-assemble`
+produces the input (the PDF copies in `data/corpus/pdfs/`, listed in
+`data/corpus/provenance.jsonl`); downstream stages (eligibility, data
 extraction) consume the output. Separating extraction from retrieval
 means:
 
@@ -15,13 +16,17 @@ means:
 Start the GROBID container before running this stage:
 
 ```bash
-docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0
+docker run --rm -p 8070:8070 grobid/grobid:0.9.0-crf
 ```
 
-GROBID takes ~30–60 seconds to start (up to ~90s on a cold NESH node).
-Health check: `GET http://localhost:8070/api/isalive`.
-See [external-services.md](external-services.md) for the full setup (Apple
-Silicon Rosetta workaround, memory requirements, `docker compose` file).
+Wait for the health check before running the stage:
+`GET http://localhost:8070/api/isalive`.
+See [external-services.md](external-services.md) for the full setup
+(memory requirements, crash recovery).
+
+The stage reads only the [corpus](corpus.md), so the machines that
+acquire PDFs need no GROBID or Docker. The PDF is the scarce artifact;
+its text can always be re-extracted.
 
 ## Approach: GROBID only
 
@@ -40,12 +45,12 @@ does not require re-retrieving anything.
 
 From [grobid-lessons.md](grobid-lessons.md):
 
-- Run GROBID as a Docker container (`lfoppiano/grobid:0.8.0`).
-- amd64-only image; runs under Rosetta on Apple Silicon (slower but
-  functional).
-- Startup takes ~30–60 seconds (up to ~90s on a cold NESH node). Health
-  check: `GET /api/isalive`.
-- Memory footprint: ~2 GB.
+- Run GROBID as a Docker container (`grobid/grobid:0.9.0-crf`, the
+  CRF-only image). It is multi-arch (amd64 and arm64), so it runs natively
+  on Apple Silicon.
+- Health check: `GET /api/isalive`.
+- Memory: give Docker more than its 2 GB default (see
+  [external-services.md](external-services.md#memory-tuning)).
 - Processing endpoint: `POST /api/processFulltextDocument` with the PDF as
   multipart form data.
 - Timeout: 120 seconds per paper.
@@ -58,8 +63,8 @@ From [grobid-lessons.md](grobid-lessons.md):
 GROBID's TEI XML output is saved to disk as the canonical extraction
 artefact — one `.tei.xml` per PDF. The stored `ExtractedDocument`
 record carries only `work_id`, `tei_path` (relative to the output
-directory), `content_sha256` of the TEI bytes, and the
-`extracted_at` timestamp. Section text, figures, citations, and
+directory), `content_sha256` of the TEI bytes, `pdf_sha256` of the corpus
+PDF it came from, and the `extracted_at` timestamp. Section text, figures, citations, and
 bibliography are not persisted in the JSONL; they are parsed lazily
 from the TEI on demand (see "Reading TEI" below).
 
@@ -108,6 +113,7 @@ class ExtractedDocument(BaseModel):
     work_id: str                 # OpenAlex ID
     tei_path: str                # relative to output_dir, e.g. "tei/W123.tei.xml"
     content_sha256: str          # sha256 hex digest of the TEI bytes on disk
+    pdf_sha256: str              # CorpusPdf.content_sha256 of the source PDF
     extracted_at: str            # per-record wall-clock timestamp
 
     def open_tei(self, output_dir: Path) -> TeiDocument:
@@ -124,6 +130,11 @@ Consumers join with their `output_dir` at read time — typically via
 time. The hash becomes the stable identity for a given extraction
 across re-runs (a newer GROBID version may emit different TEI for the
 same `work_id`).
+
+`pdf_sha256` is the corpus copy's `content_sha256` at extraction time.
+`extraction.jsonl` is appended to, so a work re-extracted after its PDF
+changed has several records; the last one counts. Stages 7 and 8 use a
+record only when its `pdf_sha256` matches the current corpus copy.
 
 For works where GROBID fails, no `ExtractedDocument` is created — the
 absence is the signal.
@@ -170,15 +181,20 @@ on the first accessor call.
 class ExtractionMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run: RunMeta      # tool, tool_version, run_at, validation_skipped
+    corpus_id: str    # CorpusMeta.corpus_id of the corpus the PDFs came from
     grobid_version: str
-    total_pdfs: int
+    total_pdfs: int   # corpus works with a PDF
     extracted_count: int
     failed_count: int
-    invalid_stem_count: int
 ```
 
-`grobid_version` is read from the GROBID `/api/version` probe at startup;
-if that probe fails it falls back to the literal string `"unknown"`.
+Stages 7 and 8 exit when `extraction-meta.json` is missing or names
+another `corpus_id` than the current corpus.
+
+`grobid_version` is read from the GROBID `/api/version` probe at startup:
+the `version` field of its JSON answer (GROBID 0.9.0), or the plain-text
+body (GROBID 0.8.0). If that probe fails it falls back to the literal
+string `"unknown"`.
 
 ## Storage layout
 
@@ -202,19 +218,21 @@ consumed by downstream stages (eligibility, data extraction).
 
 ```
 laglitsynth fulltext-extraction \
-    [--pdf-dir data/pdfs/] \
+    [--corpus-dir data/corpus/] \
     [--output-dir data/fulltext-extraction/] \
     [--data-dir data/] \
     [--grobid-url http://localhost:8070] \
     [--timeout 120] \
     [--skip-existing] \
-    [--consolidate-citations 0]
+    [--consolidate-citations 0] \
+    [--concurrency 1]
 ```
 
 ### Arguments
 
-- `--pdf-dir`: directory containing retrieved PDFs. Defaults to the PDF
-  store `<data-dir>/pdfs/`; exits naming `fulltext-retrieval` when absent.
+- `--corpus-dir`: the corpus written by `corpus-assemble`. Defaults to
+  `<data-dir>/corpus/`; exits naming `corpus-assemble` when its
+  `corpus-meta.json` is absent.
 - `--output-dir`: where to write extraction records, metadata, and TEI
   files. Defaults to `<data-dir>/fulltext-extraction/`.
 - `--data-dir`: bucket root the two defaults above hang off (default:
@@ -223,25 +241,33 @@ laglitsynth fulltext-extraction \
   `http://localhost:8070`.
 - `--timeout`: per-paper GROBID timeout in seconds. Optional; defaults to
   `120.0`.
-- `--skip-existing`: do not re-extract PDFs that already have an
-  `ExtractedDocument` record.
+- `--skip-existing`: do not re-extract a work whose latest
+  `ExtractedDocument` has the `pdf_sha256` of its current corpus copy. A
+  work whose PDF changed in a re-assembly is extracted again.
 - `--consolidate-citations`: GROBID's `consolidateCitations` form field,
   one of `0` or `1`. Optional; defaults to `0` (off). `1` instructs GROBID
   to enrich extracted references with DOIs via Crossref / Semantic Scholar
   (needs internet during processing and is slower); since OpenAlex is the
   metadata authority, `0` is recommended.
+- `--concurrency`: number of in-flight GROBID requests (default: `1`).
+  See [interfaces.md](interfaces.md#grobid-concurrency).
 
 ### Flow
 
-1. List all PDFs in `--pdf-dir`.
+1. Read the `CorpusPdf` rows of `<corpus-dir>/provenance.jsonl` that
+   carry a `pdf_path`; works without a PDF are not listed.
 2. Load existing `extraction.jsonl` if present (for `--skip-existing`).
-3. For each unprocessed PDF:
-   a. Submit to GROBID.
-   b. Save TEI XML to `tei/<work_id>.tei.xml`.
+3. For each work not skipped, with up to `--concurrency` requests in
+   flight:
+   a. A worker submits `<corpus-dir>/<pdf_path>` to GROBID, retrying
+      when GROBID answers 503 (its request pool is full; see
+      [interfaces.md](interfaces.md#grobid-concurrency)). Steps b–d run
+      on the main thread, in completion order.
+   b. Save TEI XML to `tei/<stem>.tei.xml`.
    c. Hash the TEI bytes (`sha256`).
-   d. Write `ExtractedDocument(work_id, tei_path, content_sha256,
-      extracted_at)` to `extraction.jsonl`.
-4. Write `ExtractionMeta`.
+   d. Append `ExtractedDocument(work_id, tei_path, content_sha256,
+      pdf_sha256, extracted_at)` to `extraction.jsonl`.
+4. Write `ExtractionMeta` with the corpus's `corpus_id`.
 5. Print summary: extracted count, failed count.
 
 ### GROBID availability
@@ -256,60 +282,23 @@ If GROBID goes down mid-corpus, restart the container and re-run with
 `--skip-existing` to continue from where extraction stopped:
 
 ```bash
-docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0  # restart GROBID
+docker run --rm -p 8070:8070 grobid/grobid:0.9.0-crf  # restart GROBID
 laglitsynth fulltext-extraction --skip-existing
 ```
 
-Already-extracted PDFs (those with an `ExtractedDocument` record in
-`extraction.jsonl`) are skipped. See [external-services.md](external-services.md)
-for the macOS/Apple Silicon Rosetta workaround if GROBID fails to start.
+Works whose latest `ExtractedDocument` in `extraction.jsonl` matches the
+current corpus PDF are skipped. See [external-services.md](external-services.md)
+for memory tuning if GROBID crashes again.
 
-## What to build now
+## Limits
 
-- GROBID client (POST PDF, receive TEI XML, write to `tei/`).
-- `ExtractedDocument` / `ExtractionMeta` models and JSONL output.
-- The `fulltext-extraction` CLI subcommand with `--skip-existing`.
-- `TeiDocument` wrapper for downstream TEI access (see
-  [`fulltext_extraction/tei.py`](../src/laglitsynth/fulltext_extraction/tei.py)).
-
-## What to defer
-
-- Alternative extraction tools (PyMuPDF, marker, nougat). Add when GROBID
-  failures on the actual corpus justify it.
-- HTML-to-text for born-HTML papers.
-- LaTeX source parsing for arXiv papers.
-- Parallel GROBID processing. Sequential is sufficient for hundreds of
-  papers.
-- GROBID container lifecycle management. The operator starts GROBID
-  manually; the CLI just checks and uses it.
-
-## Risks
-
-### GROBID fails on a significant fraction of PDFs
-
-Some sub-fields produce PDFs that GROBID handles poorly (scanned older
-papers, unusual layouts, non-standard fonts).
-
-Mitigation: track the failure rate on the actual corpus and decide based
-on observed numbers whether a fallback is needed. If the rate justifies
-it, evaluate PyMuPDF or marker as a fallback and add a second extraction
-path. The `ExtractedDocument` model does not encode the extraction tool —
-widening out is a code change, not a schema change.
-
-### GROBID infrastructure friction
-
-Docker, 2 GB RAM, amd64 emulation, 60-second startup. Acceptable for a
-research tool but requires a machine that can run Docker.
-
-Mitigation: document the setup clearly. Provide a `docker compose` file.
-The retrieval/extraction split means development and testing of other
-pipeline stages can proceed with pre-extracted data — GROBID is only
-needed during the extraction step itself.
-
-### TEI output variance
-
-GROBID's TEI output varies across paper types. The parser must be defensive.
-
-Mitigation: the fallback rules above handle the known failure modes. Test
-the parser against a sample of 10–20 papers from the actual corpus early
-to surface unknown failure modes before processing the full corpus.
+- GROBID is the only extraction tool. There is no fallback (PyMuPDF,
+  marker, nougat), no HTML-to-text for born-HTML papers and no LaTeX
+  parsing for arXiv sources. `ExtractedDocument` does not encode the
+  tool, so adding one is a code change, not a schema change.
+  `ExtractionMeta.failed_count` shows how often GROBID fails on the
+  corpus.
+- The operator starts and stops GROBID; the CLI only checks and uses it.
+- GROBID's TEI varies across paper types. The parser handles the known
+  shapes listed above; other shapes surface downstream as
+  `tei-parse-failure`.

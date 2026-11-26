@@ -1,14 +1,14 @@
 # Literature Review Pipeline
 
 Tools for conducting structured literature reviews — from keyword search to
-citation analysis to structured synthesis.
+structured codebook extraction from full texts.
 
 ## Goal
 
-Build a pipeline that supports the full arc of a literature review: discover
-publications, collect metadata, trace citation networks, filter and cluster by
-topic and affiliation, export to standard formats, and eventually support
-structured assessment and synthesis.
+Build a pipeline that supports the full arc of a literature review: search a
+catalogue for publications, screen their abstracts, retrieve the full texts,
+extract their structure, assess each paper's eligibility, and fill a
+structured codebook per eligible paper, as the input to synthesis.
 
 ## Principles
 

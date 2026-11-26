@@ -4,44 +4,54 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
-from openai import APIConnectionError, APITimeoutError
-
-import hashlib
 
 from laglitsynth import layout
 from laglitsynth.fulltext_eligibility.eligibility import (
-    _active_works,
     assess_works,
     classify_eligibility,
+    criteria_sha256,
 )
 from laglitsynth.fulltext_eligibility.models import EligibilityVerdict
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
-from laglitsynth.screening_abstracts.models import ScreeningVerdict
+from laglitsynth.llm import LlmEndpoint
+from laglitsynth.prompts import DecisionQuestion
 
 from conftest import (
     TEI_NS,
-    TEST_RUN_ID,
+    TEST_ANALYSIS_RUN_ID,
     _make_work,
-    _mock_openai_response,
+    _write_corpus,
     _write_extractions_jsonl,
-    _write_manifest,
+    _write_full_text_for,
     _write_tei,
-    _write_works_jsonl,
 )
 
 
 # --- fixtures and helpers ---
 
+_BASE = "https://llm.example.org/v1"
+_ENDPOINT = LlmEndpoint(
+    base_url=_BASE, model="m", api_key="k", decisions_url=_BASE + "/decisions"
+)
+_DECISION_BLOCK = {
+    "instructions": "Is this ocean particle tracking primary research?",
+    "criteria": {"true": "Tracks particles in the ocean.", "false": "Anything else."},
+}
+_QUESTION = DecisionQuestion.model_validate(_DECISION_BLOCK)
 
-def _write_verdicts_jsonl(path: Path, verdicts: list[ScreeningVerdict]) -> None:
-    with open(path, "w") as f:
-        for v in verdicts:
-            f.write(v.model_dump_json() + "\n")
+
+@pytest.fixture(autouse=True)
+def _no_sleep() -> Iterator[None]:
+    """Decision retries back off with ``time.sleep``; don't actually wait."""
+    with patch("laglitsynth.llm.time.sleep"):
+        yield
 
 
 def _write_malformed_tei(path: Path) -> None:
@@ -59,181 +69,83 @@ def _write_empty_body_tei(path: Path) -> None:
     )
 
 
-def _write_full_text_for(
-    extractions_path: Path, output_dir: Path, work_ids: list[str]
-) -> None:
-    """Write a renderable TEI + extraction record for each work id.
-
-    Stage 7 is full-text-only, so run()-level tests need each work that
-    should be assessed to carry an extraction with non-empty TEI.
-    """
-    records: list[ExtractedDocument] = []
-    for wid in work_ids:
-        tei_path = f"tei/{wid.rsplit('/', 1)[-1]}.tei.xml"
-        _write_tei(
-            output_dir / tei_path,
-            f'<div xmlns="{TEI_NS}"><head>Methods</head><p>Body text.</p></div>',
-        )
-        records.append(
-            ExtractedDocument(
-                work_id=wid,
-                tei_path=tei_path,
-                content_sha256="0" * 64,
-                extracted_at="2026-04-17T00:00:00.000000+00:00",
-            )
-        )
-    _write_extractions_jsonl(extractions_path, records)
-
-
 # --- classify_eligibility ---
 
 
+def _client(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.Client:
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def _answer(p: float, name: str = "eligible") -> Callable[[httpx.Request], httpx.Response]:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"answers": [{"type": "predicate", "name": name, "probability": p}]}
+        )
+
+    return handler
+
+
+def _classify(client: httpx.Client, text: str = "full text") -> EligibilityVerdict:
+    return classify_eligibility(
+        "W1", text, endpoint=_ENDPOINT, client=client, question=_QUESTION
+    )
+
+
 class TestClassifyEligibility:
-    def test_valid_eligible_true(self) -> None:
-        resp = _mock_openai_response('{"eligible": true, "reason": "matches"}')
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        verdict = classify_eligibility(
-            "W1", "prompt text", model="m", client=mock_client, system_prompt="SP"
-        )
+    @pytest.mark.parametrize(("p", "eligible"), [(0.49, False), (0.5, True), (1.0, True)])
+    def test_probability_cut_at_half(self, p: float, eligible: bool) -> None:
+        verdict = _classify(_client(_answer(p)))
         assert verdict.work_id == "W1"
-        assert verdict.eligible is True
-        assert verdict.reason == "matches"
-        assert isinstance(verdict.seed, int)
-        assert verdict.raw_response == '{"eligible": true, "reason": "matches"}'
+        assert verdict.probability == p
+        assert verdict.eligible is eligible
+        assert verdict.reason is None
+        assert verdict.raw_response is not None
 
-    def test_valid_eligible_false(self) -> None:
-        resp = _mock_openai_response('{"eligible": false, "reason": "review article"}')
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        verdict = classify_eligibility(
-            "W1", "prompt text", model="m", client=mock_client, system_prompt="SP"
-        )
-        assert verdict.eligible is False
+    def test_request_sends_full_text_as_input_with_name_eligible(self) -> None:
+        bodies: list[dict[str, Any]] = []
+        urls: list[str] = []
 
-    def test_malformed_json_returns_sentinel(self) -> None:
-        resp = _mock_openai_response("not json at all")
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        verdict = classify_eligibility(
-            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
-        )
+        def handler(request: httpx.Request) -> httpx.Response:
+            bodies.append(json.loads(request.content))
+            urls.append(str(request.url))
+            return _answer(0.7)(request)
+
+        _classify(_client(handler), text="Methods\nWe track particles.")
+        assert urls == [_BASE + "/decisions"]
+        assert bodies[0]["input"] == "Methods\nWe track particles."
+        assert bodies[0]["questions"] == [
+            {"type": "predicate", "name": "eligible", "instructions": _QUESTION.render()}
+        ]
+
+    def test_malformed_body_is_parse_failure(self) -> None:
+        verdict = _classify(_client(lambda r: httpx.Response(200, text="not json")))
         assert verdict.reason == "llm-parse-failure"
+        assert verdict.probability is None
         assert verdict.eligible is None
-        assert verdict.seed is None
-        assert verdict.raw_response == "not json at all"
+        assert verdict.raw_response == "not json"
 
-    def test_missing_eligible_field_returns_sentinel(self) -> None:
-        resp = _mock_openai_response('{"reason": "ok"}')
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        verdict = classify_eligibility(
-            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
-        )
+    def test_answer_for_another_name_is_parse_failure(self) -> None:
+        verdict = _classify(_client(_answer(0.9, name="relevant")))
         assert verdict.reason == "llm-parse-failure"
-        assert verdict.raw_response == '{"reason": "ok"}'
+        assert verdict.probability is None
 
-    def test_extra_fields_dropped(self) -> None:
-        # LLMs at t>0 sprinkle extras; they should not fail the record.
-        resp = _mock_openai_response(
-            '{"eligible": true, "reason": "ok", "confidence": 95}'
-        )
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        verdict = classify_eligibility(
-            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
-        )
-        assert verdict.reason == "ok"
-        assert verdict.eligible is True
-
-    def test_reason_list_coerced(self) -> None:
-        resp = _mock_openai_response(
-            '{"eligible": true, "reason": ["a", "b"]}'
-        )
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        verdict = classify_eligibility(
-            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
-        )
-        assert verdict.reason == "a / b"
-
-    def test_string_eligible_coerced_by_pydantic(self) -> None:
-        # Pydantic v2 accepts "true"/"false" → bool in non-strict mode.
-        resp = _mock_openai_response('{"eligible": "true", "reason": "ok"}')
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        verdict = classify_eligibility(
-            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
-        )
-        assert verdict.eligible is True
-        assert verdict.reason == "ok"
-
-    def test_timeout_returns_sentinel(self) -> None:
-        """APITimeoutError after retries → reason='llm-timeout' sentinel."""
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.side_effect = APITimeoutError(
-            request=MagicMock()
-        )
-        verdict = classify_eligibility(
-            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
-        )
+    def test_5xx_is_timeout(self) -> None:
+        verdict = _classify(_client(lambda r: httpx.Response(503, text="busy")))
         assert verdict.reason == "llm-timeout"
+        assert verdict.probability is None
         assert verdict.eligible is None
-        assert verdict.seed is None
         assert verdict.raw_response is None
 
-    def test_connection_error_returns_sentinel(self) -> None:
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.side_effect = APIConnectionError(
-            request=MagicMock()
-        )
-        verdict = classify_eligibility(
-            "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
-        )
-        assert verdict.reason == "llm-timeout"
+    def test_400_is_rejected_with_body(self) -> None:
+        verdict = _classify(_client(lambda r: httpx.Response(400, text="context too long")))
+        assert verdict.reason == "llm-rejected"
+        assert verdict.probability is None
+        assert verdict.eligible is None
+        assert verdict.raw_response == "context too long"
 
-    def test_seed_forwarded_to_client(self) -> None:
-        resp = _mock_openai_response('{"eligible": true, "reason": "ok"}')
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        with patch(
-            "laglitsynth.fulltext_eligibility.eligibility.random.randint",
-            return_value=42,
-        ):
-            verdict = classify_eligibility(
-                "W1", "prompt", model="m", client=mock_client, system_prompt="SP"
-            )
-        assert verdict.seed == 42
-
-
-# --- num_ctx threading ---
-
-
-def test_num_ctx_flag_threads_to_options() -> None:
-    """--num-ctx value reaches extra_body["options"]["num_ctx"] in the Ollama call."""
-    resp = _mock_openai_response('{"eligible": true, "reason": "ok"}')
-    mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = resp
-    classify_eligibility(
-        "W1", "prompt", model="m", client=mock_client, system_prompt="SP",
-        num_ctx=16384,
-    )
-    call_kwargs = mock_client.chat.completions.create.call_args[1]
-    assert call_kwargs["extra_body"]["options"]["num_ctx"] == 16384
-
-
-def test_num_ctx_changes_prompt_hash() -> None:
-    """Different --num-ctx values produce different prompt_sha256 hashes."""
-    from laglitsynth.fulltext_eligibility.prompts import USER_TEMPLATE
-
-    system_prompt = "You are a test classifier."
-    hash_a = hashlib.sha256(
-        (system_prompt + "\n" + USER_TEMPLATE + "\n" + str(32768)).encode("utf-8")
-    ).hexdigest()
-    hash_b = hashlib.sha256(
-        (system_prompt + "\n" + USER_TEMPLATE + "\n" + str(16384)).encode("utf-8")
-    ).hexdigest()
-    assert hash_a != hash_b
+    def test_401_exits_naming_url(self) -> None:
+        with pytest.raises(SystemExit, match="/decisions"):
+            _classify(_client(lambda r: httpx.Response(401, text="bad key")))
 
 
 # --- assess_works cascade ---
@@ -246,10 +158,9 @@ def _mock_classify(
         work_id: str,
         prompt: str,
         *,
-        model: str,
+        endpoint: LlmEndpoint,
         client: Any,
-        system_prompt: str,
-        num_ctx: int = 32768,
+        question: DecisionQuestion,
     ) -> EligibilityVerdict:
         entry = results[work_id]
         if entry == "error":
@@ -257,15 +168,15 @@ def _mock_classify(
                 work_id=work_id,
                 eligible=None,
                 reason="llm-parse-failure",
-                seed=None,
                 raw_response="mock failure",
             )
         assert isinstance(entry, dict)
+        probability = entry.get("probability", 0.9 if entry["eligible"] else 0.1)
         return EligibilityVerdict(
             work_id=work_id,
+            probability=probability,
             eligible=entry["eligible"],
-            reason=entry["reason"],
-            seed=entry.get("seed", 12345),
+            raw_response="{}",
         )
 
     return side_effect
@@ -287,6 +198,7 @@ class TestAssessWorksCascade:
             work_id="W1",
             tei_path=tei_path,
             content_sha256="0" * 64,
+            pdf_sha256="0" * 64,
             extracted_at="2026-04-17T00:00:00.000000+00:00",
         )
         _write_extractions_jsonl(extractions_path, [extracted])
@@ -295,7 +207,7 @@ class TestAssessWorksCascade:
 
         mock_classify = MagicMock(
             side_effect=_mock_classify(
-                {"W1": {"eligible": True, "reason": "matches"}}
+                {"W1": {"eligible": True}}
             )
         )
         with patch(
@@ -308,22 +220,18 @@ class TestAssessWorksCascade:
                     extractions,
                     output_dir,
                     client=MagicMock(),
-                    model="m",
+                    endpoint=_ENDPOINT,
                     max_records=None,
-                    system_prompt="SP",
+                    question=_QUESTION,
                 )
             )
 
         assert len(verdicts) == 1
         assert verdicts[0].eligible is True
 
-        # The prompt should contain the flattened section text, not the abstract.
-        call_kwargs = mock_classify.call_args
-        prompt = call_kwargs.args[1]
-        assert "Methods" in prompt
-        assert "Real content." in prompt
-        assert "full_text:" in prompt
-        assert "The abstract." not in prompt
+        # The input is the rendered full text itself, not the abstract.
+        text = mock_classify.call_args.args[1]
+        assert text == "Methods\nReal content."
 
     def test_no_extraction_is_not_assessed(self, tmp_path: Path) -> None:
         """A work without an extraction gets no row and never calls the LLM."""
@@ -339,9 +247,9 @@ class TestAssessWorksCascade:
                     {},
                     output_dir,
                     client=MagicMock(),
-                    model="m",
+                    endpoint=_ENDPOINT,
                     max_records=None,
-                    system_prompt="SP",
+                    question=_QUESTION,
                 )
             )
 
@@ -359,6 +267,7 @@ class TestAssessWorksCascade:
             work_id="W1",
             tei_path=tei_path,
             content_sha256="0" * 64,
+            pdf_sha256="0" * 64,
             extracted_at="2026-04-17T00:00:00.000000+00:00",
         )
         extractions = {extracted.work_id: extracted}
@@ -372,16 +281,16 @@ class TestAssessWorksCascade:
                     extractions,
                     output_dir,
                     client=MagicMock(),
-                    model="m",
+                    endpoint=_ENDPOINT,
                     max_records=None,
-                    system_prompt="SP",
+                    question=_QUESTION,
                 )
             )
 
         assert len(verdicts) == 1
         assert verdicts[0].reason == "tei-parse-failure"
         assert verdicts[0].eligible is None
-        assert verdicts[0].seed is None
+        assert verdicts[0].probability is None
         # Malformed TEI on a paper we have a PDF for is an operator-visible bug.
         mock_classify.assert_not_called()
 
@@ -396,6 +305,7 @@ class TestAssessWorksCascade:
             work_id="W1",
             tei_path=tei_path,
             content_sha256="0" * 64,
+            pdf_sha256="0" * 64,
             extracted_at="2026-04-17T00:00:00.000000+00:00",
         )
         extractions = {extracted.work_id: extracted}
@@ -409,9 +319,9 @@ class TestAssessWorksCascade:
                     extractions,
                     output_dir,
                     client=MagicMock(),
-                    model="m",
+                    endpoint=_ENDPOINT,
                     max_records=None,
-                    system_prompt="SP",
+                    question=_QUESTION,
                 )
             )
 
@@ -420,6 +330,7 @@ class TestAssessWorksCascade:
         assert len(verdicts) == 1
         assert verdicts[0].reason == "tei-parse-failure"
         assert verdicts[0].eligible is None
+        assert verdicts[0].probability is None
         mock_classify.assert_not_called()
 
     def test_llm_parse_failure_recorded(self, tmp_path: Path) -> None:
@@ -435,6 +346,7 @@ class TestAssessWorksCascade:
             work_id="W1",
             tei_path=tei_path,
             content_sha256="0" * 64,
+            pdf_sha256="0" * 64,
             extracted_at="2026-04-17T00:00:00.000000+00:00",
         )
         extractions = {extracted.work_id: extracted}
@@ -449,16 +361,15 @@ class TestAssessWorksCascade:
                     extractions,
                     output_dir,
                     client=MagicMock(),
-                    model="m",
+                    endpoint=_ENDPOINT,
                     max_records=None,
-                    system_prompt="SP",
+                    question=_QUESTION,
                 )
             )
 
         assert len(verdicts) == 1
         assert verdicts[0].reason == "llm-parse-failure"
         assert verdicts[0].eligible is None
-        assert verdicts[0].seed is None
 
     def test_timeout_does_not_stop_loop(self, tmp_path: Path) -> None:
         """A timeout on one work yields a sentinel; subsequent works still run."""
@@ -479,6 +390,7 @@ class TestAssessWorksCascade:
                 work_id=w.id,
                 tei_path=tei_path,
                 content_sha256="0" * 64,
+                pdf_sha256="0" * 64,
                 extracted_at="2026-04-17T00:00:00.000000+00:00",
             )
 
@@ -486,24 +398,21 @@ class TestAssessWorksCascade:
             work_id: str,
             prompt: str,
             *,
-            model: str,
+            endpoint: LlmEndpoint,
             client: Any,
-            system_prompt: str,
-            num_ctx: int = 32768,
+            question: DecisionQuestion,
         ) -> EligibilityVerdict:
             if work_id == "W1":
                 return EligibilityVerdict(
                     work_id=work_id,
                     eligible=None,
                     reason="llm-timeout",
-                    seed=None,
                     raw_response=None,
                 )
             return EligibilityVerdict(
                 work_id=work_id,
+                probability=0.8,
                 eligible=True,
-                reason="ok",
-                seed=42,
             )
 
         with patch(
@@ -516,52 +425,17 @@ class TestAssessWorksCascade:
                     extractions,
                     output_dir,
                     client=MagicMock(),
-                    model="m",
+                    endpoint=_ENDPOINT,
                     max_records=None,
-                    system_prompt="SP",
+                    question=_QUESTION,
                 )
             )
 
         assert len(verdicts) == 2
         by_id = {v.work_id: v for v in verdicts}
         assert by_id["W1"].reason == "llm-timeout"
-        assert by_id["W2"].reason == "ok"
-
-    def test_seed_recorded_on_successful_verdict(self, tmp_path: Path) -> None:
-        output_dir = tmp_path / "ext_out"
-        work = _make_work("W1", abstract="Abstract text.")
-
-        tei_path = "tei/W1.tei.xml"
-        _write_tei(
-            output_dir / tei_path,
-            f'<div xmlns="{TEI_NS}"><head>H</head><p>body</p></div>',
-        )
-        extracted = ExtractedDocument(
-            work_id="W1",
-            tei_path=tei_path,
-            content_sha256="0" * 64,
-            extracted_at="2026-04-17T00:00:00.000000+00:00",
-        )
-        extractions = {extracted.work_id: extracted}
-
-        with patch(
-            "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
-            side_effect=_mock_classify(
-                {"W1": {"eligible": True, "reason": "yes", "seed": 99}}
-            ),
-        ):
-            verdicts = list(
-                assess_works(
-                    [work],
-                    extractions,
-                    output_dir,
-                    client=MagicMock(),
-                    model="m",
-                    max_records=None,
-                    system_prompt="SP",
-                )
-            )
-        assert verdicts[0].seed == 99
+        assert by_id["W2"].eligible is True
+        assert by_id["W2"].reason is None
 
 
 # --- EligibilityVerdict model ---
@@ -598,38 +472,50 @@ class TestEligibilityVerdict:
 # --- run() end-to-end ---
 
 
-_TEST_CRITERIA_SPEC = {
-    "id": "test-criteria",
-    "system_prompt": "You are a test classifier. Respond with JSON.",
-}
+_TEST_CRITERIA_SPEC: dict[str, Any] = {"id": "test-criteria", "decision": _DECISION_BLOCK}
+
+
+def _inputs(
+    tmp_path: Path,
+    work_ids: list[str],
+    *,
+    full_text: list[str] | None = None,
+) -> tuple[Path, Path]:
+    """Write a corpus of ``work_ids`` and stage 6 output for ``full_text``.
+
+    ``full_text`` defaults to every work. Returns the corpus dir and the
+    extractions path.
+    """
+    corpus = tmp_path / "corpus"
+    _write_corpus(corpus, [_make_work(w, abstract="abs") for w in work_ids])
+    extractions = tmp_path / "fulltext-extraction" / "extraction.jsonl"
+    extractions.parent.mkdir(parents=True, exist_ok=True)
+    _write_full_text_for(extractions, full_text if full_text is not None else work_ids, corpus)
+    return corpus, extractions
 
 
 def _make_run_args(
     tmp_path: Path,
     *,
-    catalogue: Path,
-    screening_verdicts: Path,
+    corpus_dir: Path,
     extractions: Path,
     dry_run: bool = False,
     skip_existing: bool = False,
     max_records: int | None = None,
-    run_id: str = "test-run-id",
-    screening_threshold: float = 50.0,
-    num_ctx: int = 32768,
+    run_id: str | None = "test-run-id",
     concurrency: int = 1,
 ) -> argparse.Namespace:
     return argparse.Namespace(
-        catalogue=catalogue,
-        screening_verdicts=screening_verdicts,
-        screening_threshold=screening_threshold,
+        corpus_dir=corpus_dir,
         extractions=extractions,
         extraction_output_dir=extractions.parent,
         data_dir=tmp_path,
         run_id=run_id,
         eligibility_criteria=_TEST_CRITERIA_SPEC,
         model="m",
-        base_url="http://x",
-        num_ctx=num_ctx,
+        base_url=_BASE,
+        api_key="k",
+        decisions_url=None,
         max_records=max_records,
         skip_existing=skip_existing,
         dry_run=dry_run,
@@ -638,88 +524,85 @@ def _make_run_args(
     )
 
 
+def _one_work_inputs(tmp_path: Path, **kwargs: Any) -> argparse.Namespace:
+    corpus, extractions = _inputs(tmp_path, ["W1"])
+    return _make_run_args(tmp_path, corpus_dir=corpus, extractions=extractions, **kwargs)
+
+
 def _resolved_out_dir(args: argparse.Namespace) -> Path:
     return Path(args.data_dir) / "fulltext-eligibility" / args.run_id
 
 
+def _run_mocked(
+    args: argparse.Namespace, results: dict[str, dict[str, Any] | str]
+) -> MagicMock:
+    """Run stage 7 with ``classify_eligibility`` mocked; return the mock."""
+    mock_classify = MagicMock(side_effect=_mock_classify(results))
+    with (
+        patch(
+            "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
+            mock_classify,
+        ),
+        patch("laglitsynth.fulltext_eligibility.eligibility.decisions_client"),
+    ):
+        from laglitsynth.fulltext_eligibility.eligibility import run
+
+        run(args)
+    return mock_classify
+
+
+def _meta(args: argparse.Namespace) -> dict[str, Any]:
+    meta: dict[str, Any] = json.loads(
+        (_resolved_out_dir(args) / "eligibility-meta.json").read_text()
+    )
+    return meta
+
+
+def _stale_meta(corpus_id: str, prompt_sha256: str) -> dict[str, Any]:
+    """A valid ``EligibilityMeta`` dict for the resume guards."""
+    from laglitsynth.fulltext_eligibility.models import EligibilityMeta
+
+    meta = {
+        "run": {
+            "tool": "laglitsynth.fulltext_eligibility.assess",
+            "run_at": "2026-01-01T00:00:00.000000+00:00",
+            "validation_skipped": 0,
+        },
+        "llm": {
+            "model": "m",
+            "base_url": _BASE,
+            "decisions_url": _BASE + "/decisions",
+            "reasoning_effort": None,
+            "prompt_sha256": prompt_sha256,
+        },
+        "corpus_id": corpus_id,
+        "input_extractions": "extraction.jsonl",
+        "input_count": 1,
+        "eligible_count": 0,
+        "excluded_count": 1,
+        "tei_parse_failure_count": 0,
+        "llm_parse_failure_count": 0,
+        "llm_timeout_count": 0,
+    }
+    # Fails loudly if the model changes under this fixture.
+    EligibilityMeta.model_validate(meta)
+    return meta
+
+
 class TestRun:
     def test_dry_run_writes_nothing(self, tmp_path: Path) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        extractions_path = tmp_path / "extraction.jsonl"
-        _write_works_jsonl(catalogue, [_make_work("W1", abstract="abs")])
-        _write_verdicts_jsonl(
-            verdicts_path,
-            [ScreeningVerdict(work_id="W1", relevance_score=80)],
-        )
-        _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
-
-        args = _make_run_args(
-            tmp_path,
-            catalogue=catalogue,
-            screening_verdicts=verdicts_path,
-            extractions=extractions_path,
-            dry_run=True,
-        )
-
-        with (
-            patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
-            patch(
-                "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
-                side_effect=_mock_classify(
-                    {"W1": {"eligible": True, "reason": "ok"}}
-                ),
-            ),
-            patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
-        ):
-            from laglitsynth.fulltext_eligibility.eligibility import run
-
-            run(args)
+        args = _one_work_inputs(tmp_path, dry_run=True)
+        _run_mocked(args, {"W1": {"eligible": True}})
 
         out_dir = _resolved_out_dir(args)
         assert not out_dir.exists() or not any(out_dir.iterdir())
 
     def test_writes_expected_files(self, tmp_path: Path) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        extractions_path = tmp_path / "extraction.jsonl"
-
-        works = [
-            _make_work("W1", abstract="about oceans"),
-            _make_work("W2", abstract="not relevant"),
-            _make_work("W3", abstract=None),
-        ]
-        _write_works_jsonl(catalogue, works)
-        _write_verdicts_jsonl(
-            verdicts_path,
-            [ScreeningVerdict(work_id=w.id, relevance_score=80) for w in works],
-        )
         # W1, W2 have full text; W3 has no extraction → not assessed, not counted.
-        _write_full_text_for(extractions_path, extractions_path.parent, ["W1", "W2"])
+        corpus, extractions = _inputs(tmp_path, ["W1", "W2", "W3"], full_text=["W1", "W2"])
+        args = _make_run_args(tmp_path, corpus_dir=corpus, extractions=extractions)
 
-        args = _make_run_args(
-            tmp_path,
-            catalogue=catalogue,
-            screening_verdicts=verdicts_path,
-            extractions=extractions_path,
-        )
-
-        classify_results: dict[str, dict[str, Any] | str] = {
-            "W1": {"eligible": True, "reason": "yes"},
-            "W2": {"eligible": False, "reason": "no"},
-        }
-
-        with (
-            patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
-            patch(
-                "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
-                side_effect=_mock_classify(classify_results),
-            ),
-            patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
-        ):
-            from laglitsynth.fulltext_eligibility.eligibility import run
-
-            run(args)
+        _run_mocked(args, {"W1": {"eligible": True}, "W2": {"eligible": False}})
 
         out_dir = _resolved_out_dir(args)
         assert (out_dir / "verdicts.jsonl").exists()
@@ -732,190 +615,139 @@ class TestRun:
             for l in (out_dir / "verdicts.jsonl").read_text().splitlines()
             if l.strip()
         ]
-        # W3 has no extraction: full-text-only means it is not assessed.
         assert len(verdict_lines) == 2
 
-        meta = json.loads((out_dir / "eligibility-meta.json").read_text())
+        meta = _meta(args)
         assert meta["input_count"] == 2
         assert meta["eligible_count"] == 1
         assert meta["excluded_count"] == 1
-        assert "no_source_count" not in meta
         assert meta["tei_parse_failure_count"] == 0
         assert meta["llm_parse_failure_count"] == 0
-        assert "by_source_basis" not in meta
-        assert meta["input_screening_verdicts"] == str(verdicts_path)
+        assert "input_catalogue" not in meta
+        assert "input_screening_verdicts" not in meta
+        assert meta["corpus_id"] == json.loads((corpus / "corpus-meta.json").read_text())[
+            "corpus_id"
+        ]
         assert meta["run"]["tool"] == "laglitsynth.fulltext_eligibility.assess"
-        assert meta["llm"]["temperature"] == 0.8
-        assert len(meta["llm"]["prompt_sha256"]) == 64
+        assert meta["llm"]["base_url"] == _BASE
+        assert meta["llm"]["decisions_url"] == _BASE + "/decisions"
+        assert meta["llm"]["reasoning_effort"] is None
+        assert "temperature" not in meta["llm"]
+        assert meta["llm_rejected_count"] == 0
+        assert meta["llm"]["prompt_sha256"] == criteria_sha256(_TEST_CRITERIA_SPEC)
+        assert meta["criterion"] == _QUESTION.render()
+
+        verdicts = [
+            EligibilityVerdict.model_validate_json(line) for line in verdict_lines
+        ]
+        assert {v.work_id: v.probability for v in verdicts} == {"W1": 0.9, "W2": 0.1}
+
+    def test_works_come_from_corpus(self, tmp_path: Path) -> None:
+        """Only corpus works are assessed, even when stage 6 holds others."""
+        corpus = tmp_path / "corpus"
+        _write_corpus(corpus, [_make_work("W1")])
+        extractions = tmp_path / "fulltext-extraction" / "extraction.jsonl"
+        extractions.parent.mkdir(parents=True)
+        _write_full_text_for(extractions, ["W1", "W9"], corpus)
+        args = _make_run_args(tmp_path, corpus_dir=corpus, extractions=extractions)
+
+        mock_classify = _run_mocked(args, {"W1": {"eligible": True}})
+
+        assert [c.args[0] for c in mock_classify.call_args_list] == ["W1"]
+        assert _meta(args)["input_count"] == 1
+
+    def test_extraction_meta_corpus_mismatch_exits(self, tmp_path: Path) -> None:
+        corpus = tmp_path / "corpus"
+        _write_corpus(corpus, [_make_work("W1")])
+        extractions = tmp_path / "fulltext-extraction" / "extraction.jsonl"
+        extractions.parent.mkdir(parents=True)
+        _write_full_text_for(extractions, ["W1"], corpus, corpus_id="another-corpus")
+        args = _make_run_args(tmp_path, corpus_dir=corpus, extractions=extractions)
+
+        with pytest.raises(SystemExit) as exc_info:
+            _run_mocked(args, {})
+        msg = str(exc_info.value)
+        assert "extraction-meta.json" in msg
+        assert "re-run fulltext-extraction" in msg
+        assert not _resolved_out_dir(args).exists()
+
+    def test_missing_extraction_meta_exits(self, tmp_path: Path) -> None:
+        args = _one_work_inputs(tmp_path)
+        (args.extractions.parent / "extraction-meta.json").unlink()
+
+        with pytest.raises(SystemExit, match="run fulltext-extraction first"):
+            _run_mocked(args, {})
+
+    def test_stale_pdf_sha256_extraction_ignored(self, tmp_path: Path) -> None:
+        """An extraction made from another PDF than the corpus copy is not used."""
+        corpus = tmp_path / "corpus"
+        _write_corpus(corpus, [_make_work("W1"), _make_work("W2")])
+        extractions = tmp_path / "fulltext-extraction" / "extraction.jsonl"
+        extractions.parent.mkdir(parents=True)
+        _write_full_text_for(
+            extractions, ["W1", "W2"], corpus, pdf_sha256={"W2": "e" * 64}
+        )
+        args = _make_run_args(tmp_path, corpus_dir=corpus, extractions=extractions)
+
+        mock_classify = _run_mocked(args, {"W1": {"eligible": True}})
+
+        assert [c.args[0] for c in mock_classify.call_args_list] == ["W1"]
+        assert _meta(args)["input_count"] == 1
 
     def test_skip_existing_refuses_when_prompt_sha256_differs(
         self, tmp_path: Path
     ) -> None:
         """--skip-existing must raise SystemExit when recorded prompt_sha256 differs."""
-        import json
-
-        catalogue = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        extractions_path = tmp_path / "extraction.jsonl"
-        _write_works_jsonl(catalogue, [_make_work("W1", abstract="first abstract")])
-        _write_verdicts_jsonl(
-            verdicts_path,
-            [ScreeningVerdict(work_id="W1", relevance_score=80)],
-        )
-        _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
-
-        run_id = "stale-run"
-        out_dir = tmp_path / "fulltext-eligibility" / run_id
+        args = _one_work_inputs(tmp_path, skip_existing=True, run_id="stale-run")
+        corpus_id = json.loads((args.corpus_dir / "corpus-meta.json").read_text())["corpus_id"]
+        out_dir = _resolved_out_dir(args)
         out_dir.mkdir(parents=True)
-
-        # Write a meta file with a stale/wrong prompt_sha256.
-        stale_meta = {
-            "run": {
-                "tool": "laglitsynth.fulltext_eligibility.assess",
-                "run_at": "2026-01-01T00:00:00.000000+00:00",
-                "validation_skipped": 0,
-            },
-            "llm": {
-                "model": "gemma3:4b",
-                "temperature": 0.8,
-                "prompt_sha256": "0" * 64,  # deliberately wrong hash
-            },
-            "input_catalogue": str(catalogue),
-            "input_screening_verdicts": str(verdicts_path),
-            "input_extractions": str(extractions_path),
-            "input_count": 1,
-            "eligible_count": 0,
-            "excluded_count": 1,
-            "tei_parse_failure_count": 0,
-            "llm_parse_failure_count": 0,
-            "llm_timeout_count": 0,
-        }
-        # Validate the dict is a real valid EligibilityMeta shape; if the model
-        # changes, this assertion fails loudly instead of silently.
-        from laglitsynth.fulltext_eligibility.models import EligibilityMeta
-
-        EligibilityMeta.model_validate(stale_meta)
-        (out_dir / "eligibility-meta.json").write_text(json.dumps(stale_meta))
-
-        args = _make_run_args(
-            tmp_path,
-            catalogue=catalogue,
-            screening_verdicts=verdicts_path,
-            extractions=extractions_path,
-            skip_existing=True,
-            run_id=run_id,
+        (out_dir / "eligibility-meta.json").write_text(
+            json.dumps(_stale_meta(corpus_id, "0" * 64))
         )
 
-        with (
-            patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
-            patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
-        ):
-            from laglitsynth.fulltext_eligibility.eligibility import run
+        with pytest.raises(SystemExit, match="prompt_sha256"):
+            _run_mocked(args, {})
 
-            with pytest.raises(SystemExit, match="prompt_sha256"):
-                run(args)
+    def test_skip_existing_refuses_when_corpus_id_differs(self, tmp_path: Path) -> None:
+        args = _one_work_inputs(tmp_path, skip_existing=True, run_id="stale-run")
+        out_dir = _resolved_out_dir(args)
+        out_dir.mkdir(parents=True)
+        (out_dir / "eligibility-meta.json").write_text(
+            json.dumps(_stale_meta("another-corpus", criteria_sha256(_TEST_CRITERIA_SPEC)))
+        )
 
-    def test_validation_skipped_counts_invalid_catalogue_lines(
+        with pytest.raises(SystemExit, match="another-corpus"):
+            _run_mocked(args, {})
+
+    def test_validation_skipped_counts_invalid_extraction_lines(
         self, tmp_path: Path
     ) -> None:
-        """meta.run.validation_skipped reflects malformed lines in catalogue and verdicts."""
-        # One valid work with a valid screening verdict; one malformed line in
-        # each of catalogue and verdicts.  Two skipped total.
-        catalogue = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        extractions_path = tmp_path / "extraction.jsonl"
-
-        work = _make_work("W1", abstract="about oceans")
-
-        with open(catalogue, "w") as f:
-            f.write(work.model_dump_json() + "\n")
+        """meta.run.validation_skipped reflects malformed lines in the extractions."""
+        args = _one_work_inputs(tmp_path, run_id="skipped-test-run")
+        with open(args.extractions, "a") as f:
             f.write('{"not_a_real_field": "x"}\n')
 
-        valid_sv = ScreeningVerdict(work_id="W1", relevance_score=80)
-        with open(verdicts_path, "w") as f:
-            f.write(valid_sv.model_dump_json() + "\n")
-            f.write('{"not_a_real_field": "y"}\n')
+        _run_mocked(args, {"W1": {"eligible": True}})
 
-        _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
-
-        args = _make_run_args(
-            tmp_path,
-            catalogue=catalogue,
-            screening_verdicts=verdicts_path,
-            extractions=extractions_path,
-            run_id="skipped-test-run",
-        )
-
-        with (
-            patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
-            patch(
-                "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
-                side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
-            ),
-            patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
-        ):
-            from laglitsynth.fulltext_eligibility.eligibility import run
-
-            run(args)
-
-        import json as _json
-
-        out_dir = _resolved_out_dir(args)
-        meta = _json.loads((out_dir / "eligibility-meta.json").read_text())
-        assert meta["run"]["validation_skipped"] == 2
+        assert _meta(args)["run"]["validation_skipped"] == 1
 
     def test_skip_existing_processes_only_delta(self, tmp_path: Path) -> None:
-        catalogue = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        extractions_path = tmp_path / "extraction.jsonl"
-        works = [
-            _make_work("W1", abstract="first abstract"),
-            _make_work("W2", abstract="second abstract"),
-        ]
-        _write_works_jsonl(catalogue, works)
-        _write_verdicts_jsonl(
-            verdicts_path,
-            [ScreeningVerdict(work_id=w.id, relevance_score=80) for w in works],
-        )
-        _write_full_text_for(extractions_path, extractions_path.parent, ["W1", "W2"])
-
-        run_id = "resume-run"
-        out_dir = tmp_path / "fulltext-eligibility" / run_id
-        out_dir.mkdir(parents=True)
-        # Prior verdict for W1 only.
-        prior = EligibilityVerdict(
-            work_id="W1",
-            eligible=True,
-            reason="prior",
-            seed=1,
-        )
-        (out_dir / "verdicts.jsonl").write_text(prior.model_dump_json() + "\n")
-
+        corpus, extractions = _inputs(tmp_path, ["W1", "W2"])
         args = _make_run_args(
             tmp_path,
-            catalogue=catalogue,
-            screening_verdicts=verdicts_path,
-            extractions=extractions_path,
+            corpus_dir=corpus,
+            extractions=extractions,
             skip_existing=True,
-            run_id=run_id,
+            run_id="resume-run",
         )
+        out_dir = _resolved_out_dir(args)
+        out_dir.mkdir(parents=True)
+        # Prior verdict for W1 only.
+        prior = EligibilityVerdict(work_id="W1", probability=0.9, eligible=True)
+        (out_dir / "verdicts.jsonl").write_text(prior.model_dump_json() + "\n")
 
-        classify_results: dict[str, dict[str, Any] | str] = {
-            "W2": {"eligible": False, "reason": "nope"},
-        }
-
-        mock_classify = MagicMock(side_effect=_mock_classify(classify_results))
-        with (
-            patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
-            patch(
-                "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
-                mock_classify,
-            ),
-            patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
-        ):
-            from laglitsynth.fulltext_eligibility.eligibility import run
-
-            run(args)
+        mock_classify = _run_mocked(args, {"W2": {"eligible": False}})
 
         # Only W2 was classified (W1 was skipped).
         assert mock_classify.call_count == 1
@@ -928,114 +760,53 @@ class TestRun:
         ]
         assert len(verdict_lines) == 2
 
-        meta = json.loads((out_dir / "eligibility-meta.json").read_text())
+        meta = _meta(args)
         assert meta["eligible_count"] == 1
         assert meta["excluded_count"] == 1
-        assert "no_source_count" not in meta
         assert meta["tei_parse_failure_count"] == 0
         assert meta["llm_parse_failure_count"] == 0
 
 
-# --- _active_works join ---
+class TestRunOnMockEndpoint:
+    """run() against a mocked decisions endpoint, without patching classify."""
 
+    def _run(
+        self, args: argparse.Namespace, handler: Callable[[httpx.Request], httpx.Response]
+    ) -> dict[str, Any]:
+        with patch(
+            "laglitsynth.fulltext_eligibility.eligibility.decisions_client",
+            return_value=_client(handler),
+        ):
+            from laglitsynth.fulltext_eligibility.eligibility import run
 
-class TestActiveWorksJoin:
-    """Unit tests for the _active_works inline-join helper."""
+            run(args)
+        return _meta(args)
 
-    def test_active_works_threshold(self, tmp_path: Path) -> None:
-        """Works with a score at or above the threshold pass; those below are filtered."""
-        works = [
-            _make_work("https://openalex.org/W1"),
-            _make_work("https://openalex.org/W2"),
-            _make_work("https://openalex.org/W3"),
-        ]
-        verdicts = [
-            ScreeningVerdict(work_id="https://openalex.org/W1", relevance_score=80),
-            ScreeningVerdict(work_id="https://openalex.org/W2", relevance_score=49),
-            ScreeningVerdict(work_id="https://openalex.org/W3", relevance_score=50),
-        ]
-        catalogue_path = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        _write_works_jsonl(catalogue_path, works)
-        _write_verdicts_jsonl(verdicts_path, verdicts)
+    def test_rejected_full_text_is_counted(self, tmp_path: Path) -> None:
+        args = _one_work_inputs(tmp_path)
+        meta = self._run(args, lambda r: httpx.Response(400, text="too long"))
+        assert meta["llm_rejected_count"] == 1
+        assert meta["eligible_count"] == 0
+        line = (_resolved_out_dir(args) / "verdicts.jsonl").read_text().splitlines()[0]
+        verdict = EligibilityVerdict.model_validate_json(line)
+        assert verdict.reason == "llm-rejected"
+        assert verdict.probability is None
 
-        result = list(_active_works(catalogue_path, verdicts_path, screening_threshold=50.0))
-        ids = {w.id for w in result}
-        assert ids == {
-            "https://openalex.org/W1",
-            "https://openalex.org/W3",
-        }
-        assert "https://openalex.org/W2" not in ids
+    def test_decided_verdict_carries_probability(self, tmp_path: Path) -> None:
+        args = _one_work_inputs(tmp_path)
+        meta = self._run(args, _answer(0.62))
+        assert meta["eligible_count"] == 1
+        line = (_resolved_out_dir(args) / "verdicts.jsonl").read_text().splitlines()[0]
+        verdict = EligibilityVerdict.model_validate_json(line)
+        assert verdict.probability == 0.62
+        assert verdict.eligible is True
 
-    def test_null_score_sentinels_ride_through(self, tmp_path: Path) -> None:
-        """Works with relevance_score=None (sentinel reasons) always pass, regardless of threshold."""
-        works = [
-            _make_work("https://openalex.org/W1"),
-            _make_work("https://openalex.org/W2"),
-            _make_work("https://openalex.org/W3"),
-            _make_work("https://openalex.org/W4"),
-            _make_work("https://openalex.org/W5"),
-        ]
-        verdicts = [
-            ScreeningVerdict(
-                work_id="https://openalex.org/W1",
-                relevance_score=None,
-                reason="no-abstract",
-            ),
-            ScreeningVerdict(
-                work_id="https://openalex.org/W2",
-                relevance_score=None,
-                reason="llm-parse-failure",
-            ),
-            ScreeningVerdict(
-                work_id="https://openalex.org/W3",
-                relevance_score=None,
-                reason="llm-timeout",
-            ),
-            ScreeningVerdict(
-                work_id="https://openalex.org/W4",
-                relevance_score=80,
-            ),
-            ScreeningVerdict(
-                work_id="https://openalex.org/W5",
-                relevance_score=10,
-            ),
-        ]
-        catalogue_path = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        _write_works_jsonl(catalogue_path, works)
-        _write_verdicts_jsonl(verdicts_path, verdicts)
-
-        result = list(_active_works(catalogue_path, verdicts_path, screening_threshold=50.0))
-        ids = {w.id for w in result}
-        # W1, W2, W3 have None score → always pass through.
-        # W4 has score 80 ≥ 50 → passes.
-        # W5 has score 10 < 50 → filtered out.
-        assert ids == {
-            "https://openalex.org/W1",
-            "https://openalex.org/W2",
-            "https://openalex.org/W3",
-            "https://openalex.org/W4",
-        }
-        assert "https://openalex.org/W5" not in ids
-
-    def test_works_without_verdicts_are_excluded(self, tmp_path: Path) -> None:
-        """Works present in the catalogue but absent from verdicts are excluded."""
-        works = [
-            _make_work("https://openalex.org/W1"),
-            _make_work("https://openalex.org/W2"),
-        ]
-        verdicts = [
-            ScreeningVerdict(work_id="https://openalex.org/W1", relevance_score=90),
-        ]
-        catalogue_path = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        _write_works_jsonl(catalogue_path, works)
-        _write_verdicts_jsonl(verdicts_path, verdicts)
-
-        result = list(_active_works(catalogue_path, verdicts_path, screening_threshold=50.0))
-        assert len(result) == 1
-        assert result[0].id == "https://openalex.org/W1"
+    def test_criteria_without_decision_block_exits(self, tmp_path: Path) -> None:
+        args = _one_work_inputs(tmp_path)
+        args.eligibility_criteria = {"id": "x", "system_prompt": "old shape"}
+        with pytest.raises(SystemExit, match="no 'decision' block"):
+            self._run(args, _answer(0.9))
+        assert not _resolved_out_dir(args).exists()
 
 
 # --- run() stderr output ---
@@ -1045,37 +816,10 @@ def test_run_dir_printed_to_stderr_at_end(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """run() prints 'Run dir: <output_dir>' to stderr at the end of a normal (non-dry) run."""
-    catalogue = tmp_path / "catalogue.jsonl"
-    verdicts_path = tmp_path / "verdicts.jsonl"
-    extractions_path = tmp_path / "extraction.jsonl"
-    works = [_make_work("W1", abstract="about oceans")]
-    _write_works_jsonl(catalogue, works)
-    _write_verdicts_jsonl(
-        verdicts_path,
-        [ScreeningVerdict(work_id="W1", relevance_score=80)],
-    )
-    _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
-
-    args = _make_run_args(
-        tmp_path,
-        catalogue=catalogue,
-        screening_verdicts=verdicts_path,
-        extractions=extractions_path,
-        run_id="test-stderr-run",
-    )
+    args = _one_work_inputs(tmp_path, run_id="test-stderr-run")
     expected_dir = tmp_path / "fulltext-eligibility" / "test-stderr-run"
 
-    with (
-        patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
-        patch(
-            "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
-            side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
-        ),
-        patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
-    ):
-        from laglitsynth.fulltext_eligibility.eligibility import run
-
-        run(args)
+    _run_mocked(args, {"W1": {"eligible": True}})
 
     err = capsys.readouterr().err
     assert f"Run dir: {expected_dir}" in err
@@ -1089,68 +833,42 @@ def test_run_dir_printed_to_stderr_at_end(
 
 def test_concurrency_default_is_one() -> None:
     """Stage 7 --concurrency defaults to 1."""
-    import argparse as _argparse
-
     from laglitsynth.fulltext_eligibility.eligibility import build_subparser
 
-    p = _argparse.ArgumentParser()
+    p = argparse.ArgumentParser()
     subs = p.add_subparsers()
     build_subparser(subs)
-    args = p.parse_args(
-        [
-            "fulltext-eligibility",
-            "--catalogue", "c.jsonl",
-            "--screening-verdicts", "v.jsonl",
-            "--extractions", "e.jsonl",
-        ]
-    )
+    args = p.parse_args(["fulltext-eligibility", "--extractions", "e.jsonl"])
     assert args.concurrency == 1
+
+
+def test_removed_screening_flags_are_rejected() -> None:
+    from laglitsynth.fulltext_eligibility.eligibility import build_subparser
+
+    p = argparse.ArgumentParser()
+    subs = p.add_subparsers()
+    build_subparser(subs)
+    for flag in ("--catalogue", "--screening-verdicts", "--screening-threshold"):
+        with pytest.raises(SystemExit):
+            p.parse_args(["fulltext-eligibility", flag, "x"])
 
 
 def test_concurrency_flag_threaded_to_assess_works(tmp_path: Path) -> None:
     """--concurrency N is forwarded to assess_works as concurrency=N."""
-    catalogue = tmp_path / "catalogue.jsonl"
-    verdicts_path = tmp_path / "verdicts.jsonl"
-    extractions_path = tmp_path / "extraction.jsonl"
-    works = [_make_work("W1", abstract="abs")]
-    _write_works_jsonl(catalogue, works)
-    _write_verdicts_jsonl(
-        verdicts_path, [ScreeningVerdict(work_id="W1", relevance_score=80)]
-    )
-    _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
-
-    args = _make_run_args(
-        tmp_path,
-        catalogue=catalogue,
-        screening_verdicts=verdicts_path,
-        extractions=extractions_path,
-        concurrency=3,
-    )
+    args = _one_work_inputs(tmp_path, concurrency=3)
 
     captured: dict[str, Any] = {}
-    original_assess = __import__(
-        "laglitsynth.fulltext_eligibility.eligibility", fromlist=["assess_works"]
-    ).assess_works
+    original_assess = assess_works
 
     def spy_assess(*a: Any, **kw: Any) -> Any:
         captured["concurrency"] = kw.get("concurrency")
         return original_assess(*a, **kw)
 
-    with (
-        patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
-        patch(
-            "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
-            side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
-        ),
-        patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
-        patch(
-            "laglitsynth.fulltext_eligibility.eligibility.assess_works",
-            side_effect=spy_assess,
-        ),
+    with patch(
+        "laglitsynth.fulltext_eligibility.eligibility.assess_works",
+        side_effect=spy_assess,
     ):
-        from laglitsynth.fulltext_eligibility.eligibility import run
-
-        run(args)
+        _run_mocked(args, {"W1": {"eligible": True}})
 
     assert captured["concurrency"] == 3
 
@@ -1159,36 +877,10 @@ def test_concurrency_one_uses_sequential_path(tmp_path: Path) -> None:
     """concurrency=1 does not create a ThreadPoolExecutor."""
     from concurrent.futures import ThreadPoolExecutor as TPE
 
-    catalogue = tmp_path / "catalogue.jsonl"
-    verdicts_path = tmp_path / "verdicts.jsonl"
-    extractions_path = tmp_path / "extraction.jsonl"
-    works = [_make_work("W1", abstract="abs")]
-    _write_works_jsonl(catalogue, works)
-    _write_verdicts_jsonl(
-        verdicts_path, [ScreeningVerdict(work_id="W1", relevance_score=80)]
-    )
-    _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
+    args = _one_work_inputs(tmp_path, concurrency=1)
 
-    args = _make_run_args(
-        tmp_path,
-        catalogue=catalogue,
-        screening_verdicts=verdicts_path,
-        extractions=extractions_path,
-        concurrency=1,
-    )
-
-    with (
-        patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
-        patch(
-            "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
-            side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
-        ),
-        patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
-        patch("laglitsynth.concurrency.ThreadPoolExecutor", wraps=TPE) as mock_tpe,
-    ):
-        from laglitsynth.fulltext_eligibility.eligibility import run
-
-        run(args)
+    with patch("laglitsynth.concurrency.ThreadPoolExecutor", wraps=TPE) as mock_tpe:
+        _run_mocked(args, {"W1": {"eligible": True}})
 
     mock_tpe.assert_not_called()
 
@@ -1197,107 +889,71 @@ def test_concurrency_one_uses_sequential_path(tmp_path: Path) -> None:
 
 
 class TestConventionalPaths:
-    def _layout(self, data_dir: Path, run_id: str = TEST_RUN_ID) -> None:
-        catalogue = layout.deduplicated_path(data_dir)
-        catalogue.parent.mkdir(parents=True, exist_ok=True)
-        _write_works_jsonl(catalogue, [_make_work("W1", abstract="about oceans")])
-        verdicts_path = layout.screening_verdicts_path(data_dir, run_id)
-        verdicts_path.parent.mkdir(parents=True, exist_ok=True)
-        _write_verdicts_jsonl(
-            verdicts_path, [ScreeningVerdict(work_id="W1", relevance_score=80)]
-        )
+    def _layout(self, data_dir: Path) -> None:
+        corpus = layout.corpus_dir(data_dir)
+        _write_corpus(corpus, [_make_work("W1", abstract="about oceans")])
         extractions = layout.extractions_path(data_dir)
         extractions.parent.mkdir(parents=True, exist_ok=True)
-        _write_full_text_for(extractions, extractions.parent, ["W1"])
+        _write_full_text_for(extractions, ["W1"], corpus)
 
     def _bare_args(self, data_dir: Path) -> argparse.Namespace:
         args = _make_run_args(
-            data_dir,
-            catalogue=Path("unused"),
-            screening_verdicts=Path("unused"),
-            extractions=Path("unused"),
+            data_dir, corpus_dir=Path("unused"), extractions=Path("unused")
         )
-        args.catalogue = None
-        args.screening_verdicts = None
+        args.corpus_dir = None
         args.extractions = None
         args.extraction_output_dir = None
         args.run_id = None
         return args
 
-    def _run(self, args: argparse.Namespace) -> None:
-        with (
-            patch("laglitsynth.fulltext_eligibility.eligibility.preflight"),
-            patch(
-                "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
-                side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
-            ),
-            patch("laglitsynth.fulltext_eligibility.eligibility.OpenAI"),
-        ):
-            from laglitsynth.fulltext_eligibility.eligibility import run
-
-            run(args)
-
     def test_omitted_flags_resolve_to_conventional_paths(self, tmp_path: Path) -> None:
         self._layout(tmp_path)
-        _write_manifest(tmp_path)
 
-        self._run(self._bare_args(tmp_path))
+        _run_mocked(self._bare_args(tmp_path), {"W1": {"eligible": True}})
 
-        out_dir = tmp_path / layout.ELIGIBILITY_SUBDIR / TEST_RUN_ID
+        out_dir = tmp_path / layout.ELIGIBILITY_SUBDIR / TEST_ANALYSIS_RUN_ID
         meta = json.loads((out_dir / "eligibility-meta.json").read_text())
-        assert meta["input_catalogue"] == str(layout.deduplicated_path(tmp_path))
-        assert meta["input_screening_verdicts"] == str(
-            layout.screening_verdicts_path(tmp_path, TEST_RUN_ID)
-        )
         assert meta["input_extractions"] == str(layout.extractions_path(tmp_path))
         assert meta["input_count"] == 1
 
-    def test_explicit_flags_win(self, tmp_path: Path) -> None:
+    def test_run_id_defaults_to_corpus_analysis_run_id(self, tmp_path: Path) -> None:
+        corpus = layout.corpus_dir(tmp_path)
+        _write_corpus(corpus, [_make_work("W1")], analysis_run_id="analysis-xyz")
+        extractions = layout.extractions_path(tmp_path)
+        extractions.parent.mkdir(parents=True, exist_ok=True)
+        _write_full_text_for(extractions, ["W1"], corpus)
+
+        _run_mocked(self._bare_args(tmp_path), {"W1": {"eligible": True}})
+
+        assert (tmp_path / layout.ELIGIBILITY_SUBDIR / "analysis-xyz").is_dir()
+        assert sorted(p.name for p in (tmp_path / layout.ELIGIBILITY_SUBDIR).iterdir()) == [
+            "analysis-xyz"
+        ]
+
+    def test_explicit_run_id_wins(self, tmp_path: Path) -> None:
         self._layout(tmp_path)
-        _write_manifest(tmp_path, run_id="from-manifest")
-
-        explicit_catalogue = tmp_path / "explicit-catalogue.jsonl"
-        _write_works_jsonl(explicit_catalogue, [_make_work("W1", abstract="abs")])
-        explicit_verdicts = tmp_path / "explicit-verdicts.jsonl"
-        _write_verdicts_jsonl(
-            explicit_verdicts, [ScreeningVerdict(work_id="W1", relevance_score=80)]
-        )
         args = self._bare_args(tmp_path)
-        args.catalogue = explicit_catalogue
-        args.screening_verdicts = explicit_verdicts
         args.run_id = "explicit-run-id"
-        self._run(args)
 
-        out_dir = tmp_path / layout.ELIGIBILITY_SUBDIR / "explicit-run-id"
-        assert not (tmp_path / layout.ELIGIBILITY_SUBDIR / "from-manifest").exists()
-        meta = json.loads((out_dir / "eligibility-meta.json").read_text())
-        assert meta["input_catalogue"] == str(explicit_catalogue)
-        assert meta["input_screening_verdicts"] == str(explicit_verdicts)
+        _run_mocked(args, {"W1": {"eligible": True}})
+
+        assert (tmp_path / layout.ELIGIBILITY_SUBDIR / "explicit-run-id").is_dir()
+        assert not (tmp_path / layout.ELIGIBILITY_SUBDIR / TEST_ANALYSIS_RUN_ID).exists()
 
     def test_missing_extractions_names_upstream_and_flag(self, tmp_path: Path) -> None:
         self._layout(tmp_path)
         layout.extractions_path(tmp_path).unlink()
-        _write_manifest(tmp_path)
 
         with pytest.raises(SystemExit) as exc_info:
-            self._run(self._bare_args(tmp_path))
+            _run_mocked(self._bare_args(tmp_path), {})
         msg = str(exc_info.value)
         assert "run fulltext-extraction first" in msg
         assert "--extractions" in msg
 
-    def test_missing_catalogue_names_upstream_and_flag(self, tmp_path: Path) -> None:
-        _write_manifest(tmp_path)
-
+    def test_missing_corpus_names_upstream_and_flag(self, tmp_path: Path) -> None:
         with pytest.raises(SystemExit) as exc_info:
-            self._run(self._bare_args(tmp_path))
+            _run_mocked(self._bare_args(tmp_path), {})
         msg = str(exc_info.value)
-        assert "run catalogue-dedup first" in msg
-        assert "--catalogue" in msg
-
-    def test_no_manifest_and_no_run_id_exits(self, tmp_path: Path) -> None:
-        self._layout(tmp_path)
-
-        with pytest.raises(SystemExit) as exc_info:
-            self._run(self._bare_args(tmp_path))
-        assert "--run-id" in str(exc_info.value)
+        assert "run corpus-assemble first" in msg
+        assert "--corpus-dir" in msg
         assert not (tmp_path / layout.ELIGIBILITY_SUBDIR).exists()

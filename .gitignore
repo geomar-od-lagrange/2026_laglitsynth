@@ -1,13 +1,11 @@
-# Bench-mode TEI files live at the repo root (rsync'd in). Copyright.
+# GROBID TEI output carries copyrighted full text; never commit it.
 *.tei.xml
 
-# sbatch --output / --error files (default to submission cwd).
+# Job logs left over from the retired NESH runner.
 nesh-pipeline-*.out
 nesh-pipeline-*.err
-bench-*.out
-bench-*.err
 
-# Per-run service logs (Ollama / GROBID / bench TSVs).
+# Per-run service logs.
 logs/
 .claude/
 .env

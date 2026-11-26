@@ -1,7 +1,8 @@
 # Lagrangian Oceanography Literature Synthesis
 
-Tools for conducting structured literature reviews — from keyword search to
-citation analysis to structured synthesis.
+Tools for conducting structured literature reviews — from keyword search
+and PDF acquisition to a self-contained corpus, and from the corpus to
+structured extraction per paper.
 
 ## Setup
 
@@ -9,7 +10,7 @@ Requires [pixi](https://pixi.sh) for environment management.
 
 ```bash
 pixi install
-cp .env.example .env  # then fill in OPENALEX_API_KEY and UNPAYWALL_EMAIL
+cp .env.example .env  # then fill in OPENALEX_API_KEY, UNPAYWALL_EMAIL and LLM_API_KEY
 ```
 
 `data/` is a git submodule holding the PDF store (`data/pdfs/`, in Git
@@ -36,7 +37,8 @@ rsync -a --exclude pdfs/ data.local/ data/
 ```
 
 Stages 1 and 5 read `OPENALEX_API_KEY` and `UNPAYWALL_EMAIL` from `.env`
-automatically when their flags are absent. See
+automatically when their flags are absent; the LLM stages read
+`LLM_API_KEY` from the environment or `.env`. See
 [`docs/external-services.md`](docs/external-services.md) for the full
 credential setup.
 
@@ -48,10 +50,12 @@ All tools are accessed via the `laglitsynth` CLI:
 laglitsynth --help
 ```
 
-Stages 1, 2, 3, 5, 6, 7, 8 are implemented; stage 4 was deleted in the
-verdicts-only cutover. Stages 9–12 are specified in
-[`docs/pipeline.md`](docs/pipeline.md) but not yet implemented. Each
-implemented stage has its own doc under [`docs/`](docs/).
+The pipeline has two halves that meet at the corpus
+([`docs/pipeline.md`](docs/pipeline.md)): stages 1, 2, 3 and 5 find the
+literature and acquire PDFs, `corpus-assemble` writes the self-contained
+`data/corpus/`, and stages 6, 7 and 8 analyse the papers in it. Stage
+numbers 4 and 9 are unused. A final synthesis step is planned but not
+built. Each stage has its own doc under [`docs/`](docs/).
 
 - Stage 1 — `laglitsynth catalogue-fetch` — search OpenAlex by keyword and
   store validated bibliographic records as JSONL. See
@@ -60,193 +64,140 @@ implemented stage has its own doc under [`docs/`](docs/).
   OpenAlex ID, DOI, and title+author+year; accepts globs and multiple
   inputs. See [`docs/catalogue-dedup.md`](docs/catalogue-dedup.md).
 - Stage 3 — `laglitsynth screening-abstracts` — score every abstract for
-  relevance with a local Ollama-hosted LLM or, with `--backend decisions`,
-  a hosted decisions model via OpenRouter, emitting a `ScreeningVerdict`
-  sidecar. See [`docs/screening-abstracts.md`](docs/screening-abstracts.md).
-- Stage 5 — `laglitsynth fulltext-retrieval` — join the deduplicated
-  catalogue against the screening verdicts at a threshold, then fill a
-  persistent, work-keyed PDF store under `data/pdfs/` from OA URLs and
+  relevance with a decisions model on the review's OpenAI-compatible
+  endpoint, emitting a `ScreeningVerdict` sidecar. See [`docs/screening-abstracts.md`](docs/screening-abstracts.md).
+- Stage 5 — `laglitsynth fulltext-retrieval` — for every work in the
+  deduplicated catalogue, fill a persistent, work-keyed PDF store under `data/pdfs/` from OA URLs and
   Unpaywall, with `fulltext-retrieval-export` /
   `fulltext-retrieval-import` to diversify the still-missing margin through
   collaborators' institutional access. See
   [`docs/fulltext-retrieval.md`](docs/fulltext-retrieval.md).
-- Stage 6 — `laglitsynth fulltext-extraction` — parse retrieved PDFs into
-  structured section text via GROBID. See
+- `laglitsynth corpus-assemble` — apply the screening threshold and copy
+  the selected works, their verdicts and their PDFs into `data/corpus/`,
+  the only input of stages 6–8. See [`docs/corpus.md`](docs/corpus.md).
+- Stage 6 — `laglitsynth fulltext-extraction` — parse the corpus PDFs
+  into structured section text via GROBID. See
   [`docs/fulltext-extraction.md`](docs/fulltext-extraction.md).
-- Stage 7 — `laglitsynth fulltext-eligibility` — join the catalogue against
-  the screening verdicts, then assess full-text eligibility with a local
-  LLM, emitting an `EligibilityVerdict` sidecar. See
-  [`docs/eligibility.md`](docs/eligibility.md).
-- Stage 8 — `laglitsynth extraction-codebook` — join the catalogue against
-  the eligibility verdicts, then extract structured codebook records
-  (numerical choices, reproducibility indicators, sub-discipline tags) with
-  a local LLM. See
+- Stage 7 — `laglitsynth fulltext-eligibility` — assess each corpus work
+  on its full text with a decisions model, emitting an
+  `EligibilityVerdict` sidecar. See [`docs/eligibility.md`](docs/eligibility.md).
+- Stage 8 — `laglitsynth extraction-codebook` — for the eligible corpus
+  works, extract structured codebook records (numerical choices,
+  reproducibility indicators, stated rationale, sub-discipline tags) with
+  an LLM; `extraction-codebook-export` writes a review workbook. See
   [`docs/extraction-codebook.md`](docs/extraction-codebook.md).
-- `laglitsynth bake-model` — bake an Ollama model tag with a hard-coded
-  `num_ctx` via Modelfile; more reliable than `extra_body` at request time.
-  See [`docs/bake-model.md`](docs/bake-model.md).
 
 ## Running the pipeline
 
 [`scripts/run-pipeline.sh [config.yaml]`](scripts/run-pipeline.sh) runs
 stages 1..8 end-to-end, writing outputs under `data/run/`. The runner
-sources `.env` and passes `--api-key` / `--email` as flags to the tools
-— no env-var leakage into the Python side.
+exports each `.env` variable that the environment leaves unset or empty
+(an exported value wins over `.env`) and passes the OpenAlex `--api-key`
+and `--email` as flags to stages 1 and 5. The LLM key (`LLM_API_KEY`) is never passed as a flag:
+the LLM stages read it from the environment, so it stays out of the
+process list.
 
 The optional positional is a **per-review config** — one YAML that pins
-the query, year window, record cap, criteria/codebook paths, and the
-per-stage models/thresholds/context/concurrency. The runner validates it
-via `laglitsynth review-config` and applies **env > config > default**
-precedence to every knob. With no argument it uses the committed default
+the query, year window, record cap, criteria/codebook paths, the
+screening threshold, the LLM endpoint URLs, and the per-stage
+models/concurrency. The runner
+validates it via `laglitsynth review-config` and applies **env > config >
+default** precedence to every knob. With no argument it uses the committed
+default
 [`examples/reviews/lagrangian-oceanography.yaml`](examples/reviews/lagrangian-oceanography.yaml),
-which reproduces the historical smoke run, so the no-arg invocation
-behaves exactly as before. The historical `QUERY` and `N` env overrides
+the smoke run. The screening threshold has no default: set
+`screening_threshold` in the config or export `SCREENING_THRESHOLD`, or
+the runner exits once the run reaches stage 5, after which it runs
+`corpus-assemble` with it; a run with `STOP_AFTER_STAGE` below 5 needs none. The historical `QUERY` and `N` env overrides
 still work and still win over the config. See
 [`docs/configs.md`](docs/configs.md#per-review-config-the-runners-config)
 for the config shape and the full `CFG_*` knob list.
 
-Defaults that apply to both local and NESH runs:
+Defaults:
 
-- `N=5` (local) or `N=10` (NESH) — max records pulled from OpenAlex.
+- `N=5` — max records pulled from OpenAlex.
   The runner passes `--max-records "$N"` to stage 1 (catalogue-fetch)
   only; downstream stages consume the already-capped catalogue, so the
   cap propagates through the data rather than as a re-passed flag.
-  Override via `N=...` (env, or `sbatch --export=` on NESH), or pin it
-  as `max_records` in a review config.
+  Override via the `N` env var, or pin it as `max_records` in a review
+  config.
 - `STOP_AFTER_STAGE=8` — full pipeline. Set to a smaller integer to
   cut runs short while iterating on upstream stages.
-- Models: `gemma3:4b` for stages 3 and 7, `llama3.1:8b` for stage 8.
-  Override via `SCREENING_MODEL`, `ELIGIBILITY_MODEL`, `EXTRACTION_MODEL`.
+- LLM endpoint and models have no default. `LLM_BASE_URL` (or
+  `llm_base_url`), `LLM_API_KEY` and `SCREENING_MODEL` are required from
+  stage 3 on, `ELIGIBILITY_MODEL` from stage 7 and `EXTRACTION_MODEL` from
+  stage 8; the runner exits naming whichever is missing.
+  `LLM_DECISIONS_URL` (or `llm_decisions_url`) overrides the
+  decisions URL of stages 3 and 7. `EXTRACTION_REASONING_EFFORT` (or
+  `models.extraction_reasoning_effort`) sets stage 8's reasoning effort;
+  unset, none is sent.
+- `RUN_ID` names the screening run (stage 3, `corpus-assemble`, the
+  export) and defaults to the one in the data dir's `manifest.json`.
+  `ANALYSIS_RUN_ID` names the stage 7 and 8 run and defaults to the
+  corpus's `analysis_run_id`, which changes whenever the corpus does.
 
-### Locally
+### Starting a run
 
-Start Ollama and GROBID yourself first (see [Ollama](#ollama-for-llm-stages)
-and [GROBID](#grobid-for-full-text-extraction) below), then invoke the
-runner:
+Start GROBID yourself first (see [GROBID](#grobid-for-full-text-extraction)
+below), set the LLM endpoint (see [LLM endpoint](#llm-endpoint)), then
+invoke the runner:
 
 ```bash
-ollama serve                                                # stages 3, 7, 8
-docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0         # stage 6
+docker run --rm -p 8070:8070 grobid/grobid:0.9.0-crf        # stage 6
 
-scripts/run-pipeline.sh                                     # default review config, N=5
-scripts/run-pipeline.sh examples/reviews/my-review.yaml     # a pinned review config
-QUERY="particle dispersion" N=200 scripts/run-pipeline.sh   # env overrides win over the config
-STOP_AFTER_STAGE=3 scripts/run-pipeline.sh                  # stages 1..3 only
+SCREENING_THRESHOLD=50 scripts/run-pipeline.sh                                 # default review config, N=5
+scripts/run-pipeline.sh examples/reviews/my-review.yaml                        # a review config that sets screening_threshold
+SCREENING_THRESHOLD=50 QUERY="particle dispersion" N=200 scripts/run-pipeline.sh  # env overrides win over the config
+STOP_AFTER_STAGE=3 scripts/run-pipeline.sh                                     # stages 1..3 only, no threshold needed
 ```
 
-### On NESH (GPU compute node)
+### Production runs
 
-[`scripts/nesh-pipeline.sbatch`](scripts/nesh-pipeline.sbatch) wraps the
-runner with the cluster's plumbing: it pulls (once) and starts a
-Singularity GROBID container, launches a bundled Ollama, pulls the LLM
-models via the NESH proxy, then invokes the runner. You don't need to
-start anything yourself.
-
-```bash
-mkdir -p logs
-sbatch scripts/nesh-pipeline.sbatch                                                     # smoke, N=10
-sbatch --export=ALL,QUERY="particle dispersion",N=200 scripts/nesh-pipeline.sbatch
-sbatch --export=ALL,STOP_AFTER_STAGE=3,N=500 scripts/nesh-pipeline.sbatch
-sbatch --export=ALL,EXTRACTION_NUM_CTX=16384 scripts/nesh-pipeline.sbatch                # smaller stage-8 KV cache
-```
-
-Each LLM stage gets its own Ollama tag (`laglit-screen`,
-`laglit-eligibility`, `laglit-extract`) synthesised on the compute
-node from the upstream model with `PARAMETER num_ctx` baked in via a
-Modelfile heredoc — the per-request `num_ctx` hint via the OpenAI
-extra_body does not reliably size the runner. Override the model and
-its context window per stage with these env vars:
-
-| Stage | Model | num_ctx |
-|---|---|---|
-| 3 (screening-abstracts) | `SCREENING_MODEL` (default `gemma3:4b`) | `SCREENING_NUM_CTX` (default `8192`) |
-| 7 (fulltext-eligibility) | `ELIGIBILITY_MODEL` (default `gemma3:4b`) | `ELIGIBILITY_NUM_CTX` (default `32768`) |
-| 8 (extraction-codebook) | `EXTRACTION_MODEL` (default `llama3.1:8b`) | `EXTRACTION_NUM_CTX` (default `32768`) |
-
-A num_ctx that doesn't fit the KV cache alongside the model weights
-forces Ollama to spill layers to CPU; check
-`logs/ollama-*.log` for `offloaded N/N layers to GPU` after a run.
-
-Per-user prerequisites:
-
-- Repo cloned under `$WORK/2026_laglitsynth` (override with `REPO_DIR`).
-- `$REPO_DIR/.env` populated with `OPENALEX_API_KEY` and `UNPAYWALL_EMAIL`.
-- Bundled Ollama install at `$HOME/.local/share/ollama-install` — the
-  full tarball, not just the binary. See
-  [docs/explorations/nesh-ollama.md](docs/explorations/nesh-ollama.md).
-
-The job header requests `--partition=gpu --constraint=V100
---gpus-per-node=1 --cpus-per-task=4 --mem=32G --time=02:00:00`. Edit
-the sbatch script for H100 nodes; override the time budget on the
-command line with `sbatch --time=...` (see below).
-
-#### Production-run cheatsheet
-
-The sbatch header's 2 h is smoke-sized. For a real corpus run,
-override `N` and `--time`. `OLLAMA_NUM_PARALLEL=2` (and the derived
-`LLM_CONCURRENCY=4`) is the documented production default — see
-[docs/llm-concurrency.md](docs/llm-concurrency.md) for the
-benchmarking that landed there. Leave as-is unless your model's
-specific benchmark says otherwise.
+For a real corpus run, raise `N` (or set `max_records` in the review
+config). `LLM_CONCURRENCY` (default `1`) sets the in-flight requests of
+the LLM stages (see
+[LLM concurrency](docs/interfaces.md#llm-concurrency)) and
+`GROBID_CONCURRENCY` (default `3`) those of stage 6 (see
+[GROBID concurrency](docs/interfaces.md#grobid-concurrency)).
 
 ```bash
-sbatch \
-    --time=12:00:00 \
-    --export=ALL,QUERY="Lagrangian particle tracking",N=500 \
-    scripts/nesh-pipeline.sbatch
+SCREENING_THRESHOLD=50 QUERY="Lagrangian particle tracking" N=500 \
+    scripts/run-pipeline.sh
 ```
 
 Notes:
 
-- Stage 8 (extraction-codebook) is the throughput floor; budget
-  `--time` against it. Stages 7 and 8 both honour `--concurrency`
-  (dispatching through `laglitsynth.concurrency.map_concurrent`); the
-  runner forwards `LLM_CONCURRENCY` as that flag. Stage 8 defaults to
-  `--concurrency 1` because its TEI prompt is prefill-bound and Ollama
-  serialises prefill across requests.
-- Each stage's output is truncated at run start, so a wall-clock kill
-  mid-stage means re-running that stage from scratch on the next
-  submission. If you expect a tight budget, prefer running with
-  `STOP_AFTER_STAGE=6` first to land catalogue + retrieval +
-  extraction (which are cheap to redo with `--skip-existing`), then
-  submit a second job with stages 7..8.
+- Stage 8 (extraction-codebook) is the throughput floor. Stages 7 and 8
+  both honour `--concurrency` (dispatching through
+  `laglitsynth.concurrency.map_concurrent`); the runner forwards
+  `LLM_CONCURRENCY` as that flag to stages 3 and 7, and
+  `EXTRACTION_CONCURRENCY` (default `1`) to stage 8.
+- The runner starts each LLM stage's output afresh (stage 6 runs with
+  `--skip-existing`), so an interrupted run means re-running the LLM
+  stage it stopped in. To split a long run, use `STOP_AFTER_STAGE=6`
+  first to land catalogue, retrieval, corpus and extraction, then run
+  stages 7 and 8 by hand, where `--skip-existing` resumes an interrupted
+  run.
 
-### Reviewer exports
+### Reviewer export
 
-The pipeline writes JSONL only — no human-readable spreadsheets are
-produced automatically. To spot-check the LLM stages, run the matching
-`*-export` subcommand after the pipeline lands its output. The exports
-are XLSX-only: an Index sheet for navigation plus one tab per work as
-the working surface, with `--n-subset` / `--subset-seed` for a
+The pipeline writes JSONL only. To spot-check stage 8, run
+`extraction-codebook-export` after the pipeline lands its output. It
+writes an XLSX workbook: an Index sheet for navigation plus one tab per
+work as the working surface, with `--n-subset` / `--subset-seed` for a
 reproducible random sample.
 
 ```bash
-# Stage 3 — abstract screening verdicts
-laglitsynth screening-abstracts-export \
-    --verdicts data/run/screening-abstracts/<run-id>/verdicts.jsonl \
-    --catalogue data/run/catalogue-dedup/deduplicated.jsonl
-
-# Stage 7 — full-text eligibility verdicts
-laglitsynth fulltext-eligibility-export \
-    --verdicts data/run/fulltext-eligibility/<run-id>/verdicts.jsonl \
-    --catalogue data/run/catalogue-dedup/deduplicated.jsonl
-
 # Stage 8 — codebook extraction records (needs the run's --codebook)
 laglitsynth extraction-codebook-export \
     --records data/run/extraction-codebook/<run-id>/records.jsonl \
-    --catalogue data/run/catalogue-dedup/deduplicated.jsonl
-
-# Reproducible random subset of 30 works (any of the above)
-laglitsynth screening-abstracts-export \
-    --verdicts data/run/screening-abstracts/<run-id>/verdicts.jsonl \
-    --catalogue data/run/catalogue-dedup/deduplicated.jsonl \
+    --codebook examples/codebooks/lagrangian-oceanography.yaml \
+    --catalogue data/run/corpus/works.jsonl \
     --n-subset 30 --subset-seed 1
 ```
 
-See [docs/screening-abstracts.md](docs/screening-abstracts.md),
-[docs/eligibility.md](docs/eligibility.md), and
-[docs/extraction-codebook.md](docs/extraction-codebook.md) for the full
-export schemas.
+See [docs/extraction-codebook.md](docs/extraction-codebook.md) for the
+export schema.
 
 ## OpenAlex API key
 
@@ -266,47 +217,32 @@ email. Set it in `.env`:
 UNPAYWALL_EMAIL=you@example.com
 ```
 
-## Ollama (for LLM stages)
+## LLM endpoint
 
 Stages 3 ([`screening-abstracts`](docs/screening-abstracts.md)), 7
 ([`fulltext-eligibility`](docs/eligibility.md)), and 8
-([`extraction-codebook`](docs/extraction-codebook.md)) all call a local
-Ollama instance via the OpenAI-compatible API.
+([`extraction-codebook`](docs/extraction-codebook.md)) call one
+OpenAI-compatible endpoint per review: `--base-url` (including `/v1`),
+`--model`, and the key from `LLM_API_KEY` in the environment or `.env`:
 
-Install Ollama if you haven't already:
-
-```bash
-# Linux
-curl -fsSL https://ollama.com/install.sh | sh
-# macOS
-brew install --cask ollama
-# or download from https://ollama.com/download
+```
+LLM_API_KEY=your-key-here
 ```
 
-```bash
-OLLAMA_NUM_PARALLEL=2 ollama serve  # set before serve; export after start is silently ignored
-ollama pull gemma3:4b
-```
-
-`gemma3:4b` (the CLI default for stages 3 and 7) handles those stages
-comfortably but returns empty JSON on stage 8's 30-field structured
-JSON payload. `llama3.1:8b` is the stage 8 default; `qwen2.5:14b` also
-works. Pull the models you need:
-
-```bash
-ollama pull llama3.1:8b        # stage 8 default; or qwen2.5:14b, etc.
-```
-
-See [`docs/external-services.md`](docs/external-services.md) for the full
-setup runbook.
+Stages 3 and 7 ask decisions at `<base-url>/decisions` unless
+`--decisions-url` names another URL; stage 8 uses chat completions. See
+[`docs/external-services.md`](docs/external-services.md#llm-endpoint).
 
 ## GROBID (for full-text extraction)
 
 The extraction stage requires a running GROBID server. One-shot via Docker:
 
 ```bash
-docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0  # Apple Silicon: image is amd64-only; install Rosetta first via softwareupdate --install-rosetta
+docker run --rm -p 8070:8070 grobid/grobid:0.9.0-crf
 ```
+
+The image is multi-arch (amd64 and arm64), so it runs natively on Apple
+Silicon.
 
 See [`docs/fulltext-extraction.md`](docs/fulltext-extraction.md) for details.
 
@@ -317,6 +253,10 @@ tuning and macOS workarounds.
 
 - [`docs/`](docs/) — component documentation
 - [`docs/pipeline.md`](docs/pipeline.md) — end-to-end pipeline overview
+- [`docs/corpus.md`](docs/corpus.md) — the corpus where the two halves
+  meet: contents, assembly, identity, the analysis run-id
+- [`docs/interfaces.md`](docs/interfaces.md) — artifacts, CLI contract,
+  models
 - [`docs/run-manifest.md`](docs/run-manifest.md) — `data/manifest.json`, the
   run-id, and the fixed `data/` layout every stage reads from
 - [`docs/pdf-store.md`](docs/pdf-store.md) — the PDF store in the `data/`

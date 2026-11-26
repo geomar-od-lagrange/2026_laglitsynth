@@ -6,12 +6,39 @@ from pathlib import Path
 
 from laglitsynth.fulltext_retrieval.models import PdfProvenanceRecord, PdfSource
 from laglitsynth.fulltext_retrieval.store import (
+    file_has_pdf_magic,
+    has_pdf_magic,
     load_provenance,
     sha256_of,
     store_pdf_path,
     upsert_provenance,
     write_provenance,
 )
+
+
+class TestPdfMagic:
+    def test_pdf_header(self) -> None:
+        assert has_pdf_magic(b"%PDF-1.4 content") is True
+
+    def test_rejects_html_body(self) -> None:
+        # An HTML error page served as application/pdf must be rejected.
+        assert has_pdf_magic(b"<html><body>error page</body></html>") is False
+
+    def test_invalid(self) -> None:
+        assert has_pdf_magic(b"not pdf at all") is False
+
+    def test_rejects_lfs_pointer_file(self, tmp_path: Path) -> None:
+        path = tmp_path / "W1.pdf"
+        path.write_text(
+            "version https://git-lfs.github.com/spec/v1\n"
+            "oid sha256:abc\nsize 123\n"
+        )
+        assert file_has_pdf_magic(path) is False
+
+    def test_accepts_pdf_file(self, tmp_path: Path) -> None:
+        path = tmp_path / "W1.pdf"
+        path.write_bytes(b"%PDF-1.7\n")
+        assert file_has_pdf_magic(path) is True
 
 
 def _record(
@@ -68,11 +95,11 @@ class TestUpsertLastWriteWins:
         upsert_provenance(
             tmp_path,
             records,
-            _record(source=PdfSource.zotero_import),
+            _record(source=PdfSource.zotero_desktop),
         )
         loaded = load_provenance(tmp_path)
         assert len(loaded) == 1
-        assert loaded["https://openalex.org/W1"].source == PdfSource.zotero_import
+        assert loaded["https://openalex.org/W1"].source == PdfSource.zotero_desktop
 
 
 class TestMissingRecordRoundTrips:
