@@ -8,7 +8,7 @@ TOOL_NAME = "laglitsynth.fulltext_retrieval.retrieve"
 
 
 class PdfSource(str, Enum):
-    oa = "oa"  # OA URL on the Work record
+    oa = "oa"  # OA URL: OpenAlex location, Semantic Scholar or arXiv
     unpaywall = "unpaywall"  # Unpaywall best_oa_location
     zotero_import = "zotero-import"  # ingested from a Zotero-exported folder
     manual = "manual"  # ingested from a plain folder drop

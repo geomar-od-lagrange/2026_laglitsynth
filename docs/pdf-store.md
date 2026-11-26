@@ -1,6 +1,6 @@
 # PDF store
 
-[data/pdfs/](../data/pdfs/) holds one PDF per catalogue work for 5,936 of
+`data/pdfs/` holds one PDF per catalogue work for 5,936 of
 the 9,149 works in the deduplicated catalogue (65 %), 28.4 GB in total.
 It is the input to corpus assembly in
 [pipeline-restructure.md](../plans/pipeline-restructure.md).
@@ -18,8 +18,9 @@ obtained through GEOMAR and Kiel University subscriptions. Setup is in the
   [fulltext-retrieval.md](fulltext-retrieval.md)). `source` names the
   route. Works the pipeline tried without success have a `missing` record
   (184); the remaining works without a PDF have no record.
-- `pdfs/acquisition-routes.csv`: source URL, original file name and
-  sha256 per PDF.
+- `pdfs/acquisition-routes.csv`: source and sha256 per PDF, with the
+  source URL and original file name where they were recorded. It was
+  written when the store was assembled; the CLI does not maintain it.
 
 ## Where the PDFs come from
 
@@ -28,32 +29,37 @@ obtained through GEOMAR and Kiel University subscriptions. Setup is in the
 | `oa` | 3,765 | Open-access URLs: OpenAlex locations, Semantic Scholar `openAccessPdf`, arXiv |
 | `unpaywall` | 17 | Unpaywall `best_oa_location`, where OpenAlex had nothing |
 | `zotero-desktop` | 1,470 | Zotero desktop "Find Available PDF" on an RIS import, GEOMAR network |
-| `institutional` | 534 | DOI → landing page → `citation_pdf_url`, scripted once over the GEOMAR and Kiel University networks |
+| `institutional` | 534 | DOI → landing page → `citation_pdf_url` over the GEOMAR and Kiel University networks |
 | `browser` | 150 | Zotero browser connector on doi.org tabs, or a PDF link clicked by hand, GEOMAR network |
 
-Of the open-access PDFs, 631 come from `laglitsynth fulltext-retrieval`
-(OpenAlex's best open-access URL). The other 3,134 come from a sweep over
-every OpenAlex location of a work (3,089), Semantic Scholar (43) and arXiv
-(2).
-
-Zotero desktop reaches publishers that refuse scripted requests. Of the
-1,101 PDFs from its last run, 419 came from Wiley (AGU included), 207 from
-MDPI, 52 from IEEE and 29 from Taylor & Francis. Zotero's own open-access
-lookup added little beyond OpenAlex. That run took about 4.5 h unattended
-for 4,220 imported works.
-
-The browser got 76 of a random 100 works that every other route had
-missed, in about 24 min of hands-on time.
+`laglitsynth fulltext-retrieval` covers only part of `oa` (OpenAlex's best
+open-access URL) and `unpaywall`. The rest of `oa` and all of
+`institutional` came from one-off scripts outside the CLI. Zotero desktop
+reaches publishers that refuse scripted requests: of the 1,101 PDFs in its
+last batch, 424 are from Wiley-hosted journals (AGU and ASLO among them),
+207 from MDPI, 52 from IEEE and 29 from Taylor & Francis.
 
 Conference abstracts (EGU, AGU, AVISO/OSTST meeting abstracts) are not
 pursued: there is no paper behind them.
 
 ## Adding PDFs
 
-The order is Zotero desktop first, then the browser for what is left. A
-collaborator on another network follows the same procedure. Each PDF ends
-up as `data/pdfs/<openalex short id>.pdf` with a provenance record, and is
-committed and pushed in `data/`. A work that already has a PDF keeps it.
+The order is Zotero desktop first, then the browser for what is left. Only
+the operator writes the store: a collaborator on another network runs the
+same procedure on their side and hands back a folder of PDFs, which the
+operator imports (see the drop-zone rule in
+[cross-machine.md](cross-machine.md#drop-zone-rule-for-collaborator-pdfs)).
+Each PDF ends up as `data/pdfs/<openalex short id>.pdf` with a provenance
+record, and the operator commits and pushes in `data/`. A work that
+already has a PDF keeps it.
+
+The CLI does not support this procedure end to end yet.
+`fulltext-retrieval-export` writes an RIS file without `AN` and `UR`, and
+`fulltext-retrieval-import` records only the sources `zotero-import` and
+`manual`. Until step 4 of
+[pipeline-restructure.md](../plans/pipeline-restructure.md) closes this,
+the RIS export, the copy out of Zotero and the provenance records for
+`zotero-desktop` and `browser` happen outside the CLI.
 
 ### Zotero desktop
 

@@ -16,9 +16,24 @@ cp .env.example .env  # then fill in OPENALEX_API_KEY and UNPAYWALL_EMAIL
 LFS) in the private repo
 [willi-rath/2026_laglitsynth_data](https://git.geomar.de/willi-rath/2026_laglitsynth_data).
 With access, fetch it with `git lfs install && git submodule update --init`.
-See [docs/pdf-store.md](docs/pdf-store.md) for what it holds and how to add
-PDFs.
-Everything else the pipeline writes under `data/` stays local.
+That downloads about 28 GB of PDFs; prefix the command with
+`GIT_LFS_SKIP_SMUDGE=1` to fetch only the pointers and run
+`git -C data lfs pull` later. Without access, leave `data/` uninitialised;
+the pipeline works the same. Everything else the pipeline writes under
+`data/` is ignored by the submodule and stays local. See
+[docs/pdf-store.md](docs/pdf-store.md) for what the store holds and how PDFs
+are added.
+
+In a checkout that already has a populated `data/`, `git submodule update
+--init` refuses to clone into it. Move it aside, initialise, then move the
+local subdirectories back (except `pdfs/`, which the submodule now
+provides):
+
+```bash
+mv data data.local
+git submodule update --init
+rsync -a --exclude pdfs/ data.local/ data/
+```
 
 Stages 1 and 5 read `OPENALEX_API_KEY` and `UNPAYWALL_EMAIL` from `.env`
 automatically when their flags are absent. See
@@ -304,5 +319,7 @@ tuning and macOS workarounds.
 - [`docs/pipeline.md`](docs/pipeline.md) — end-to-end pipeline overview
 - [`docs/run-manifest.md`](docs/run-manifest.md) — `data/manifest.json`, the
   run-id, and the fixed `data/` layout every stage reads from
+- [`docs/pdf-store.md`](docs/pdf-store.md) — the PDF store in the `data/`
+  submodule: contents, sources, how PDFs are added
 - [`plans/`](plans/) — implementation plans (active and archived)
 - [`AGENTS.md`](AGENTS.md) — project principles and structure
