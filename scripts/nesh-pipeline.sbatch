@@ -24,20 +24,21 @@
 #
 # Usage:
 #   mkdir -p logs
-#   sbatch scripts/nesh-pipeline.sbatch
-#   sbatch --export=ALL,QUERY="particle dispersion",N=20 scripts/nesh-pipeline.sbatch
+#   sbatch --export=ALL,SCREENING_THRESHOLD=50 scripts/nesh-pipeline.sbatch
+#   sbatch --export=ALL,SCREENING_THRESHOLD=50,QUERY="particle dispersion",N=20 scripts/nesh-pipeline.sbatch
 #   sbatch --export=ALL,STOP_AFTER_STAGE=3,N=200 scripts/nesh-pipeline.sbatch
 #
-# run-pipeline.sh now takes an optional per-review config YAML, but this
-# job keeps driving it through the QUERY / N (and STOP_AFTER_STAGE,
-# *_MODEL, …) env overrides — they still win over any config
-# under the runner's env > config > default precedence. So we invoke the
-# runner with NO positional: it uses its default config
-# (examples/reviews/lagrangian-oceanography.yaml) and the env exports
-# below override the knobs this job cares about. The documented
-# --export=ALL,STOP_AFTER_STAGE=3,N=200 workflow is unchanged. To drive a
-# different review from NESH, set REVIEW_CONFIG=path/to/review.yaml (it is
-# forwarded as the runner's positional argument).
+# SCREENING_THRESHOLD has no default: the runner exits without it when the
+# run reaches stage 7 (or stage 5 with EXPORT_GAP=1), unless the review
+# config sets screening_threshold. The default config leaves it unset.
+#
+# The job drives the runner through env overrides (QUERY, N,
+# STOP_AFTER_STAGE, SCREENING_THRESHOLD, *_MODEL, …), which win over the
+# config under the runner's env > config > default precedence. With no
+# REVIEW_CONFIG the runner uses its default config
+# (examples/reviews/lagrangian-oceanography.yaml). To drive a different
+# review from NESH, set REVIEW_CONFIG=path/to/review.yaml (it is forwarded
+# as the runner's positional argument).
 
 set -euo pipefail
 

@@ -23,6 +23,7 @@ from laglitsynth import layout
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.extraction_codebook.codebook import CodebookContext
 from laglitsynth.extraction_codebook.extract import (
+    USER_TEMPLATE,
     _active_eligible_works,
     extract_codebook,
     extract_works,
@@ -506,7 +507,9 @@ class TestRun:
         assert "by_source_basis" not in meta
         assert meta["run"]["tool"] == "laglitsynth.extraction_codebook.extract"
         assert meta["llm"]["temperature"] == 0.8
-        assert len(meta["llm"]["prompt_sha256"]) == 64
+        assert meta["llm"]["prompt_sha256"] == hashlib.sha256(
+            (ctx.system_prompt + "\n" + USER_TEMPLATE).encode("utf-8")
+        ).hexdigest()
 
     def test_config_yaml_inlines_codebook(
         self, tmp_path: Path, ctx: CodebookContext

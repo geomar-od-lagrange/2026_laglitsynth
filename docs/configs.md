@@ -122,7 +122,8 @@ The runner `eval`s the emitted block, then resolves every knob as
 runner's built-in default; an absent config field falls through to that
 default. The historical `QUERY` and `N` env overrides keep working
 through this same mechanism (`N` maps to `CFG_MAX_RECORDS`). The
-screening threshold has no built-in default: the runner exits unless
+screening threshold has no built-in default: when the run reaches stage
+7 (or stage 5 with `EXPORT_GAP=1`), the runner exits unless
 `SCREENING_THRESHOLD` is set in the environment or `screening_threshold`
 in the config. See
 [README.md](../README.md#running-the-pipeline) for the invocation.

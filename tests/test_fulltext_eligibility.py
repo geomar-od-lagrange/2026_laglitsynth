@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from openai import APIConnectionError, APITimeoutError
 
-import hashlib
 
 from laglitsynth import layout
 from laglitsynth.fulltext_eligibility.eligibility import (
@@ -101,6 +100,7 @@ class TestClassifyEligibility:
         assert verdict.reason == "matches"
         assert isinstance(verdict.seed, int)
         assert verdict.raw_response == '{"eligible": true, "reason": "matches"}'
+        assert "extra_body" not in mock_client.chat.completions.create.call_args.kwargs
 
     def test_valid_eligible_false(self) -> None:
         resp = _mock_openai_response('{"eligible": false, "reason": "review article"}')

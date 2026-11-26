@@ -59,31 +59,15 @@ Don't push overbooking arbitrarily high: every in-flight client
 request also costs server-side KV-cache memory and Python-side
 threading overhead. `N + 2` to `2N` is the practical band.
 
-## Production defaults
+## Runner defaults
 
-The runner derives the client knob from the server knob, so they
-can't drift:
-
-```bash
-OLLAMA_NUM_PARALLEL=2          # server cap
-LLM_CONCURRENCY=$((OLLAMA_NUM_PARALLEL + 2))   # client = N + 2 = 4
-```
-
-`OLLAMA_NUM_PARALLEL=2` is a defensible single-node compromise across
-the LLM stages: V100 is GPU-bound at any setting, H100 short prompts
-peak at server `parallel=2`, and H100 long prompts plateau by
-`parallel=3–4` (so 2 leaves <10% on the table). If a single stage
-becomes the bottleneck, override `OLLAMA_NUM_PARALLEL` at submit
-time — `LLM_CONCURRENCY` follows automatically.
-
-[`scripts/nesh-pipeline.sbatch`](../scripts/nesh-pipeline.sbatch)
-exports both before launching `ollama serve` and the runner.
 [`scripts/run-pipeline.sh`](../scripts/run-pipeline.sh) forwards
 `LLM_CONCURRENCY` to stages 3 and 7 as `--concurrency` via
 `ELIGIBILITY_CONCURRENCY` (which defaults to `LLM_CONCURRENCY`).
 Stage 8 uses a separate `EXTRACTION_CONCURRENCY` variable that
 defaults to 1 regardless of `LLM_CONCURRENCY` — see below.
-Override either env var at `sbatch --export=...` time.
+`LLM_CONCURRENCY` defaults to 1. Override either env var at
+`sbatch --export=...` time.
 
 ## Stage 8 default is 1
 
@@ -107,8 +91,7 @@ Verdicts appear in the output JSONL in this order:
 
 JSONL is keyed by `work_id`, and every downstream consumer joins on
 that key, so completion order is functionally invisible after the
-stage. Adjudication exports re-sort by whatever the reviewer prefers
-(see [screening-abstracts.md](screening-abstracts.md)).
+stage.
 
 At `--concurrency 1` the ordering degrades to catalogue order (one
 request at a time), matching the pre-parallel behaviour.

@@ -3,13 +3,13 @@
 # This file carries the runner's smoke-run defaults; it is the config
 # `scripts/run-pipeline.sh` reads when given no argument. The screening
 # threshold has no default: set `screening_threshold` below or export
-# SCREENING_THRESHOLD before running. Validated against the `ReviewConfig` model and emitted as CFG_* shell
-# assignments by `laglitsynth review-config`. See docs/configs.md.
+# SCREENING_THRESHOLD before running. Validated against the `ReviewConfig`
+# model and emitted as CFG_* shell assignments by
+# `laglitsynth review-config`. See docs/configs.md.
 #
 # Only the knobs a review actually pins are set here; every omitted knob
-# (models, concurrency) falls back to the runner's
-# built-in default. Env vars still override everything
-# (env > config > default).
+# (models, concurrency) falls back to the runner's built-in default. Env
+# vars still override everything (env > config > default).
 
 query: "Lagrangian particle tracking"
 
@@ -26,9 +26,9 @@ codebook: ../codebooks/lagrangian-oceanography.yaml
 #
 # from_year: 2000
 # to_year: 2025
-# screening_threshold: <0-100>   # relevance-score cutoff (required by the runner)
+# screening_threshold: <0-100>   # relevance-score cutoff (required from stage 7 on)
 # models:
-#   screening: gemma3:4b      # or a decisions model id, e.g. typesafe/jev-1.14
+#   screening: gemma3:4b
 #   eligibility: gemma3:4b
 #   extraction: llama3.1:8b
 # concurrency:

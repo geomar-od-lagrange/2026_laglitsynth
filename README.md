@@ -98,7 +98,8 @@ default
 [`examples/reviews/lagrangian-oceanography.yaml`](examples/reviews/lagrangian-oceanography.yaml),
 the smoke run. The screening threshold has no default: set
 `screening_threshold` in the config or export `SCREENING_THRESHOLD`, or
-the runner exits. The historical `QUERY` and `N` env overrides
+the runner exits once the run reaches stage 7 (or stage 5 with
+`EXPORT_GAP=1`); a run with `STOP_AFTER_STAGE` below that needs none. The historical `QUERY` and `N` env overrides
 still work and still win over the config. See
 [`docs/configs.md`](docs/configs.md#per-review-config-the-runners-config)
 for the config shape and the full `CFG_*` knob list.
@@ -126,10 +127,10 @@ runner:
 ollama serve                                                # stages 3, 7, 8
 docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0         # stage 6
 
-SCREENING_THRESHOLD=50 scripts/run-pipeline.sh              # default review config, N=5
-scripts/run-pipeline.sh examples/reviews/my-review.yaml     # a review config that sets screening_threshold
-QUERY="particle dispersion" N=200 scripts/run-pipeline.sh   # env overrides win over the config
-STOP_AFTER_STAGE=3 scripts/run-pipeline.sh                  # stages 1..3 only
+SCREENING_THRESHOLD=50 scripts/run-pipeline.sh                                 # default review config, N=5
+scripts/run-pipeline.sh examples/reviews/my-review.yaml                        # a review config that sets screening_threshold
+SCREENING_THRESHOLD=50 QUERY="particle dispersion" N=200 scripts/run-pipeline.sh  # env overrides win over the config
+STOP_AFTER_STAGE=3 scripts/run-pipeline.sh                                     # stages 1..3 only, no threshold needed
 ```
 
 ### On NESH
@@ -142,9 +143,9 @@ proxy.
 
 ```bash
 mkdir -p logs
-sbatch scripts/nesh-pipeline.sbatch                                                     # smoke, N=10
-sbatch --export=ALL,QUERY="particle dispersion",N=200 scripts/nesh-pipeline.sbatch
-sbatch --export=ALL,STOP_AFTER_STAGE=3,N=500 scripts/nesh-pipeline.sbatch
+sbatch --export=ALL,SCREENING_THRESHOLD=50 scripts/nesh-pipeline.sbatch                  # smoke, N=10
+sbatch --export=ALL,SCREENING_THRESHOLD=50,QUERY="particle dispersion",N=200 scripts/nesh-pipeline.sbatch
+sbatch --export=ALL,STOP_AFTER_STAGE=3,N=500 scripts/nesh-pipeline.sbatch                 # stages 1..3, no threshold needed
 ```
 
 Per-user prerequisites:
@@ -166,7 +167,7 @@ in-flight requests of the LLM stages; see
 ```bash
 sbatch \
     --time=12:00:00 \
-    --export=ALL,QUERY="Lagrangian particle tracking",N=500 \
+    --export=ALL,SCREENING_THRESHOLD=50,QUERY="Lagrangian particle tracking",N=500 \
     scripts/nesh-pipeline.sbatch
 ```
 

@@ -32,7 +32,9 @@
 #   SCREENING_CRITERIA     stage-3 screening-criteria YAML
 #   ELIGIBILITY_CRITERIA   stage-7 eligibility-criteria YAML
 #   CODEBOOK               stage-8 codebook YAML
-#   SCREENING_THRESHOLD    relevance-score cutoff; required (env or config)
+#   SCREENING_THRESHOLD    relevance-score cutoff; no default. Required (env
+#                          or config) when the run reaches stage 7, or
+#                          stage 5 with EXPORT_GAP=1
 #   OUTPUT_ROOT, GROBID_URL,
 #   SCREENING_MODEL, ELIGIBILITY_MODEL, EXTRACTION_MODEL,
 #   LLM_CONCURRENCY        (--concurrency for stages 3 and 7; default 1),
@@ -81,8 +83,8 @@ ELIGIBILITY_CRITERIA="${ELIGIBILITY_CRITERIA:-${CFG_ELIGIBILITY_CRITERIA:-exampl
 CODEBOOK="${CODEBOOK:-${CFG_CODEBOOK:-examples/codebooks/lagrangian-oceanography.yaml}}"
 
 # Screening threshold: a review decision, so it has no built-in default.
+# Checked below, once STOP_AFTER_STAGE says whether a stage uses it.
 SCREENING_THRESHOLD="${SCREENING_THRESHOLD:-${CFG_SCREENING_THRESHOLD:-}}"
-: "${SCREENING_THRESHOLD:?SCREENING_THRESHOLD required — set screening_threshold in the review config or export it}"
 
 # Models.
 SCREENING_MODEL="${SCREENING_MODEL:-${CFG_SCREENING_MODEL:-gemma3:4b}}"
@@ -105,6 +107,12 @@ STOP_AFTER_STAGE="${STOP_AFTER_STAGE:-8}"
     echo "STOP_AFTER_STAGE must be a positive integer (got $STOP_AFTER_STAGE)" >&2
     exit 2
 }
+
+# Only stage 7 and the stage-5 handoff export read the threshold, so a
+# run that stops before them does not need one.
+if [[ "$STOP_AFTER_STAGE" -ge 7 ]] || [[ "$EXPORT_GAP" == "1" && "$STOP_AFTER_STAGE" -ge 5 ]]; then
+    : "${SCREENING_THRESHOLD:?SCREENING_THRESHOLD required — set screening_threshold in the review config or export it}"
+fi
 
 : "${OPENALEX_API_KEY:?OPENALEX_API_KEY required — set in .env}"
 : "${UNPAYWALL_EMAIL:?UNPAYWALL_EMAIL required — set in .env}"
