@@ -50,10 +50,11 @@ curl http://localhost:8070/api/isalive
 Docker Desktop's default VM allocation is 2 GB. GROBID's JVM needs more
 than that once it processes PDFs (observed with `lfoppiano/grobid:0.8.0`
 and `grobid/grobid:0.9.0-crf`; see
-[explorations/run-cost-and-throughput.md](explorations/run-cost-and-throughput.md)). Set Docker Desktop's memory limit to at least **6–8 GB**
-(Preferences → Resources → Memory) before running stage 6 on a real
-corpus. Under-allocation causes silent JVM crashes mid-corpus without
-a helpful error from the container.
+[explorations/run-cost-and-throughput.md](explorations/run-cost-and-throughput.md)).
+Set Docker Desktop's memory limit to at least **6–8 GB** (Preferences →
+Resources → Memory) before running stage 6 on a real corpus.
+Under-allocation causes silent JVM crashes mid-corpus without a helpful
+error from the container.
 
 ### macOS `localhost:8070` workaround
 
@@ -99,9 +100,8 @@ laglitsynth fulltext-extraction --skip-existing \
     --corpus-dir data/corpus/ --output-dir data/fulltext-extraction/ ...
 ```
 
-Stage 6 takes `--corpus-dir`, `--output-dir`, `--grobid-url`, `--timeout`,
-and `--skip-existing`; it has no `--run-id` flag. `--skip-existing`
-loads any prior `extraction.jsonl` from the output directory and skips
-works whose latest record was made from the current corpus PDF (same
-`pdf_sha256`). Only new, changed or previously failed PDFs are submitted
-to GROBID.
+Stage 6 has no `--run-id` flag; `laglitsynth fulltext-extraction --help`
+lists the flags it takes. `--skip-existing` loads any prior
+`extraction.jsonl` from the output directory and skips works whose
+latest record was made from the current corpus PDF (same `pdf_sha256`).
+Only new, changed or previously failed PDFs are submitted to GROBID.

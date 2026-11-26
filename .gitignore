@@ -1,5 +1,9 @@
-# Bench-mode TEI files live at the repo root (rsync'd in). Copyright.
+# GROBID TEI output carries copyrighted full text; never commit it.
 *.tei.xml
+
+# Job logs left over from the retired NESH runner.
+nesh-pipeline-*.out
+nesh-pipeline-*.err
 
 # Per-run service logs.
 logs/

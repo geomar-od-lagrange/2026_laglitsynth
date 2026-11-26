@@ -10,9 +10,13 @@ as a pipeline target (see the [roadmap](roadmap.md#withdrawn)), so its
 batch wrapper and the manual NESH runbook section are gone too. Obsolete:
 runbook steps 1–5, the Reproducibility subsections
 on temperature and seed, the "No `--concurrency` flag" one-liner, the
-model-pull hints, and the README's Ollama section. The GROBID steps, the
-per-stage prerequisite links and the remaining README hygiene items still
-apply.
+model-pull hints, and the README's Ollama section. The switch to the
+multi-arch `grobid/grobid:0.9.0-crf` image makes the Apple Silicon
+GROBID guidance obsolete as well: the README GROBID section's Rosetta
+comment (G2), the matching README hygiene bullet, the "Apple Silicon
+GROBID guidance is approximate" risk, and step 7's "GROBID wants ~2 GB
+itself" remark. The other GROBID steps, the per-stage prerequisite
+links and the remaining README hygiene items still apply.
 
 ## Goal
 
