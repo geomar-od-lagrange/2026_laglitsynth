@@ -56,6 +56,15 @@ structured assessment and synthesis.
   Estimating scale is the job of the humans designing the process — not of
   plan documents or AI assistants. Stay fact-based: if a number has not been
   measured, do not write it down.
+- **Docs describe what stays true.** Docs and READMEs carry no snapshots
+  that go stale: no counts, sizes, hit rates, run times or durations, no
+  per-publisher or per-host tallies, no "currently" or "so far" figures.
+  Give the command that reports the current value instead. Behaviour
+  observed in a third-party tool names the version it was observed in.
+  A gap in our own code names the plan that closes it, so implementing
+  that plan removes the statement. Run results and measurements belong in
+  [`docs/explorations/`](docs/explorations/) or in commit messages, and
+  progress status in the [roadmap](plans/roadmap.md).
 - **AI-tool agnostic.** Project configuration, principles, and documentation
   live in the repo (AGENTS.md, docs/, plans/), not in tool-specific memory
   or config. Any AI coding assistant should be able to pick up the project
