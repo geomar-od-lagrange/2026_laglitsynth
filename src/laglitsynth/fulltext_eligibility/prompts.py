@@ -1,25 +1,22 @@
-"""Prompt construction for full-text eligibility assessment.
+"""Full-text rendering for eligibility assessment.
 
-The system prompt is loaded from an external eligibility-criteria YAML
-at runtime so swapping topics is configuration work rather than a
-refactor. ``render_fulltext`` flattens a ``TeiDocument`` into a single
-string the LLM can consume. ``build_user_message`` wraps the rendered
-body for the user message.
+``render_fulltext`` flattens a ``TeiDocument`` into the single string
+sent as the decision ``input``. The question itself comes from the
+eligibility-criteria YAML's ``decision`` block.
 """
 
 from __future__ import annotations
 
 from laglitsynth.fulltext_extraction.tei import TeiDocument, flatten_sections
-from laglitsynth.prompts import load_system_prompt
 
 __all__ = [
     "USER_TEMPLATE",
-    "build_user_message",
-    "load_system_prompt",
     "render_fulltext",
 ]
 
-USER_TEMPLATE = "full_text:\n{text}"
+# Marker for the input render, folded into prompt_sha256 so the hash pins
+# both the question and the shape of the input.
+USER_TEMPLATE = "full_text"
 
 
 def render_fulltext(tei: TeiDocument) -> str:
@@ -32,8 +29,3 @@ def render_fulltext(tei: TeiDocument) -> str:
     no abstract fallback.
     """
     return "\n\n".join(flatten_sections(tei))
-
-
-def build_user_message(text: str) -> str:
-    """Wrap rendered full-text body for the user message."""
-    return USER_TEMPLATE.format(text=text)

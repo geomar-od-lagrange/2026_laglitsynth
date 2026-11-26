@@ -73,8 +73,8 @@ implemented stage has its own doc under [`docs/`](docs/).
   structured section text via GROBID. See
   [`docs/fulltext-extraction.md`](docs/fulltext-extraction.md).
 - Stage 7 — `laglitsynth fulltext-eligibility` — join the catalogue against
-  the screening verdicts, then assess full-text eligibility with an
-  LLM, emitting an `EligibilityVerdict` sidecar. See
+  the screening verdicts, then assess full-text eligibility with a
+  decisions model on the rendered full text, emitting an `EligibilityVerdict` sidecar. See
   [`docs/eligibility.md`](docs/eligibility.md).
 - Stage 8 — `laglitsynth extraction-codebook` — join the catalogue against
   the eligibility verdicts, then extract structured codebook records
@@ -121,8 +121,8 @@ Defaults that apply to both local and NESH runs:
   `llm_base_url`), `LLM_API_KEY` and `SCREENING_MODEL` are required from
   stage 3 on, `ELIGIBILITY_MODEL` from stage 7 and `EXTRACTION_MODEL` from
   stage 8; the runner exits naming whichever is missing.
-  `LLM_DECISIONS_URL` (or `llm_decisions_url`) overrides stage 3's
-  decisions URL.
+  `LLM_DECISIONS_URL` (or `llm_decisions_url`) overrides the
+  decisions URL of stages 3 and 7.
 
 ### Locally
 
@@ -241,8 +241,8 @@ OpenAI-compatible endpoint per review: `--base-url` (including `/v1`),
 LLM_API_KEY=your-key-here
 ```
 
-Stage 3 asks decisions at `<base-url>/decisions` unless `--decisions-url`
-names another URL. See
+Stages 3 and 7 ask decisions at `<base-url>/decisions` unless
+`--decisions-url` names another URL; stage 8 uses chat completions. See
 [`docs/external-services.md`](docs/external-services.md#llm-endpoint).
 
 ## GROBID (for full-text extraction)

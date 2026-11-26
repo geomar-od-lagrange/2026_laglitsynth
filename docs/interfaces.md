@@ -117,8 +117,8 @@ export's `pdf-manifest.csv`.
 
 | Path | Model | Description |
 |---|---|---|
-| `data/fulltext-eligibility/<run-id>/verdicts.jsonl` | [`EligibilityVerdict`](../src/laglitsynth/fulltext_eligibility/models.py) | Per-work eligibility decision (tri-state with sentinel reasons; no `source_basis` — full-text-only) |
-| `data/fulltext-eligibility/<run-id>/eligibility-meta.json` | [`EligibilityMeta`](../src/laglitsynth/fulltext_eligibility/models.py) | Sentinel counts + verbatim `criterion`, nested `run` + `llm` |
+| `data/fulltext-eligibility/<run-id>/verdicts.jsonl` | [`EligibilityVerdict`](../src/laglitsynth/fulltext_eligibility/models.py) | Per-work decisions-endpoint probability and `eligible = probability >= 0.5` (tri-state with sentinel reasons; no `source_basis` — full-text-only) |
+| `data/fulltext-eligibility/<run-id>/eligibility-meta.json` | [`EligibilityMeta`](../src/laglitsynth/fulltext_eligibility/models.py) | Sentinel counts + the predicate instructions as `criterion`, nested `run` + `llm` |
 | `data/fulltext-eligibility/<run-id>/config.yaml` | (YAML) | Resolved CLI+config, criteria inlined |
 
 Stage 7 joins the deduplicated catalogue against stage 3's `verdicts.jsonl`
@@ -236,7 +236,7 @@ laglitsynth fulltext-eligibility \
     [--screening-threshold 50] [--data-dir DIR] [--run-id ID] \
     [--eligibility-criteria FILE] [--config FILE] \
     [--skip-existing] [--max-records N] [--dry-run] \
-    --base-url URL --model MODEL [--api-key KEY] \
+    --base-url URL --model MODEL [--api-key KEY] [--decisions-url URL] \
     [--concurrency N]
 
 # Stage 8 — extraction-codebook
@@ -266,7 +266,7 @@ Stages 3, 7 and 8 share the endpoint flags: `--base-url` (the
 OpenAI-compatible base, including `/v1`) and `--model` are required (the
 stage exits naming the missing flag), `--api-key` falls back to
 `LLM_API_KEY` in the environment, then in `.env`, and is never written to
-`config.yaml`; stage 3 also takes `--decisions-url` (default
+`config.yaml`; stages 3 and 7 also take `--decisions-url` (default
 `<base-url>/decisions`). `--concurrency` (default `1`) sets the number of
 in-flight LLM requests. See [llm-concurrency.md](llm-concurrency.md).
 
@@ -419,8 +419,8 @@ Per stage, the hash input is:
 | Stage | `prompt_sha256` covers |
 |---|---|
 | 3 — screening-abstracts | `question.canonical_json() + "\n" + USER_TEMPLATE` (the screening-criteria YAML's `decision` block) |
-| 7 — fulltext-eligibility | `SYSTEM_PROMPT + "\n" + USER_TEMPLATE` |
-| 8 — extraction-codebook | `SYSTEM_PROMPT + "\n" + USER_TEMPLATE` |
+| 7 — fulltext-eligibility | `question.canonical_json() + "\n" + USER_TEMPLATE` (the eligibility-criteria YAML's `decision` block; `criteria_sha256` in [eligibility.py](../src/laglitsynth/fulltext_eligibility/eligibility.py)) |
+| 8 — extraction-codebook | rendered codebook system prompt `+ "\n" + USER_TEMPLATE` |
 
 ## Extra policy
 

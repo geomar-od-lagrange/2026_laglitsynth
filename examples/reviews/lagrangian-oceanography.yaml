@@ -32,7 +32,7 @@ codebook: ../codebooks/lagrangian-oceanography.yaml
 # llm_decisions_url: <url>        # only if decisions are not at <llm_base_url>/decisions
 # models:                         # required for each stage the run reaches
 #   screening: <decisions model>
-#   eligibility: <chat model>
+#   eligibility: <decisions model>
 #   extraction: <chat model>
 # concurrency:
 #   llm: 1

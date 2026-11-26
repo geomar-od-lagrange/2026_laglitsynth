@@ -4,30 +4,31 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
-from openai import APIConnectionError, APITimeoutError
-
 
 from laglitsynth import layout
 from laglitsynth.fulltext_eligibility.eligibility import (
     _active_works,
     assess_works,
     classify_eligibility,
+    criteria_sha256,
 )
 from laglitsynth.fulltext_eligibility.models import EligibilityVerdict
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
 from laglitsynth.llm import LlmEndpoint
+from laglitsynth.prompts import DecisionQuestion
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
 from conftest import (
     TEI_NS,
     TEST_RUN_ID,
     _make_work,
-    _mock_openai_response,
     _write_extractions_jsonl,
     _write_manifest,
     _write_tei,
@@ -38,7 +39,21 @@ from conftest import (
 # --- fixtures and helpers ---
 
 _BASE = "https://llm.example.org/v1"
-_ENDPOINT = LlmEndpoint(base_url=_BASE, model="m", api_key="k", decisions_url=None)
+_ENDPOINT = LlmEndpoint(
+    base_url=_BASE, model="m", api_key="k", decisions_url=_BASE + "/decisions"
+)
+_DECISION_BLOCK = {
+    "instructions": "Is this ocean particle tracking primary research?",
+    "criteria": {"true": "Tracks particles in the ocean.", "false": "Anything else."},
+}
+_QUESTION = DecisionQuestion.model_validate(_DECISION_BLOCK)
+
+
+@pytest.fixture(autouse=True)
+def _no_sleep() -> Iterator[None]:
+    """Decision retries back off with ``time.sleep``; don't actually wait."""
+    with patch("laglitsynth.llm.time.sleep"):
+        yield
 
 
 def _write_verdicts_jsonl(path: Path, verdicts: list[ScreeningVerdict]) -> None:
@@ -91,108 +106,80 @@ def _write_full_text_for(
 # --- classify_eligibility ---
 
 
+def _client(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.Client:
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def _answer(p: float, name: str = "eligible") -> Callable[[httpx.Request], httpx.Response]:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"answers": [{"type": "predicate", "name": name, "probability": p}]}
+        )
+
+    return handler
+
+
+def _classify(client: httpx.Client, text: str = "full text") -> EligibilityVerdict:
+    return classify_eligibility(
+        "W1", text, endpoint=_ENDPOINT, client=client, question=_QUESTION
+    )
+
+
 class TestClassifyEligibility:
-    def test_valid_eligible_true(self) -> None:
-        resp = _mock_openai_response('{"eligible": true, "reason": "matches"}')
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        verdict = classify_eligibility(
-            "W1", "prompt text", endpoint=_ENDPOINT, client=mock_client, system_prompt="SP"
-        )
+    @pytest.mark.parametrize(("p", "eligible"), [(0.49, False), (0.5, True), (1.0, True)])
+    def test_probability_cut_at_half(self, p: float, eligible: bool) -> None:
+        verdict = _classify(_client(_answer(p)))
         assert verdict.work_id == "W1"
-        assert verdict.eligible is True
-        assert verdict.reason == "matches"
-        assert verdict.raw_response == '{"eligible": true, "reason": "matches"}'
-        kwargs = mock_client.chat.completions.create.call_args.kwargs
-        assert set(kwargs) == {"model", "messages", "response_format"}
+        assert verdict.probability == p
+        assert verdict.eligible is eligible
+        assert verdict.reason is None
+        assert verdict.raw_response is not None
 
-    def test_valid_eligible_false(self) -> None:
-        resp = _mock_openai_response('{"eligible": false, "reason": "review article"}')
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        verdict = classify_eligibility(
-            "W1", "prompt text", endpoint=_ENDPOINT, client=mock_client, system_prompt="SP"
-        )
-        assert verdict.eligible is False
+    def test_request_sends_full_text_as_input_with_name_eligible(self) -> None:
+        bodies: list[dict[str, Any]] = []
+        urls: list[str] = []
 
-    def test_malformed_json_returns_sentinel(self) -> None:
-        resp = _mock_openai_response("not json at all")
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        verdict = classify_eligibility(
-            "W1", "prompt", endpoint=_ENDPOINT, client=mock_client, system_prompt="SP"
-        )
+        def handler(request: httpx.Request) -> httpx.Response:
+            bodies.append(json.loads(request.content))
+            urls.append(str(request.url))
+            return _answer(0.7)(request)
+
+        _classify(_client(handler), text="Methods\nWe track particles.")
+        assert urls == [_BASE + "/decisions"]
+        assert bodies[0]["input"] == "Methods\nWe track particles."
+        assert bodies[0]["questions"] == [
+            {"type": "predicate", "name": "eligible", "instructions": _QUESTION.render()}
+        ]
+
+    def test_malformed_body_is_parse_failure(self) -> None:
+        verdict = _classify(_client(lambda r: httpx.Response(200, text="not json")))
         assert verdict.reason == "llm-parse-failure"
+        assert verdict.probability is None
         assert verdict.eligible is None
-        assert verdict.raw_response == "not json at all"
+        assert verdict.raw_response == "not json"
 
-    def test_missing_eligible_field_returns_sentinel(self) -> None:
-        resp = _mock_openai_response('{"reason": "ok"}')
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        verdict = classify_eligibility(
-            "W1", "prompt", endpoint=_ENDPOINT, client=mock_client, system_prompt="SP"
-        )
+    def test_answer_for_another_name_is_parse_failure(self) -> None:
+        verdict = _classify(_client(_answer(0.9, name="relevant")))
         assert verdict.reason == "llm-parse-failure"
-        assert verdict.raw_response == '{"reason": "ok"}'
+        assert verdict.probability is None
 
-    def test_extra_fields_dropped(self) -> None:
-        # LLMs at t>0 sprinkle extras; they should not fail the record.
-        resp = _mock_openai_response(
-            '{"eligible": true, "reason": "ok", "confidence": 95}'
-        )
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        verdict = classify_eligibility(
-            "W1", "prompt", endpoint=_ENDPOINT, client=mock_client, system_prompt="SP"
-        )
-        assert verdict.reason == "ok"
-        assert verdict.eligible is True
-
-    def test_reason_list_coerced(self) -> None:
-        resp = _mock_openai_response(
-            '{"eligible": true, "reason": ["a", "b"]}'
-        )
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        verdict = classify_eligibility(
-            "W1", "prompt", endpoint=_ENDPOINT, client=mock_client, system_prompt="SP"
-        )
-        assert verdict.reason == "a / b"
-
-    def test_string_eligible_coerced_by_pydantic(self) -> None:
-        # Pydantic v2 accepts "true"/"false" → bool in non-strict mode.
-        resp = _mock_openai_response('{"eligible": "true", "reason": "ok"}')
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = resp
-        verdict = classify_eligibility(
-            "W1", "prompt", endpoint=_ENDPOINT, client=mock_client, system_prompt="SP"
-        )
-        assert verdict.eligible is True
-        assert verdict.reason == "ok"
-
-    def test_timeout_returns_sentinel(self) -> None:
-        """APITimeoutError after retries → reason='llm-timeout' sentinel."""
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.side_effect = APITimeoutError(
-            request=MagicMock()
-        )
-        verdict = classify_eligibility(
-            "W1", "prompt", endpoint=_ENDPOINT, client=mock_client, system_prompt="SP"
-        )
+    def test_5xx_is_timeout(self) -> None:
+        verdict = _classify(_client(lambda r: httpx.Response(503, text="busy")))
         assert verdict.reason == "llm-timeout"
+        assert verdict.probability is None
         assert verdict.eligible is None
         assert verdict.raw_response is None
 
-    def test_connection_error_returns_sentinel(self) -> None:
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.side_effect = APIConnectionError(
-            request=MagicMock()
-        )
-        verdict = classify_eligibility(
-            "W1", "prompt", endpoint=_ENDPOINT, client=mock_client, system_prompt="SP"
-        )
-        assert verdict.reason == "llm-timeout"
+    def test_400_is_rejected_with_body(self) -> None:
+        verdict = _classify(_client(lambda r: httpx.Response(400, text="context too long")))
+        assert verdict.reason == "llm-rejected"
+        assert verdict.probability is None
+        assert verdict.eligible is None
+        assert verdict.raw_response == "context too long"
+
+    def test_401_exits_naming_url(self) -> None:
+        with pytest.raises(SystemExit, match="/decisions"):
+            _classify(_client(lambda r: httpx.Response(401, text="bad key")))
 
 
 # --- assess_works cascade ---
@@ -207,7 +194,7 @@ def _mock_classify(
         *,
         endpoint: LlmEndpoint,
         client: Any,
-        system_prompt: str,
+        question: DecisionQuestion,
     ) -> EligibilityVerdict:
         entry = results[work_id]
         if entry == "error":
@@ -218,10 +205,12 @@ def _mock_classify(
                 raw_response="mock failure",
             )
         assert isinstance(entry, dict)
+        probability = entry.get("probability", 0.9 if entry["eligible"] else 0.1)
         return EligibilityVerdict(
             work_id=work_id,
+            probability=probability,
             eligible=entry["eligible"],
-            reason=entry["reason"],
+            raw_response="{}",
         )
 
     return side_effect
@@ -251,7 +240,7 @@ class TestAssessWorksCascade:
 
         mock_classify = MagicMock(
             side_effect=_mock_classify(
-                {"W1": {"eligible": True, "reason": "matches"}}
+                {"W1": {"eligible": True}}
             )
         )
         with patch(
@@ -266,20 +255,16 @@ class TestAssessWorksCascade:
                     client=MagicMock(),
                     endpoint=_ENDPOINT,
                     max_records=None,
-                    system_prompt="SP",
+                    question=_QUESTION,
                 )
             )
 
         assert len(verdicts) == 1
         assert verdicts[0].eligible is True
 
-        # The prompt should contain the flattened section text, not the abstract.
-        call_kwargs = mock_classify.call_args
-        prompt = call_kwargs.args[1]
-        assert "Methods" in prompt
-        assert "Real content." in prompt
-        assert "full_text:" in prompt
-        assert "The abstract." not in prompt
+        # The input is the rendered full text itself, not the abstract.
+        text = mock_classify.call_args.args[1]
+        assert text == "Methods\nReal content."
 
     def test_no_extraction_is_not_assessed(self, tmp_path: Path) -> None:
         """A work without an extraction gets no row and never calls the LLM."""
@@ -297,7 +282,7 @@ class TestAssessWorksCascade:
                     client=MagicMock(),
                     endpoint=_ENDPOINT,
                     max_records=None,
-                    system_prompt="SP",
+                    question=_QUESTION,
                 )
             )
 
@@ -330,13 +315,14 @@ class TestAssessWorksCascade:
                     client=MagicMock(),
                     endpoint=_ENDPOINT,
                     max_records=None,
-                    system_prompt="SP",
+                    question=_QUESTION,
                 )
             )
 
         assert len(verdicts) == 1
         assert verdicts[0].reason == "tei-parse-failure"
         assert verdicts[0].eligible is None
+        assert verdicts[0].probability is None
         # Malformed TEI on a paper we have a PDF for is an operator-visible bug.
         mock_classify.assert_not_called()
 
@@ -366,7 +352,7 @@ class TestAssessWorksCascade:
                     client=MagicMock(),
                     endpoint=_ENDPOINT,
                     max_records=None,
-                    system_prompt="SP",
+                    question=_QUESTION,
                 )
             )
 
@@ -375,6 +361,7 @@ class TestAssessWorksCascade:
         assert len(verdicts) == 1
         assert verdicts[0].reason == "tei-parse-failure"
         assert verdicts[0].eligible is None
+        assert verdicts[0].probability is None
         mock_classify.assert_not_called()
 
     def test_llm_parse_failure_recorded(self, tmp_path: Path) -> None:
@@ -406,7 +393,7 @@ class TestAssessWorksCascade:
                     client=MagicMock(),
                     endpoint=_ENDPOINT,
                     max_records=None,
-                    system_prompt="SP",
+                    question=_QUESTION,
                 )
             )
 
@@ -442,7 +429,7 @@ class TestAssessWorksCascade:
             *,
             endpoint: LlmEndpoint,
             client: Any,
-            system_prompt: str,
+            question: DecisionQuestion,
         ) -> EligibilityVerdict:
             if work_id == "W1":
                 return EligibilityVerdict(
@@ -453,8 +440,8 @@ class TestAssessWorksCascade:
                 )
             return EligibilityVerdict(
                 work_id=work_id,
+                probability=0.8,
                 eligible=True,
-                reason="ok",
             )
 
         with patch(
@@ -469,14 +456,15 @@ class TestAssessWorksCascade:
                     client=MagicMock(),
                     endpoint=_ENDPOINT,
                     max_records=None,
-                    system_prompt="SP",
+                    question=_QUESTION,
                 )
             )
 
         assert len(verdicts) == 2
         by_id = {v.work_id: v for v in verdicts}
         assert by_id["W1"].reason == "llm-timeout"
-        assert by_id["W2"].reason == "ok"
+        assert by_id["W2"].eligible is True
+        assert by_id["W2"].reason is None
 
 
 # --- EligibilityVerdict model ---
@@ -513,10 +501,7 @@ class TestEligibilityVerdict:
 # --- run() end-to-end ---
 
 
-_TEST_CRITERIA_SPEC = {
-    "id": "test-criteria",
-    "system_prompt": "You are a test classifier. Respond with JSON.",
-}
+_TEST_CRITERIA_SPEC: dict[str, Any] = {"id": "test-criteria", "decision": _DECISION_BLOCK}
 
 
 def _make_run_args(
@@ -544,6 +529,7 @@ def _make_run_args(
         model="m",
         base_url=_BASE,
         api_key="k",
+        decisions_url=None,
         max_records=max_records,
         skip_existing=skip_existing,
         dry_run=dry_run,
@@ -580,10 +566,10 @@ class TestRun:
             patch(
                 "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
                 side_effect=_mock_classify(
-                    {"W1": {"eligible": True, "reason": "ok"}}
+                    {"W1": {"eligible": True}}
                 ),
             ),
-            patch("laglitsynth.fulltext_eligibility.eligibility.chat_client"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.decisions_client"),
         ):
             from laglitsynth.fulltext_eligibility.eligibility import run
 
@@ -618,8 +604,8 @@ class TestRun:
         )
 
         classify_results: dict[str, dict[str, Any] | str] = {
-            "W1": {"eligible": True, "reason": "yes"},
-            "W2": {"eligible": False, "reason": "no"},
+            "W1": {"eligible": True},
+            "W2": {"eligible": False},
         }
 
         with (
@@ -627,7 +613,7 @@ class TestRun:
                 "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
                 side_effect=_mock_classify(classify_results),
             ),
-            patch("laglitsynth.fulltext_eligibility.eligibility.chat_client"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.decisions_client"),
         ):
             from laglitsynth.fulltext_eligibility.eligibility import run
 
@@ -658,10 +644,16 @@ class TestRun:
         assert meta["input_screening_verdicts"] == str(verdicts_path)
         assert meta["run"]["tool"] == "laglitsynth.fulltext_eligibility.assess"
         assert meta["llm"]["base_url"] == _BASE
-        assert meta["llm"]["decisions_url"] is None
+        assert meta["llm"]["decisions_url"] == _BASE + "/decisions"
         assert "temperature" not in meta["llm"]
         assert meta["llm_rejected_count"] == 0
-        assert len(meta["llm"]["prompt_sha256"]) == 64
+        assert meta["llm"]["prompt_sha256"] == criteria_sha256(_TEST_CRITERIA_SPEC)
+        assert meta["criterion"] == _QUESTION.render()
+
+        verdicts = [
+            EligibilityVerdict.model_validate_json(line) for line in verdict_lines
+        ]
+        assert {v.work_id: v.probability for v in verdicts} == {"W1": 0.9, "W2": 0.1}
 
     def test_skip_existing_refuses_when_prompt_sha256_differs(
         self, tmp_path: Path
@@ -693,7 +685,7 @@ class TestRun:
             "llm": {
                 "model": "m",
                 "base_url": _BASE,
-                "decisions_url": None,
+                "decisions_url": _BASE + "/decisions",
                 "prompt_sha256": "0" * 64,  # deliberately wrong hash
             },
             "input_catalogue": str(catalogue),
@@ -723,7 +715,7 @@ class TestRun:
         )
 
         with (
-            patch("laglitsynth.fulltext_eligibility.eligibility.chat_client"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.decisions_client"),
         ):
             from laglitsynth.fulltext_eligibility.eligibility import run
 
@@ -764,9 +756,9 @@ class TestRun:
         with (
             patch(
                 "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
-                side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
+                side_effect=_mock_classify({"W1": {"eligible": True}}),
             ),
-            patch("laglitsynth.fulltext_eligibility.eligibility.chat_client"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.decisions_client"),
         ):
             from laglitsynth.fulltext_eligibility.eligibility import run
 
@@ -799,8 +791,8 @@ class TestRun:
         # Prior verdict for W1 only.
         prior = EligibilityVerdict(
             work_id="W1",
+            probability=0.9,
             eligible=True,
-            reason="prior",
         )
         (out_dir / "verdicts.jsonl").write_text(prior.model_dump_json() + "\n")
 
@@ -814,7 +806,7 @@ class TestRun:
         )
 
         classify_results: dict[str, dict[str, Any] | str] = {
-            "W2": {"eligible": False, "reason": "nope"},
+            "W2": {"eligible": False},
         }
 
         mock_classify = MagicMock(side_effect=_mock_classify(classify_results))
@@ -823,7 +815,7 @@ class TestRun:
                 "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
                 mock_classify,
             ),
-            patch("laglitsynth.fulltext_eligibility.eligibility.chat_client"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.decisions_client"),
         ):
             from laglitsynth.fulltext_eligibility.eligibility import run
 
@@ -846,6 +838,66 @@ class TestRun:
         assert "no_source_count" not in meta
         assert meta["tei_parse_failure_count"] == 0
         assert meta["llm_parse_failure_count"] == 0
+
+
+def _one_work_inputs(tmp_path: Path) -> argparse.Namespace:
+    catalogue = tmp_path / "catalogue.jsonl"
+    verdicts_path = tmp_path / "verdicts.jsonl"
+    extractions_path = tmp_path / "extraction.jsonl"
+    _write_works_jsonl(catalogue, [_make_work("W1", abstract="abs")])
+    _write_verdicts_jsonl(verdicts_path, [ScreeningVerdict(work_id="W1", relevance_score=80)])
+    _write_full_text_for(extractions_path, extractions_path.parent, ["W1"])
+    return _make_run_args(
+        tmp_path,
+        catalogue=catalogue,
+        screening_verdicts=verdicts_path,
+        extractions=extractions_path,
+    )
+
+
+class TestRunOnMockEndpoint:
+    """run() against a mocked decisions endpoint, without patching classify."""
+
+    def _run(
+        self, args: argparse.Namespace, handler: Callable[[httpx.Request], httpx.Response]
+    ) -> dict[str, Any]:
+        with patch(
+            "laglitsynth.fulltext_eligibility.eligibility.decisions_client",
+            return_value=_client(handler),
+        ):
+            from laglitsynth.fulltext_eligibility.eligibility import run
+
+            run(args)
+        meta: dict[str, Any] = json.loads(
+            (_resolved_out_dir(args) / "eligibility-meta.json").read_text()
+        )
+        return meta
+
+    def test_rejected_full_text_is_counted(self, tmp_path: Path) -> None:
+        args = _one_work_inputs(tmp_path)
+        meta = self._run(args, lambda r: httpx.Response(400, text="too long"))
+        assert meta["llm_rejected_count"] == 1
+        assert meta["eligible_count"] == 0
+        line = (_resolved_out_dir(args) / "verdicts.jsonl").read_text().splitlines()[0]
+        verdict = EligibilityVerdict.model_validate_json(line)
+        assert verdict.reason == "llm-rejected"
+        assert verdict.probability is None
+
+    def test_decided_verdict_carries_probability(self, tmp_path: Path) -> None:
+        args = _one_work_inputs(tmp_path)
+        meta = self._run(args, _answer(0.62))
+        assert meta["eligible_count"] == 1
+        line = (_resolved_out_dir(args) / "verdicts.jsonl").read_text().splitlines()[0]
+        verdict = EligibilityVerdict.model_validate_json(line)
+        assert verdict.probability == 0.62
+        assert verdict.eligible is True
+
+    def test_criteria_without_decision_block_exits(self, tmp_path: Path) -> None:
+        args = _one_work_inputs(tmp_path)
+        args.eligibility_criteria = {"id": "x", "system_prompt": "old shape"}
+        with pytest.raises(SystemExit, match="no 'decision' block"):
+            self._run(args, _answer(0.9))
+        assert not _resolved_out_dir(args).exists()
 
 
 # --- _active_works join ---
@@ -980,9 +1032,9 @@ def test_run_dir_printed_to_stderr_at_end(
     with (
         patch(
             "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
-            side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
+            side_effect=_mock_classify({"W1": {"eligible": True}}),
         ),
-        patch("laglitsynth.fulltext_eligibility.eligibility.chat_client"),
+        patch("laglitsynth.fulltext_eligibility.eligibility.decisions_client"),
     ):
         from laglitsynth.fulltext_eligibility.eligibility import run
 
@@ -1050,9 +1102,9 @@ def test_concurrency_flag_threaded_to_assess_works(tmp_path: Path) -> None:
     with (
         patch(
             "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
-            side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
+            side_effect=_mock_classify({"W1": {"eligible": True}}),
         ),
-        patch("laglitsynth.fulltext_eligibility.eligibility.chat_client"),
+        patch("laglitsynth.fulltext_eligibility.eligibility.decisions_client"),
         patch(
             "laglitsynth.fulltext_eligibility.eligibility.assess_works",
             side_effect=spy_assess,
@@ -1090,9 +1142,9 @@ def test_concurrency_one_uses_sequential_path(tmp_path: Path) -> None:
     with (
         patch(
             "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
-            side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
+            side_effect=_mock_classify({"W1": {"eligible": True}}),
         ),
-        patch("laglitsynth.fulltext_eligibility.eligibility.chat_client"),
+        patch("laglitsynth.fulltext_eligibility.eligibility.decisions_client"),
         patch("laglitsynth.concurrency.ThreadPoolExecutor", wraps=TPE) as mock_tpe,
     ):
         from laglitsynth.fulltext_eligibility.eligibility import run
@@ -1137,9 +1189,9 @@ class TestConventionalPaths:
         with (
             patch(
                 "laglitsynth.fulltext_eligibility.eligibility.classify_eligibility",
-                side_effect=_mock_classify({"W1": {"eligible": True, "reason": "ok"}}),
+                side_effect=_mock_classify({"W1": {"eligible": True}}),
             ),
-            patch("laglitsynth.fulltext_eligibility.eligibility.chat_client"),
+            patch("laglitsynth.fulltext_eligibility.eligibility.decisions_client"),
         ):
             from laglitsynth.fulltext_eligibility.eligibility import run
 

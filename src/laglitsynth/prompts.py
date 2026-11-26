@@ -1,9 +1,8 @@
-"""Shared loaders for externalized LLM criteria.
+"""Shared loader for externalized decision criteria.
 
-Stages keep their criteria in an external YAML so swapping topics is
-configuration work rather than a code change. A decisions stage reads the
-YAML's ``decision`` block as a ``DecisionQuestion``; a chat stage reads a
-string-valued ``system_prompt`` field. Both loaders accept a path or an
+Stages 3 and 7 keep their criteria in an external YAML so swapping topics
+is configuration work rather than a code change. The YAML's ``decision``
+block is read as a ``DecisionQuestion``, from a path or an
 already-inlined snapshot mapping.
 """
 
@@ -61,19 +60,3 @@ def load_decision_question(spec: str | Path | dict[str, Any]) -> DecisionQuestio
             f"endpoint needs 'decision: {{instructions, criteria: {{true, false}}}}'"
         )
     return DecisionQuestion.model_validate(block)
-
-
-def load_system_prompt(spec: str | Path | dict[str, Any]) -> str:
-    """Return the ``system_prompt`` string from a criteria YAML spec.
-
-    ``spec`` may be a path to a YAML file or an already-loaded mapping
-    (the inlined-snapshot case). The mapping must carry a string-valued
-    ``system_prompt`` field.
-    """
-    loaded = resolve_yaml_arg(spec)
-    prompt = loaded.get("system_prompt")
-    if not isinstance(prompt, str):
-        raise ValueError(
-            "criteria spec must include a string 'system_prompt' field"
-        )
-    return prompt

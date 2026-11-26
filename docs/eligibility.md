@@ -13,27 +13,19 @@ An OpenAI-compatible endpoint and its key as `LLM_API_KEY`; see
 
 ## Prototype scope
 
-A single LLM pass over the extracted full text. Same flag-don't-filter
-pattern as [`screening-abstracts`](screening-abstracts.md): structured
-JSON output, Pydantic validation, verdicts stored in a sidecar keyed by
-`work_id`. This stage is **full-text-only** — a work without a usable
+One decision per paper on the decisions endpoint, with the rendered full
+text as `input`. Same flag-don't-filter pattern as
+[`screening-abstracts`](screening-abstracts.md): the probability is
+stored, verdicts live in a sidecar keyed by `work_id`. This stage is **full-text-only** — a work without a usable
 full-text extraction is not assessed at all (no verdict row, no count);
-the criteria here turn on numerical-method detail that abstracts do not
-carry, so an abstract is not a valid basis for an eligibility decision.
+the full text is the basis of the decision.
 
-The eligibility criteria below are provisional placeholders for the
-prototype. They are deliberately broad — designed to let papers through,
-not to be the final filter. The human turns knobs once the pipeline runs
-and produces reviewable output. False positives are acceptable in the
-prototype; false negatives are not.
+The shipped criteria are deliberately broad — designed to let papers
+through, not to be the final filter. Both must hold:
 
 1. The paper describes a computation that tracks particles, tracers, or
    objects in an ocean flow field.
 2. The paper is primary research (not a review, editorial, or commentary).
-3. The paper contains at least some description of the numerical methods
-   used. (Under discussion: lack of method description is poor practice
-   but may not disqualify a paper from relevance. This criterion may be
-   relaxed in a later iteration.)
 
 ## Input
 
@@ -73,27 +65,22 @@ full-text extraction).
 class EligibilityVerdict(BaseModel):
     model_config = ConfigDict(extra="forbid")
     work_id: str
-    eligible: bool | None              # None for sentinel-reason skips
-    reason: str | None                 # LLM free-text or sentinel
-    raw_response: str | None           # LLM's raw message content; None when no call was made
+    probability: float | None          # decisions-endpoint answer; None for sentinels
+    eligible: bool | None              # probability >= 0.5; None for sentinels
+    reason: str | None                 # sentinel reason; None on a decided verdict
+    raw_response: str | None           # response or error body; None when none was received
 ```
 
 Every verdict is full-text-based, so there is no `source_basis` field —
-the basis is implicit. `eligible` is tri-state. `True` and `False` are
-real LLM verdicts; `None` indicates a sentinel skip — the LLM was not
-called or its output could not be parsed. See
-[Sentinel reasons](#sentinel-reasons) below.
+the basis is implicit. `eligible` is tri-state: `True` and `False` are the
+probability cut at a fixed 0.5; `None` marks a sentinel. The probability
+is kept, so any other cut is made ad hoc on `verdicts.jsonl` without a
+re-run. The endpoint returns no justification, so `reason` is set only
+for sentinels. See [Sentinel reasons](#sentinel-reasons) below.
 
-`raw_response` captures the LLM's message text before parsing. Present
-on successful verdicts, on `llm-parse-failure` sentinels (the message)
-and on `llm-rejected` sentinels (the error body); `None` on
-`tei-parse-failure` and `llm-timeout`.
-
-The LLM's response is validated through a private
-[`_EligibilityPayload`](../src/laglitsynth/fulltext_eligibility/models.py)
-pydantic submodel. A `mode="before"` validator drops unknown keys
-(LLMs sprinkle extras) and coerces a `reason`
-returned as a list into a `" / "`-joined string.
+`raw_response` is the endpoint's response body on a decided verdict, the
+body on `llm-parse-failure` and the error body on `llm-rejected`; `None`
+on `tei-parse-failure` and `llm-timeout`.
 
 ### EligibilityMeta
 
@@ -112,15 +99,16 @@ class EligibilityMeta(BaseModel):
     llm_parse_failure_count: int
     llm_timeout_count: int
     llm_rejected_count: int
-    criterion: str        # the eligibility-criteria system prompt, verbatim
+    criterion: str        # the predicate instructions sent, verbatim
 ```
 
 `run` and `llm` are the shared reproducibility nests from
 [`src/laglitsynth/models.py`](../src/laglitsynth/models.py) — they
 carry `tool`, `tool_version`, `run_at`, `validation_skipped`, `model`,
-`base_url`, `decisions_url`, and `prompt_sha256`. `prompt_sha256` covers the loaded
-eligibility-criteria system prompt and `USER_TEMPLATE`, so any prompt
-change shifts the hash.
+`base_url`, `decisions_url`, and `prompt_sha256`. `prompt_sha256` is
+[`criteria_sha256`](../src/laglitsynth/fulltext_eligibility/eligibility.py)
+of the criteria: the sha256 of the `decision` block's canonical JSON +
+`"\n"` + `USER_TEMPLATE`, so any change to the question shifts the hash.
 
 `input_count` is the number of works that reached the stage (had a
 full-text extraction) — works skipped for lack of full text are neither
@@ -128,9 +116,10 @@ counted nor flagged. Per-sentinel counts (`tei_parse_failure_count`,
 `llm_parse_failure_count`, `llm_timeout_count`, `llm_rejected_count`) let operators diagnose a
 run without re-reading `verdicts.jsonl`. There is no `no_source_count`
 or `by_source_basis` — with full-text the only basis, a per-basis
-breakdown carries no information. `criterion` records the criteria
-system prompt verbatim, so the question the LLM saw is readable without
-re-loading the criteria YAML.
+breakdown carries no information. `criterion` records the predicate
+instructions sent (the `decision` block's `instructions` followed by its
+true and false criteria), so the question is readable without re-loading
+the criteria YAML.
 
 ## Storage layout
 
@@ -157,24 +146,23 @@ work:
 2. If the render is empty (valid XML, no body content), record a
    `tei-parse-failure` sentinel (no LLM call) — a paper we hold a PDF
    for but cannot read is a broken extraction.
-3. Otherwise call the LLM and record its verdict.
+3. Otherwise send the rendered text as one decision and record the verdict.
 
 ## Sentinel reasons
 
-All sentinels set `eligible=None`. Downstream consumers
+All sentinels set `probability=None` and `eligible=None`. Downstream consumers
 join the catalogue against `verdicts.jsonl` filtering for `eligible is True`,
 so sentinel records are naturally excluded from the active work set.
 
 | Reason | Trigger |
 |---|---|
 | `tei-parse-failure` | `sections()` raises `lxml.etree.XMLSyntaxError`, or renders empty. A paper with a PDF but unreadable TEI is an operator-visible bug, unlike a plain absence of full text (which is silently skipped). |
-| `llm-parse-failure` | The LLM returned output that could not be parsed into `{"eligible": bool, "reason": str}`. |
-| `llm-timeout` | The OpenAI client raised `APITimeoutError`, `APIConnectionError`, `RateLimitError` or `InternalServerError` after all retries exhausted. The client is constructed with `timeout=300s` and `max_retries=3` so a single hang on a long full-text prompt does not kill the stage. |
-| `llm-rejected` | The endpoint refused the request (`BadRequestError`, or another 4xx that is not fatal), for example a full text longer than the model's context. `raw_response` carries the error body. |
+| `llm-parse-failure` | A 2xx body without a probability in [0, 1] for the answer named `eligible`. |
+| `llm-timeout` | Transport errors, HTTP 5xx or 429 on every attempt (four, with a growing backoff; each request times out after 300 s). |
+| `llm-rejected` | The endpoint refused the request with another 4xx, for example a full text longer than the model's context. `raw_response` carries the error body. |
 
-Errors that fail every work the same way (`AuthenticationError`,
-`PermissionDeniedError`, `NotFoundError`, a 402) make the stage exit
-naming the base URL.
+HTTP 401, 402, 403 and 404 fail every work the same way, so the stage
+exits naming the decisions URL.
 
 There is no `no-source` sentinel: a work without full text is simply not
 processed, not flagged.
@@ -185,7 +173,7 @@ processed, not flagged.
 walks `tei.sections()` depth-first. Each section contributes a block
 whose first line is the title (when present) followed by its paragraphs
 (one per line); nested children contribute further blocks. Blocks are
-joined by blank lines. Figures and bibliography are dropped — the three
+joined by blank lines. Figures and bibliography are dropped — the
 criteria are answered from body text. Empty `sections()` returns the
 empty string, which the caller records as a `tei-parse-failure`
 sentinel (there is no abstract fallback).
@@ -203,7 +191,7 @@ laglitsynth fulltext-eligibility \
     [--eligibility-criteria examples/eligibility-criteria/lagrangian-oceanography.yaml] \
     [--config <run-dir>/config.yaml] \
     [--skip-existing] [--max-records N] [--dry-run] \
-    --base-url URL --model MODEL [--api-key KEY] \
+    --base-url URL --model MODEL [--api-key KEY] [--decisions-url URL] \
     [--concurrency 1]
 ```
 
@@ -232,8 +220,8 @@ to run (see [run-manifest.md](run-manifest.md)).
 - `--run-id`: run identifier, shared with the screening run whose verdicts
   are read. Default: the `run_id` in `<data-dir>/manifest.json`; the stage
   exits when neither is available.
-- `--eligibility-criteria`: path to the YAML carrying the LLM system
-  prompt (default:
+- `--eligibility-criteria`: path to the YAML carrying the `decision`
+  block (default:
   `examples/eligibility-criteria/lagrangian-oceanography.yaml`). The
   file's contents are inlined into `config.yaml` on save so a run dir
   is a self-contained run snapshot. See [configs.md](configs.md).
@@ -249,50 +237,32 @@ to run (see [run-manifest.md](run-manifest.md)).
 - `--max-records`: process only the first N works from the catalogue.
 - `--dry-run`: print verdicts to stderr without writing any output.
 - `--base-url`, `--model`: the OpenAI-compatible base URL (including
-  `/v1`) and the model. Both required. The full rendered text is sent; a
+  `/v1`) and the decisions model. Both required. The full rendered text is sent; a
   text longer than the model's context is the endpoint's to reject, which
   gives `llm-rejected`.
 - `--api-key`: the key; falls back to `LLM_API_KEY` in the environment,
   then in `.env`. Never written to `config.yaml`.
+- `--decisions-url`: the decisions endpoint (default:
+  `<base-url>/decisions`).
 - `--concurrency`: number of in-flight LLM requests (default: `1`).
-  Stage 7's prompts are less prefill-heavy than stage 8's, so it can
-  tolerate higher concurrency than stage 8 on the same GPU.
   See [llm-concurrency.md](llm-concurrency.md).
 
-## LLM prompt
+## Request
 
-Loaded at runtime from the YAML pointed at by `--eligibility-criteria`
-(default: the shipped Lagrangian-oceanography criterion). The file's
-`system_prompt` field is sent verbatim as the system message; the
-digest is recorded as `meta.llm.prompt_sha256`.
+The question is loaded at runtime from the `decision` block of the YAML
+pointed at by `--eligibility-criteria`; a file without one exits before
+any request, naming the file. One `POST` per work to the decisions URL,
+in OpenAI's Decisions shape:
 
-```
-System: You are assessing whether a scientific paper meets the inclusion
-criteria for a systematic review of numerical methods in Lagrangian
-oceanography.
-
-Criteria:
-1. The paper describes a computation that tracks particles, tracers, or
-   objects in an ocean flow field.
-2. The paper is primary research (not a review, editorial, or commentary).
-3. The paper contains at least some description of the numerical methods
-   used.
-
-Respond with JSON: {"eligible": true|false, "reason": "<one sentence>"}.
-
-User: full_text:
-<rendered text>
+```json
+{
+  "model": "<model>",
+  "input": "<rendered full text>",
+  "questions": [
+    {"type": "predicate", "name": "eligible",
+     "instructions": "<instructions>\n\nTrue if: <true>\nFalse if: <false>"}
+  ]
+}
 ```
 
-The request carries `model`, `messages` and
-`response_format={"type": "json_object"}` only; no temperature or seed
-is sent.
-
-## What to defer
-
-- Fine-grained exclusion reasons (enum of why a paper was excluded).
-- Per-criterion verdicts (three booleans).
-- Calibration against human judgments.
-- Threshold-based re-eligibility (currently binary).
-- Chunking or retrieval over long papers; prompt length policy is
-  addressed as a follow-up in the stage 7 plan.
+The probability is read from the answer named `eligible`.

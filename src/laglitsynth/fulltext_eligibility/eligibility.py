@@ -1,4 +1,10 @@
-"""LLM-based full-text eligibility assessment."""
+"""Full-text eligibility assessment on the decisions endpoint.
+
+Each work's rendered full text is sent as the ``input`` of one decision
+whose predicate question comes from the eligibility-criteria YAML's
+``decision`` block. The answer's probability is stored on the verdict and
+cut at 0.5 into ``eligible``.
+"""
 
 from __future__ import annotations
 
@@ -11,26 +17,20 @@ import time
 from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
+import httpx
 from lxml import etree
-from openai import OpenAI
-from pydantic import ValidationError
 
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.concurrency import map_concurrent
-from laglitsynth.config import register_config_arg, resolve_yaml_arg, save_resolved_config
+from laglitsynth.config import register_config_arg, save_resolved_config
 from laglitsynth.fulltext_eligibility.models import (
     TOOL_NAME,
     EligibilityMeta,
     EligibilityVerdict,
-    _EligibilityPayload,
 )
-from laglitsynth.fulltext_eligibility.prompts import (
-    USER_TEMPLATE,
-    build_user_message,
-    load_system_prompt,
-    render_fulltext,
-)
+from laglitsynth.fulltext_eligibility.prompts import USER_TEMPLATE, render_fulltext
 from laglitsynth.fulltext_extraction.models import ExtractedDocument
 from laglitsynth.io import (
     JsonlReadStats,
@@ -46,14 +46,14 @@ from laglitsynth.layout import (
 )
 from laglitsynth.llm import (
     LlmEndpoint,
-    LlmFailure,
     add_endpoint_args,
-    chat_client,
-    chat_json,
+    decide,
+    decisions_client,
     resolve_endpoint,
 )
 from laglitsynth.manifest import resolve_run_id
 from laglitsynth.models import RunMeta
+from laglitsynth.prompts import DecisionQuestion, load_decision_question
 from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,29 @@ DEFAULT_ELIGIBILITY_CRITERIA = Path(
     "examples/eligibility-criteria/lagrangian-oceanography.yaml"
 )
 
-_LLM_TIMEOUT_SECONDS = 300
+_LLM_TIMEOUT_SECONDS = 300.0
+
+# Answer name of the eligibility predicate question.
+QUESTION_NAME = "eligible"
+
+# Probability at or above which a work is eligible. Any other cut is made
+# ad hoc on verdicts.jsonl, which keeps the probability.
+ELIGIBLE_AT = 0.5
+
+
+def question_sha256(question: DecisionQuestion) -> str:
+    """Prompt hash of a decisions stage: question JSON + input marker."""
+    return hashlib.sha256(
+        (question.canonical_json() + "\n" + USER_TEMPLATE).encode("utf-8")
+    ).hexdigest()
+
+
+def criteria_sha256(spec: str | Path | dict[str, Any]) -> str:
+    """The ``prompt_sha256`` stage 7 records for an eligibility-criteria spec.
+
+    Raises ``ValueError`` naming the spec when it has no ``decision`` block.
+    """
+    return question_sha256(load_decision_question(spec))
 
 
 def _active_works(
@@ -96,44 +118,26 @@ def _active_works(
 
 def classify_eligibility(
     work_id: str,
-    prompt: str,
+    text: str,
     *,
     endpoint: LlmEndpoint,
-    client: OpenAI,
-    system_prompt: str,
+    client: httpx.Client,
+    question: DecisionQuestion,
 ) -> EligibilityVerdict:
-    """Call the LLM, validate the payload, compose the verdict.
+    """Decide one work on its rendered full text and compose the verdict.
 
-    A per-work endpoint failure gives the ``llm-timeout`` or
-    ``llm-rejected`` sentinel; a JSON parse error or ``ValidationError``
-    gives ``llm-parse-failure``. Both keep the raw response for audit.
+    ``eligible`` is ``probability >= 0.5``. A sentinel from ``decide``
+    (``llm-timeout``, ``llm-rejected``, ``llm-parse-failure``) leaves both
+    ``None`` and lands in ``reason``.
     """
-    try:
-        content = chat_json(
-            client, endpoint, work_id=work_id, system=system_prompt, user=prompt
-        )
-    except LlmFailure as exc:
-        return EligibilityVerdict(
-            work_id=work_id,
-            eligible=None,
-            reason=exc.reason,
-            raw_response=exc.raw_response,
-        )
-    try:
-        payload = _EligibilityPayload.model_validate_json(content)
-    except (ValidationError, ValueError) as exc:
-        logger.warning("LLM parse failure for %s: %s", work_id, exc)
-        return EligibilityVerdict(
-            work_id=work_id,
-            eligible=None,
-            reason="llm-parse-failure",
-            raw_response=content,
-        )
+    decision = decide(client, endpoint, input=text, name=QUESTION_NAME, question=question)
+    probability = decision.probability
     return EligibilityVerdict(
         work_id=work_id,
-        eligible=payload.eligible,
-        reason=payload.reason,
-        raw_response=content,
+        probability=probability,
+        eligible=None if probability is None else probability >= ELIGIBLE_AT,
+        reason=decision.reason,
+        raw_response=decision.raw_response,
     )
 
 
@@ -148,10 +152,10 @@ def assess_works(
     extractions: dict[str, ExtractedDocument],
     extraction_output_dir: Path,
     *,
-    client: OpenAI,
+    client: httpx.Client,
     endpoint: LlmEndpoint,
     max_records: int | None,
-    system_prompt: str,
+    question: DecisionQuestion,
     skip_ids: set[str] | None = None,
     concurrency: int = 1,
 ) -> Iterator[EligibilityVerdict]:
@@ -171,7 +175,7 @@ def assess_works(
 
     def _call_one(work: Work) -> EligibilityVerdict:
         return _assess_one(
-            work, extractions, extraction_output_dir, client, endpoint, system_prompt
+            work, extractions, extraction_output_dir, client, endpoint, question
         )
 
     yield from map_concurrent(_call_one, eligible, max_workers=concurrency)
@@ -181,9 +185,9 @@ def _assess_one(
     work: Work,
     extractions: dict[str, ExtractedDocument],
     extraction_output_dir: Path,
-    client: OpenAI,
+    client: httpx.Client,
     endpoint: LlmEndpoint,
-    system_prompt: str,
+    question: DecisionQuestion,
 ) -> EligibilityVerdict:
     # Full text or nothing: the active set is already gated on extraction
     # presence, so ``extractions[work.id]`` is always set here.
@@ -211,13 +215,12 @@ def _assess_one(
             eligible=None,
             reason="tei-parse-failure",
         )
-    prompt = build_user_message(rendered)
     return classify_eligibility(
         work.id,
-        prompt,
+        rendered,
         endpoint=endpoint,
         client=client,
-        system_prompt=system_prompt,
+        question=question,
     )
 
 
@@ -226,7 +229,7 @@ def build_subparser(
 ) -> argparse.ArgumentParser:
     parser = subparsers.add_parser(
         "fulltext-eligibility",
-        help="Assess full-text eligibility of included works with an LLM.",
+        help="Assess full-text eligibility of included works on the decisions endpoint.",
     )
     parser.add_argument(
         "--catalogue",
@@ -279,12 +282,12 @@ def build_subparser(
         "--eligibility-criteria",
         default=str(DEFAULT_ELIGIBILITY_CRITERIA),
         help=(
-            f"Eligibility-criteria YAML — path to a spec on the CLI; on "
-            f"reload from a saved snapshot, the inlined mapping is "
-            f"consumed directly (default: {DEFAULT_ELIGIBILITY_CRITERIA})."
+            f"Eligibility-criteria YAML carrying a 'decision' block — path to "
+            f"a spec on the CLI; on reload from a saved snapshot, the inlined "
+            f"mapping is consumed directly (default: {DEFAULT_ELIGIBILITY_CRITERIA})."
         ),
     )
-    add_endpoint_args(parser, decisions=False)
+    add_endpoint_args(parser, decisions=True)
     parser.add_argument(
         "--max-records",
         type=int,
@@ -329,12 +332,12 @@ def run(args: argparse.Namespace) -> None:
         else Path(args.extractions).parent
     )
 
-    criteria_spec = resolve_yaml_arg(args.eligibility_criteria)
-    system_prompt = load_system_prompt(criteria_spec)
-
-    prompt_sha256 = hashlib.sha256(
-        (system_prompt + "\n" + USER_TEMPLATE).encode("utf-8")
-    ).hexdigest()
+    # Pass the un-resolved spec so a missing block names the file.
+    try:
+        question = load_decision_question(args.eligibility_criteria)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    prompt_sha256 = question_sha256(question)
 
     # Prompt-hash guard: refuse --skip-existing when the recorded hash differs.
     if args.skip_existing and meta_path.exists():
@@ -395,44 +398,44 @@ def run(args: argparse.Namespace) -> None:
     if not args.dry_run and not args.skip_existing and verdicts_path.exists():
         verdicts_path.unlink()
 
-    client = chat_client(endpoint, _LLM_TIMEOUT_SECONDS)
+    client = decisions_client(endpoint, _LLM_TIMEOUT_SECONDS)
 
     t0 = time.monotonic()
     index = 0
     new_verdicts: list[EligibilityVerdict] = []
 
-    for verdict in assess_works(
-        active,
-        extractions,
-        extraction_output_dir,
-        client=client,
-        endpoint=endpoint,
-        max_records=args.max_records,
-        system_prompt=system_prompt,
-        skip_ids=skip_ids,
-        concurrency=args.concurrency,
-    ):
-        index += 1
-        new_verdicts.append(verdict)
-        if not args.dry_run:
-            append_jsonl(verdict, verdicts_path)
+    try:
+        for verdict in assess_works(
+            active,
+            extractions,
+            extraction_output_dir,
+            client=client,
+            endpoint=endpoint,
+            max_records=args.max_records,
+            question=question,
+            skip_ids=skip_ids,
+            concurrency=args.concurrency,
+        ):
+            index += 1
+            new_verdicts.append(verdict)
+            if not args.dry_run:
+                append_jsonl(verdict, verdicts_path)
 
-        if verdict.eligible is True:
-            print(
-                f"  [{index}/{total}] eligible — {verdict.work_id[-12:]}",
-                file=sys.stderr,
-            )
-        elif verdict.eligible is False:
-            print(
-                f"  [{index}/{total}] excluded — {verdict.work_id[-12:]}",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                f"  [{index}/{total}] skipped ({verdict.reason})"
-                f" — {verdict.work_id[-12:]}",
-                file=sys.stderr,
-            )
+            if verdict.eligible is None:
+                print(
+                    f"  [{index}/{total}] skipped ({verdict.reason})"
+                    f" — {verdict.work_id[-12:]}",
+                    file=sys.stderr,
+                )
+            else:
+                label = "eligible" if verdict.eligible else "excluded"
+                print(
+                    f"  [{index}/{total}] {label} (p={verdict.probability:.2f})"
+                    f" — {verdict.work_id[-12:]}",
+                    file=sys.stderr,
+                )
+    finally:
+        client.close()
 
     elapsed = time.monotonic() - t0
 
@@ -493,7 +496,7 @@ def run(args: argparse.Namespace) -> None:
             llm_parse_failure_count=llm_parse_failure_count,
             llm_timeout_count=llm_timeout_count,
             llm_rejected_count=llm_rejected_count,
-            criterion=system_prompt,
+            criterion=question.render(),
         ),
     )
     print(f"Run dir: {output_dir}", file=sys.stderr)

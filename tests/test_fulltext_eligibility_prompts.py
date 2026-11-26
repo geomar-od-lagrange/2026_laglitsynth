@@ -6,29 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from laglitsynth.fulltext_eligibility.prompts import (
-    build_user_message,
-    load_system_prompt,
-    render_fulltext,
-)
+from laglitsynth.fulltext_eligibility.eligibility import criteria_sha256, question_sha256
+from laglitsynth.fulltext_eligibility.prompts import render_fulltext
 from laglitsynth.fulltext_extraction.tei import TeiDocument
-
-# Verbatim transcription of the original module-level SYSTEM_PROMPT
-# (from the pre-YAML version of prompts.py). The shipped default
-# eligibility-criteria YAML must reproduce this byte-for-byte.
-LEGACY_SYSTEM_PROMPT = """\
-You are assessing whether a scientific paper meets the inclusion criteria
-for a systematic review of numerical methods in Lagrangian oceanography.
-
-Criteria:
-1. The paper describes a computation that tracks particles, tracers, or
-   objects in an ocean flow field.
-2. The paper is primary research (not a review, editorial, or commentary).
-3. The paper contains at least some description of the numerical methods
-   used.
-
-Respond with JSON: {"eligible": true|false, "reason": "<one sentence>"}.
-Return ONLY the JSON object, nothing else."""
+from laglitsynth.prompts import DecisionQuestion, load_decision_question
 
 DEFAULT_CRITERIA_PATH = Path("examples/eligibility-criteria/lagrangian-oceanography.yaml")
 
@@ -93,29 +74,44 @@ class TestRenderFulltext:
         assert text == "Only a paragraph."
 
 
-class TestBuildUserMessage:
-    def test_full_text_tag(self) -> None:
-        msg = build_user_message("body text")
-        assert msg == "full_text:\nbody text"
+class TestExampleCriteria:
+    def test_loads_as_decision_question(self) -> None:
+        question = load_decision_question(DEFAULT_CRITERIA_PATH)
+        assert isinstance(question, DecisionQuestion)
+        assert question.instructions
+        assert question.criteria.true
+        assert question.criteria.false
+
+    def test_covers_criteria_one_and_two_only(self) -> None:
+        question = load_decision_question(DEFAULT_CRITERIA_PATH)
+        text = question.render().lower()
+        assert "ocean flow field" in text
+        assert "primary research" in text
+        assert "numerical methods used" not in text
+
+    def test_has_no_system_prompt(self) -> None:
+        import yaml
+
+        loaded = yaml.safe_load(DEFAULT_CRITERIA_PATH.read_text(encoding="utf-8"))
+        assert "system_prompt" not in loaded
 
 
-class TestLoadSystemPrompt:
-    def test_default_yaml_reproduces_legacy_prompt_byte_for_byte(self) -> None:
-        loaded = load_system_prompt(DEFAULT_CRITERIA_PATH)
-        assert loaded == LEGACY_SYSTEM_PROMPT
+class TestCriteriaSha256:
+    def test_path_and_inlined_spec_hash_equal(self) -> None:
+        import yaml
 
-    def test_loads_from_inlined_dict(self) -> None:
-        spec = {"id": "x", "system_prompt": "hello world"}
-        assert load_system_prompt(spec) == "hello world"
+        inlined = yaml.safe_load(DEFAULT_CRITERIA_PATH.read_text(encoding="utf-8"))
+        assert criteria_sha256(DEFAULT_CRITERIA_PATH) == criteria_sha256(inlined)
 
-    def test_missing_system_prompt_key_raises(self) -> None:
-        with pytest.raises(ValueError, match="system_prompt"):
-            load_system_prompt({"id": "x"})
+    def test_equals_question_hash(self) -> None:
+        question = load_decision_question(DEFAULT_CRITERIA_PATH)
+        assert criteria_sha256(DEFAULT_CRITERIA_PATH) == question_sha256(question)
 
-    def test_alternate_yaml_changes_prompt(self, tmp_path: Path) -> None:
-        alt = tmp_path / "alt.yaml"
-        alt.write_text(
-            "id: alt\nsystem_prompt: |-\n  Alternate criterion text.\n",
-            encoding="utf-8",
-        )
-        assert load_system_prompt(alt) == "Alternate criterion text."
+    def test_changes_with_wording(self) -> None:
+        a = {"decision": {"instructions": "Q?", "criteria": {"true": "t", "false": "f"}}}
+        b = {"decision": {"instructions": "Q!", "criteria": {"true": "t", "false": "f"}}}
+        assert criteria_sha256(a) != criteria_sha256(b)
+
+    def test_spec_without_decision_raises(self) -> None:
+        with pytest.raises(ValueError, match="decision"):
+            criteria_sha256({"id": "x"})

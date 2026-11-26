@@ -17,11 +17,11 @@ The stages take the same flags:
   environment, then from `.env` (see [.env.example](../.env.example)), and
   exits naming `LLM_API_KEY` when none is set. The key is never written to
   a run's `config.yaml`, and the runner never passes it as a flag.
-- `--decisions-url` (stage 3) — the decisions endpoint, default
+- `--decisions-url` (stages 3 and 7) — the decisions endpoint, default
   `<base-url>/decisions`, for a provider that serves it elsewhere.
 
-Stage 3 sends OpenAI's Decisions request shape to the decisions URL;
-stages 7 and 8 send JSON-mode chat completions to the base URL, with no
+Stages 3 and 7 send OpenAI's Decisions request shape to the decisions
+URL; stage 8 sends JSON-mode chat completions to the base URL, with no
 temperature or seed. A wrong URL or key shows up on the first request: HTTP
 401, 402, 403 and 404 make the stage exit naming the URL. See
 [screening-abstracts.md](screening-abstracts.md#errors-and-retries) for the

@@ -37,7 +37,7 @@
 #                          stage 5 with EXPORT_GAP=1
 #   LLM_BASE_URL           OpenAI-compatible base URL including /v1; no
 #                          default. Required (env or config) from stage 3 on
-#   LLM_DECISIONS_URL      decisions endpoint for stage 3, passed as
+#   LLM_DECISIONS_URL      decisions endpoint for stages 3 and 7, passed as
 #                          --decisions-url when set (default: the CLI's
 #                          <LLM_BASE_URL>/decisions)
 #   SCREENING_MODEL, ELIGIBILITY_MODEL, EXTRACTION_MODEL
@@ -218,6 +218,7 @@ run_stage 7 fulltext-eligibility \
         --data-dir "$ROOT" \
         ${run_id_flags[@]+"${run_id_flags[@]}"} \
         --base-url "$LLM_BASE_URL" \
+        ${decisions_url_flags[@]+"${decisions_url_flags[@]}"} \
         --model "$ELIGIBILITY_MODEL" \
         --concurrency "$ELIGIBILITY_CONCURRENCY"
 
