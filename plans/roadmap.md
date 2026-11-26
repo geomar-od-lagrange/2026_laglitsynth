@@ -244,6 +244,16 @@ Update this file when a plan is written, implemented, or archived.
   Re-screen with an inverted wording and measure both against full-text
   eligibility verdicts on every PDF before choosing a threshold. Scope
   wording is issue #26.
+- `--skip-existing` in stages 7 and 8 skips works whose last record is
+  a sentinel (`llm-rejected`, `llm-timeout`), so a run that hit a budget
+  limit or an outage cannot be resumed without editing its JSONL by hand
+  ([first-full-run-2026-11.md](../docs/explorations/first-full-run-2026-11.md)).
+  Retry sentinel works instead.
+- Codebook items `config_available` and `rationale` come back filled for
+  nearly every paper: the questions don't separate configuration published
+  as files from settings described in prose, or a rationale for the
+  numerical choices from other reasons
+  ([first-full-run-2026-11.md](../docs/explorations/first-full-run-2026-11.md#first-look-at-the-codebook)).
 - Title-based import matching for returned PDFs that embed no DOI
   ([contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md)),
   tuned against the measured publisher-PDF corpus rather than an invented
