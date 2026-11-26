@@ -55,7 +55,7 @@ class EligibilityVerdict(BaseModel):
     work_id: str
     eligible: bool | None = None  # None for sentinel-reason skips
     reason: str | None = None  # LLM free-text or sentinel
-    seed: int | None = None  # Ollama seed used for this call; None for sentinel reasons
+    seed: int | None = None  # seed sent with this call; None for sentinel reasons
     raw_response: str | None = None  # LLM's raw message content; None when no call was made
 
 

@@ -72,14 +72,12 @@ def _call_extract(
     work_id: str = "W1",
     user_text: str = "body",
     client: Any,
-    truncated: bool = False,
 ) -> BaseModel:
     return extract_codebook(  # type: ignore[return-value]
         work_id,
         user_text,
         client=client,
         model="m",
-        truncated=truncated,
         ctx=ctx,
     )
 
@@ -146,18 +144,9 @@ class TestExtractCodebook:
         assert record.work_id == "W1"  # type: ignore[attr-defined]
         assert record.reason is None  # type: ignore[attr-defined]
         assert isinstance(record.seed, int)  # type: ignore[attr-defined]
-        assert record.truncated is False  # type: ignore[attr-defined]
+        assert "truncated" not in record.model_dump()
+        assert "extra_body" not in client.chat.completions.create.call_args.kwargs
         assert record.integration_scheme == "v:integration_scheme"  # type: ignore[attr-defined]
-
-    def test_truncated_flag_forwarded(self, ctx: CodebookContext) -> None:
-        resp = _mock_openai_response(
-            _valid_payload_json(ctx.payload_field_names)
-        )
-        client = MagicMock()
-        client.chat.completions.create.return_value = resp
-        record = _call_extract(ctx, client=client, truncated=True)
-        assert record.truncated is True  # type: ignore[attr-defined]
-        assert record.reason is None  # type: ignore[attr-defined]
 
     def test_seed_forwarded_to_client(self, ctx: CodebookContext) -> None:
         resp = _mock_openai_response(
@@ -178,7 +167,6 @@ class TestExtractCodebook:
         record = _call_extract(ctx, client=client)
         assert record.reason == "llm-timeout"  # type: ignore[attr-defined]
         assert record.seed is None  # type: ignore[attr-defined]
-        assert record.truncated is False  # type: ignore[attr-defined]
         assert record.raw_response is None  # type: ignore[attr-defined]
         for name in ctx.payload_field_names:
             assert getattr(record, name) is None
@@ -235,56 +223,6 @@ class TestExtractCodebook:
         record = _call_extract(ctx, client=client)
         assert record.reason == "llm-parse-failure"  # type: ignore[attr-defined]
         assert record.raw_response == content  # type: ignore[attr-defined]
-
-
-# --- num_ctx threading ---
-
-
-def test_num_ctx_flag_threads_to_options(ctx: CodebookContext) -> None:
-    """--num-ctx value reaches extra_body["options"]["num_ctx"] in the Ollama call."""
-    resp = _mock_openai_response(_valid_payload_json(ctx.payload_field_names))
-    client = MagicMock()
-    client.chat.completions.create.return_value = resp
-    extract_codebook(
-        "W1",
-        "body text",
-        client=client,
-        model="m",
-        truncated=False,
-        ctx=ctx,
-        num_ctx=16384,
-    )
-    call_kwargs = client.chat.completions.create.call_args[1]
-    assert call_kwargs["extra_body"]["options"]["num_ctx"] == 16384
-
-
-def test_num_ctx_changes_prompt_hash(ctx: CodebookContext) -> None:
-    """Different --num-ctx values produce different prompt_sha256 hashes."""
-    from laglitsynth.extraction_codebook.prompts import CHAR_BUDGET, USER_TEMPLATE
-
-    hash_a = hashlib.sha256(
-        (
-            ctx.system_prompt
-            + "\n"
-            + USER_TEMPLATE
-            + "\n"
-            + str(32768)
-            + "\n"
-            + str(CHAR_BUDGET)
-        ).encode("utf-8")
-    ).hexdigest()
-    hash_b = hashlib.sha256(
-        (
-            ctx.system_prompt
-            + "\n"
-            + USER_TEMPLATE
-            + "\n"
-            + str(16384)
-            + "\n"
-            + str(CHAR_BUDGET)
-        ).encode("utf-8")
-    ).hexdigest()
-    assert hash_a != hash_b
 
 
 # --- extract_works cascade ---
@@ -373,7 +311,7 @@ class TestExtractWorksCascade:
         assert records[0].reason == "tei-parse-failure"  # type: ignore[attr-defined]
         client.chat.completions.create.assert_not_called()
 
-    def test_truncation_flag_on_over_budget_body(
+    def test_long_body_sent_whole(
         self, tmp_path: Path, ctx: CodebookContext
     ) -> None:
         extractions_path = tmp_path / "extraction.jsonl"
@@ -408,7 +346,11 @@ class TestExtractWorksCascade:
         )
         assert len(records) == 1
         assert records[0].reason is None  # type: ignore[attr-defined]
-        assert records[0].truncated is True  # type: ignore[attr-defined]
+        messages = client.chat.completions.create.call_args.kwargs["messages"]
+        user_message = messages[-1]["content"]
+        for i in range(5):
+            assert f"H{i}" in user_message
+        assert user_message.count("x" * 20_000) == 5
 
 
 # --- run() end-to-end ---
@@ -425,7 +367,6 @@ def _make_run_args(
     max_records: int | None = None,
     run_id: str = "test-run-id",
     extraction_output_dir: Path | None = None,
-    num_ctx: int = 32768,
     concurrency: int = 1,
 ) -> argparse.Namespace:
     return argparse.Namespace(
@@ -440,7 +381,6 @@ def _make_run_args(
         codebook=DEFAULT_CODEBOOK_PATH,
         model="m",
         base_url="http://x",
-        num_ctx=num_ctx,
         max_records=max_records,
         skip_existing=skip_existing,
         dry_run=dry_run,
@@ -487,7 +427,6 @@ class TestRun:
             _valid_payload_json(ctx.payload_field_names)
         )
         with (
-            patch("laglitsynth.extraction_codebook.extract.preflight"),
             patch(
                 "laglitsynth.extraction_codebook.extract.OpenAI",
                 return_value=mock_client,
@@ -535,7 +474,6 @@ class TestRun:
             _valid_payload_json(ctx.payload_field_names)
         )
         with (
-            patch("laglitsynth.extraction_codebook.extract.preflight"),
             patch(
                 "laglitsynth.extraction_codebook.extract.OpenAI",
                 return_value=mock_client,
@@ -563,7 +501,7 @@ class TestRun:
         assert meta["full_text_count"] == 2
         assert meta["skipped_count"] == 0
         assert meta["llm_parse_failure_count"] == 0
-        assert meta["truncated_count"] == 0
+        assert "truncated_count" not in meta
         assert "abstract_only_count" not in meta
         assert "by_source_basis" not in meta
         assert meta["run"]["tool"] == "laglitsynth.extraction_codebook.extract"
@@ -594,7 +532,6 @@ class TestRun:
             _valid_payload_json(ctx.payload_field_names)
         )
         with (
-            patch("laglitsynth.extraction_codebook.extract.preflight"),
             patch(
                 "laglitsynth.extraction_codebook.extract.OpenAI",
                 return_value=mock_client,
@@ -655,7 +592,6 @@ class TestRun:
             "skipped_count": 0,
             "llm_parse_failure_count": 0,
             "llm_timeout_count": 0,
-            "truncated_count": 0,
         }
         # Validate the dict is a real valid ExtractionCodebookMeta shape; if the
         # model changes, this assertion fails loudly instead of silently.
@@ -674,7 +610,6 @@ class TestRun:
         )
 
         with (
-            patch("laglitsynth.extraction_codebook.extract.preflight"),
             patch("laglitsynth.extraction_codebook.extract.OpenAI"),
         ):
             from laglitsynth.extraction_codebook.extract import run
@@ -717,7 +652,6 @@ class TestRun:
 
         mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
         with (
-            patch("laglitsynth.extraction_codebook.extract.preflight"),
             patch(
                 "laglitsynth.extraction_codebook.extract.OpenAI",
                 return_value=mock_client,
@@ -762,7 +696,6 @@ class TestRun:
             work_id="W1",
             reason=None,
             seed=1,
-            truncated=False,
             **payload_fields,
         )
         (out_dir / "records.jsonl").write_text(prior.model_dump_json() + "\n")
@@ -780,7 +713,6 @@ class TestRun:
             _valid_payload_json(ctx.payload_field_names)
         )
         with (
-            patch("laglitsynth.extraction_codebook.extract.preflight"),
             patch(
                 "laglitsynth.extraction_codebook.extract.OpenAI",
                 return_value=mock_client,
@@ -964,7 +896,6 @@ def test_run_dir_printed_to_stderr_at_end(
 
     mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
     with (
-        patch("laglitsynth.extraction_codebook.extract.preflight"),
         patch(
             "laglitsynth.extraction_codebook.extract.OpenAI",
             return_value=mock_client,
@@ -1037,7 +968,6 @@ def test_concurrency_flag_threaded_to_extract_works(
 
     mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
     with (
-        patch("laglitsynth.extraction_codebook.extract.preflight"),
         patch(
             "laglitsynth.extraction_codebook.extract.OpenAI",
             return_value=mock_client,
@@ -1080,7 +1010,6 @@ def test_concurrency_one_uses_sequential_path(
 
     mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
     with (
-        patch("laglitsynth.extraction_codebook.extract.preflight"),
         patch(
             "laglitsynth.extraction_codebook.extract.OpenAI",
             return_value=mock_client,
@@ -1128,7 +1057,6 @@ class TestConventionalPaths:
     def _run(self, args: argparse.Namespace, ctx: CodebookContext) -> None:
         mock_client = _make_mock_client(_valid_payload_json(ctx.payload_field_names))
         with (
-            patch("laglitsynth.extraction_codebook.extract.preflight"),
             patch(
                 "laglitsynth.extraction_codebook.extract.OpenAI",
                 return_value=mock_client,

@@ -16,7 +16,6 @@ import sys
 import tempfile
 import time
 from collections import Counter
-from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote, urlparse
@@ -39,9 +38,8 @@ from laglitsynth.fulltext_retrieval.store import (
 )
 from laglitsynth.ids import work_id_to_filename
 from laglitsynth.io import JsonlReadStats, read_jsonl, write_meta
-from laglitsynth.layout import resolve_screening_inputs
+from laglitsynth.layout import deduplicated_path, require_input
 from laglitsynth.models import RunMeta
-from laglitsynth.screening_abstracts.models import ScreeningVerdict
 
 logger = logging.getLogger(__name__)
 
@@ -58,35 +56,6 @@ _SOURCE_LABELS: dict[PdfSource, str] = {
     PdfSource.browser: "Retrieved (browser)",
     PdfSource.missing: "Missing",
 }
-
-
-def _active_works(
-    catalogue_path: Path,
-    screening_verdicts_path: Path,
-    screening_threshold: float,
-    stats: JsonlReadStats | None = None,
-) -> Iterator[Work]:
-    """Yield Works that pass the screening threshold gate.
-
-    Works whose ``ScreeningVerdict.relevance_score`` is None (sentinels:
-    ``no-abstract``, ``llm-parse-failure``, ``llm-timeout``, ``unscreened``) are never
-    filtered — absence of a score is not evidence of irrelevance.  Only an
-    explicit numeric score strictly below ``screening_threshold`` excludes.
-
-    Works present in the catalogue but absent from the verdicts file are also
-    excluded (they were never screened).
-    """
-    verdicts = {
-        v.work_id: v
-        for v in read_jsonl(screening_verdicts_path, ScreeningVerdict, stats)
-    }
-    for w in read_jsonl(catalogue_path, Work, stats):
-        sv = verdicts.get(w.id)
-        if sv is None:
-            continue
-        if sv.relevance_score is not None and sv.relevance_score < screening_threshold:
-            continue
-        yield w
 
 
 class _RateLimiter:
@@ -288,26 +257,6 @@ def build_subparser(
         help="Deduplicated catalogue JSONL (default: <data-dir>/catalogue-dedup/deduplicated.jsonl).",
     )
     parser.add_argument(
-        "--screening-verdicts",
-        type=Path,
-        default=None,
-        help="Stage 3 verdicts JSONL (default: <data-dir>/screening-abstracts/<run-id>/verdicts.jsonl).",
-    )
-    parser.add_argument(
-        "--run-id",
-        default=None,
-        help=(
-            "Screening run to read verdicts from (default: the run_id in "
-            "<data-dir>/manifest.json). Unused when --screening-verdicts is given."
-        ),
-    )
-    parser.add_argument(
-        "--screening-threshold",
-        type=float,
-        default=50.0,
-        help="Relevance score cutoff, 0-100 (default: 50)",
-    )
-    parser.add_argument(
         "--data-dir",
         type=Path,
         default=Path("data"),
@@ -356,8 +305,10 @@ def run(args: argparse.Namespace) -> None:
     data_dir: Path = args.data_dir
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    catalogue, screening_verdicts = resolve_screening_inputs(
-        data_dir, args.catalogue, args.screening_verdicts, args.run_id
+    catalogue = require_input(
+        args.catalogue if args.catalogue is not None else deduplicated_path(data_dir),
+        flag="--catalogue",
+        upstream="catalogue-dedup",
     )
 
     stats = JsonlReadStats()
@@ -383,14 +334,7 @@ def run(args: argparse.Namespace) -> None:
                 file=sys.stderr,
             )
 
-    works = list(
-        _active_works(
-            catalogue,
-            screening_verdicts,
-            args.screening_threshold,
-            stats,
-        )
-    )
+    works = list(read_jsonl(catalogue, Work, stats))
     total = len(works)
 
     print(f"Retrieving PDFs for {total} works.", file=sys.stderr)
@@ -445,7 +389,7 @@ def run(args: argparse.Namespace) -> None:
     finally:
         client.close()
 
-    # Summary counters are computed over this run's active works only.
+    # Summary counters are computed over this run's catalogue works only.
     active_ids = {w.id for w in works}
     by_source: Counter[str] = Counter()
     retrieved_count = 0

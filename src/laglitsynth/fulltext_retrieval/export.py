@@ -35,19 +35,49 @@ import csv
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
 from laglitsynth.catalogue_fetch.models import Work
 from laglitsynth.fulltext_retrieval.models import EXPORT_TOOL_NAME, ExportMeta, PdfSource
-from laglitsynth.fulltext_retrieval.retrieve import _DOI_PREFIX_RE, _active_works
+from laglitsynth.fulltext_retrieval.retrieve import _DOI_PREFIX_RE
 from laglitsynth.fulltext_retrieval.store import load_provenance
 from laglitsynth.ids import work_id_to_filename
-from laglitsynth.io import write_meta
+from laglitsynth.io import JsonlReadStats, read_jsonl, write_meta
 from laglitsynth.layout import PDF_MANIFEST_FILENAME, export_dir, resolve_screening_inputs
 from laglitsynth.manifest import resolve_run_id
 from laglitsynth.models import RunMeta
+from laglitsynth.screening_abstracts.models import ScreeningVerdict
+
+
+def _active_works(
+    catalogue_path: Path,
+    screening_verdicts_path: Path,
+    screening_threshold: float,
+    stats: JsonlReadStats | None = None,
+) -> Iterator[Work]:
+    """Yield Works that pass the screening threshold gate.
+
+    Works whose ``ScreeningVerdict.relevance_score`` is None (sentinels:
+    ``no-abstract``, ``llm-parse-failure``, ``llm-timeout``) are never
+    filtered — absence of a score is not evidence of irrelevance.  Only an
+    explicit numeric score strictly below ``screening_threshold`` excludes.
+
+    Works present in the catalogue but absent from the verdicts file are also
+    excluded (they were never screened).
+    """
+    verdicts = {
+        v.work_id: v
+        for v in read_jsonl(screening_verdicts_path, ScreeningVerdict, stats)
+    }
+    for w in read_jsonl(catalogue_path, Work, stats):
+        sv = verdicts.get(w.id)
+        if sv is None:
+            continue
+        if sv.relevance_score is not None and sv.relevance_score < screening_threshold:
+            continue
+        yield w
 
 
 def _doi_url(doi: str) -> str:

@@ -1,4 +1,4 @@
-"""LLM-based codebook extraction via Ollama.
+"""LLM-based codebook extraction.
 
 The LLM-fillable payload model and per-work record class are built at
 ``run()`` time from the codebook YAML pointed to by ``--codebook``. The
@@ -37,7 +37,6 @@ from laglitsynth.extraction_codebook.models import (
     ExtractionCodebookMeta,
 )
 from laglitsynth.extraction_codebook.prompts import (
-    CHAR_BUDGET,
     USER_TEMPLATE,
     build_user_message,
     render_fulltext,
@@ -59,14 +58,12 @@ from laglitsynth.layout import (
 )
 from laglitsynth.manifest import resolve_run_id
 from laglitsynth.models import LlmMeta, RunMeta
-from laglitsynth.ollama import preflight
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CODEBOOK = Path("examples/codebooks/lagrangian-oceanography.yaml")
 
 _TEMPERATURE = 0.8
-_DEFAULT_NUM_CTX = 32768
 _LLM_TIMEOUT_SECONDS = 600
 _LLM_MAX_RETRIES = 3
 
@@ -89,7 +86,6 @@ def _sentinel_record(
         work_id=work_id,
         reason=reason,
         seed=None,
-        truncated=False,
         raw_response=raw_response,
         **payload_fields,
     )
@@ -102,15 +98,13 @@ def extract_codebook(
     *,
     client: OpenAI,
     model: str,
-    truncated: bool,
     ctx: CodebookContext,
-    num_ctx: int = _DEFAULT_NUM_CTX,
 ) -> ExtractionRecordProto:
     """Call the LLM, validate the payload, compose the full record.
 
     On JSON parse error or ``ValidationError`` returns a
-    ``reason="llm-parse-failure"`` sentinel with ``seed=None``,
-    ``truncated=False``, every content field ``None``.
+    ``reason="llm-parse-failure"`` sentinel with ``seed=None`` and
+    every content field ``None``.
     """
     seed = random.randint(0, 2**31 - 1)
     prompt = build_user_message(user_text)
@@ -124,7 +118,6 @@ def extract_codebook(
             ],
             temperature=_TEMPERATURE,
             seed=seed,
-            extra_body={"options": {"num_ctx": num_ctx}},
         )
     except (APITimeoutError, APIConnectionError) as exc:
         logger.warning("LLM timeout for %s: %s", work_id, exc)
@@ -150,7 +143,6 @@ def extract_codebook(
         work_id=work_id,
         reason=None,
         seed=seed,
-        truncated=truncated,
         raw_response=content,
         **payload.model_dump(),
     )
@@ -208,7 +200,6 @@ def extract_works(
     *,
     client: OpenAI,
     model: str,
-    num_ctx: int = _DEFAULT_NUM_CTX,
     max_records: int | None,
     ctx: CodebookContext,
     skip_ids: set[str] | None = None,
@@ -230,7 +221,7 @@ def extract_works(
 
     def _call_one(work: Work) -> ExtractionRecordProto:
         return _extract_one(
-            work, extractions, extraction_output_dir, client, model, ctx, num_ctx
+            work, extractions, extraction_output_dir, client, model, ctx
         )
 
     yield from map_concurrent(_call_one, eligible, max_workers=concurrency)
@@ -243,14 +234,13 @@ def _extract_one(
     client: OpenAI,
     model: str,
     ctx: CodebookContext,
-    num_ctx: int = _DEFAULT_NUM_CTX,
 ) -> ExtractionRecordProto:
     # Full text or nothing: the eligible set is already gated on extraction
     # presence, so ``extractions[work.id]`` is always set here.
     extracted = extractions[work.id]
     try:
         tei = extracted.open_tei(extraction_output_dir)
-        rendered, truncated = render_fulltext(tei, char_budget=CHAR_BUDGET)
+        rendered = render_fulltext(tei)
     except etree.XMLSyntaxError:
         logger.warning(
             "Malformed TEI for %s; recording tei-parse-failure", work.id
@@ -276,9 +266,7 @@ def _extract_one(
         rendered,
         client=client,
         model=model,
-        truncated=truncated,
         ctx=ctx,
-        num_ctx=num_ctx,
     )
 
 
@@ -287,7 +275,7 @@ def build_subparser(
 ) -> argparse.ArgumentParser:
     parser = subparsers.add_parser(
         "extraction-codebook",
-        help="Extract codebook records for eligible works using a local LLM.",
+        help="Extract codebook records for eligible works with an LLM.",
     )
     parser.add_argument(
         "--catalogue",
@@ -348,22 +336,12 @@ def build_subparser(
     parser.add_argument(
         "--model",
         default="llama3.1:8b",
-        help="Ollama model name (default: llama3.1:8b)",
+        help="Model name (default: llama3.1:8b)",
     )
     parser.add_argument(
         "--base-url",
         default="http://localhost:11434",
-        help="Ollama API base URL (default: http://localhost:11434)",
-    )
-    parser.add_argument(
-        "--num-ctx",
-        type=int,
-        default=_DEFAULT_NUM_CTX,
-        dest="num_ctx",
-        help=(
-            "Ollama context-window hint passed via extra_body (default: 32768). "
-            "Only fully reliable when the model is Modelfile-baked with the same value."
-        ),
+        help="LLM server base URL, without /v1 (default: http://localhost:11434)",
     )
     parser.add_argument(
         "--max-records",
@@ -386,10 +364,8 @@ def build_subparser(
         type=int,
         default=1,
         help=(
-            "In-flight LLM requests (default: 1). Stage 8 is prefill-bound "
-            "(the TEI prompt dominates ~90%% of wall time) and Ollama serialises "
-            "prefill across requests, so the safe default is 1. Users with "
-            "vLLM or SGLang can override. See docs/llm-concurrency.md."
+            "In-flight LLM requests (default: 1). "
+            "See docs/llm-concurrency.md."
         ),
     )
     register_config_arg(parser)
@@ -418,7 +394,6 @@ def run(args: argparse.Namespace) -> None:
         upstream="fulltext-extraction",
     )
 
-    preflight(base_url=args.base_url, model=args.model)
     output_dir: Path = data_dir / EXTRACTION_CODEBOOK_SUBDIR / args.run_id
     records_path = output_dir / "records.jsonl"
     meta_path = output_dir / "extraction-codebook-meta.json"
@@ -432,15 +407,7 @@ def run(args: argparse.Namespace) -> None:
     ctx = CodebookContext.from_spec(resolve_yaml_arg(args.codebook))
 
     prompt_sha256 = hashlib.sha256(
-        (
-            ctx.system_prompt
-            + "\n"
-            + USER_TEMPLATE
-            + "\n"
-            + str(args.num_ctx)
-            + "\n"
-            + str(CHAR_BUDGET)
-        ).encode("utf-8")
+        (ctx.system_prompt + "\n" + USER_TEMPLATE).encode("utf-8")
     ).hexdigest()
 
     # Prompt-hash guard: refuse --skip-existing when the recorded hash differs.
@@ -517,7 +484,6 @@ def run(args: argparse.Namespace) -> None:
         extraction_output_dir,
         client=client,
         model=args.model,
-        num_ctx=args.num_ctx,
         max_records=args.max_records,
         ctx=ctx,
         skip_ids=skip_ids,
@@ -529,9 +495,8 @@ def run(args: argparse.Namespace) -> None:
             append_jsonl(cast(BaseModel, record), records_path)
 
         if record.reason is None:
-            marker = "truncated" if record.truncated else "ok"
             print(
-                f"  [{index}/{total}] extracted ({marker})"
+                f"  [{index}/{total}] extracted"
                 f" — {record.work_id[-12:]}",
                 file=sys.stderr,
             )
@@ -556,14 +521,12 @@ def run(args: argparse.Namespace) -> None:
         1 for r in all_records if r.reason == "llm-parse-failure"
     )
     llm_timeout_count = sum(1 for r in all_records if r.reason == "llm-timeout")
-    truncated_count = sum(1 for r in all_records if r.truncated)
 
     print(
         f"\nDone in {elapsed:.1f}s: {full_text_count} extracted, "
         f"{skipped_count} skipped, "
         f"{llm_parse_failure_count} llm-parse-failure, "
-        f"{llm_timeout_count} llm-timeout, "
-        f"{truncated_count} truncated.",
+        f"{llm_timeout_count} llm-timeout.",
         file=sys.stderr,
     )
 
@@ -593,7 +556,6 @@ def run(args: argparse.Namespace) -> None:
             skipped_count=skipped_count,
             llm_parse_failure_count=llm_parse_failure_count,
             llm_timeout_count=llm_timeout_count,
-            truncated_count=truncated_count,
         ),
     )
     print(f"Run dir: {output_dir}", file=sys.stderr)

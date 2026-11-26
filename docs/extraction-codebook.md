@@ -83,17 +83,13 @@ top of the codebook-driven payload model via
 `pydantic.create_model`).
 
 The record carries an identification block (`work_id`, `reason`,
-`seed`, `truncated`, `raw_response`) plus the content fields from the
+`seed`, `raw_response`) plus the content fields from the
 loaded codebook. Because every record is full-text-based, there is no
 `source_basis` field — the basis is implicit. Every content value is
 paired with a `*_context: str | None` verbatim snippet (unless the YAML
 sets `context: false` on that field). Sentinel records have `reason`
 set and every content field `None`; a successful record has
 `reason=None`.
-
-A successful-but-truncated record has `reason=None` and
-`truncated=True`: the LLM answered, but on a shortened body. Sentinel
-records are never truncated.
 
 Every content field is `str | None`, so the LLM's natural-JSON answers
 are coerced before validation (`_coerce_llm_types` in
@@ -123,16 +119,14 @@ class ExtractionCodebookMeta(BaseModel):
     skipped_count: int          # tei-parse-failure only
     llm_parse_failure_count: int
     llm_timeout_count: int
-    truncated_count: int
 ```
 
 `run` and `llm` are the shared reproducibility nests from
 [`src/laglitsynth/models.py`](../src/laglitsynth/models.py); they
 carry `tool`, `tool_version`, `run_at`, `validation_skipped`, `model`,
 `temperature`, and `prompt_sha256`. `prompt_sha256` covers the
-rendered codebook system prompt, `USER_TEMPLATE`, the Ollama `num_ctx`
-setting, and `CHAR_BUDGET`, so any prompt, codebook, context-window,
-or truncation-budget change shifts the hash.
+rendered codebook system prompt and `USER_TEMPLATE`, so any prompt or
+codebook change shifts the hash.
 
 `input_count` is the number of works that reached the stage (eligible
 and with a full-text extraction). There is no `abstract_only_count` or
@@ -191,16 +185,8 @@ whose first line is the title (when present) followed by its paragraphs
 joined by blank lines. Figures and bibliography are dropped — they are
 not load-bearing for the codebook fields.
 
-Unlike stage 7, stage 8 truncates at a module-level `CHAR_BUDGET` to
-keep the prompt within the LLM context window. Truncation prefers
-paragraph boundaries: the last paragraph that would push the body over
-budget is dropped whole rather than cut mid-sentence. The returned
-`truncated` flag is carried on the record.
-
-`CHAR_BUDGET` is `100_000`, sized empirically rather than guessed: on
-the first real run (`nesh-pipeline-22064514`, N=57) the largest paper
-rendered to 86,968 chars, so 100k removes truncation on every observed
-paper while keeping a safety margin against larger outliers. Two-pass
+As in stage 7, the whole rendered text is sent; nothing truncates it. A
+text longer than the model's context is the server's to reject. Two-pass
 retrieval remains the principled solution for very long papers once
 phase 3 identifies which fields suffer from attention dilution.
 
@@ -217,7 +203,7 @@ laglitsynth extraction-codebook \
     [--config <run-dir>/config.yaml] \
     [--skip-existing] [--max-records N] [--dry-run] \
     [--model llama3.1:8b] [--base-url http://localhost:11434] \
-    [--concurrency 1] [--num-ctx 32768]
+    [--concurrency 1]
 ```
 
 The resolved output directory is `<data-dir>/extraction-codebook/<run-id>/`.
@@ -267,18 +253,9 @@ to run (see [run-manifest.md](run-manifest.md)).
 - `--max-records`: process only the first N works from the eligible
   catalogue.
 - `--dry-run`: print summaries to stderr without writing any output.
-- `--model`, `--base-url`: Ollama configuration. `--base-url` is
-  checked at startup with the same preflight pattern as
-  [eligibility](eligibility.md).
-- `--num-ctx`: context window size passed to the model via `extra_body`
-  (default: `32768`). For a guaranteed context window, bake the model
-  first with [`bake-model`](bake-model.md) and pass the baked tag via
-  `--model`. See [external-services.md](external-services.md) for the
-  bake-vs-flag tradeoff and [bake-model.md](bake-model.md) for the
-  bake recipe.
+- `--model`, `--base-url`: the model and the LLM server it is called on
+  (`--base-url` without `/v1`).
 - `--concurrency`: number of in-flight LLM requests (default: `1`).
-  The codebook payload is large, so keep concurrency low unless Ollama
-  is running on a dedicated multi-GPU host.
   See [llm-concurrency.md](llm-concurrency.md).
 
 ### Model sizing
@@ -288,8 +265,8 @@ return empty JSON on the full codebook payload — pick `--model gemma3:4b`
 only for testing.
 
 Pick the model once and carry `--model` through to all stage 8
-invocations; the `prompt_sha256` covers `num_ctx` + `CHAR_BUDGET` but
-not the model tag, so model identity is only recorded via
+invocations; the `prompt_sha256` covers the prompt but not the model
+tag, so model identity is only recorded via
 `meta.llm.model`.
 
 ## Codebook YAML
@@ -379,7 +356,7 @@ navigation aid). The per-work tab is the working surface: a back-to-Index
 link, a bibliographic block, the embedded criterion, then one row per
 codebook field with columns `field | value | context`, a
 `reviewer_remarks` row, and
-finally a collapsed LLM-meta block (reason, seed, truncated, model,
+finally a collapsed LLM-meta block (reason, seed, model,
 temperature, prompt_sha256, raw_response — hidden behind an outline
 toggle). The field list is driven off the codebook
 (the record model is codebook-built), so a non-default codebook's field

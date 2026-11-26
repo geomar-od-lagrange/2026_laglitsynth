@@ -83,7 +83,7 @@ def resolve_screening_inputs(
     screening_verdicts: Path | None,
     run_id: str | None,
 ) -> tuple[Path, Path]:
-    """Resolve the catalogue + screening-verdicts pair stages 5 and 7 join on.
+    """Resolve the catalogue + screening-verdicts pair stage 7 and the retrieval export join on.
 
     Each omitted flag takes its conventional path; the verdicts path needs
     the run-id, which comes from ``run_id`` or the manifest.

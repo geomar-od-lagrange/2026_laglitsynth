@@ -63,9 +63,8 @@ implemented stage has its own doc under [`docs/`](docs/).
   relevance with a local Ollama-hosted LLM or, with `--backend decisions`,
   a hosted decisions model via OpenRouter, emitting a `ScreeningVerdict`
   sidecar. See [`docs/screening-abstracts.md`](docs/screening-abstracts.md).
-- Stage 5 — `laglitsynth fulltext-retrieval` — join the deduplicated
-  catalogue against the screening verdicts at a threshold, then fill a
-  persistent, work-keyed PDF store under `data/pdfs/` from OA URLs and
+- Stage 5 — `laglitsynth fulltext-retrieval` — for every work in the
+  deduplicated catalogue, fill a persistent, work-keyed PDF store under `data/pdfs/` from OA URLs and
   Unpaywall, with `fulltext-retrieval-export` /
   `fulltext-retrieval-import` to diversify the still-missing margin through
   collaborators' institutional access. See
@@ -82,9 +81,6 @@ implemented stage has its own doc under [`docs/`](docs/).
   (numerical choices, reproducibility indicators, sub-discipline tags) with
   a local LLM. See
   [`docs/extraction-codebook.md`](docs/extraction-codebook.md).
-- `laglitsynth bake-model` — bake an Ollama model tag with a hard-coded
-  `num_ctx` via Modelfile; more reliable than `extra_body` at request time.
-  See [`docs/bake-model.md`](docs/bake-model.md).
 
 ## Running the pipeline
 
@@ -94,13 +90,15 @@ sources `.env` and passes `--api-key` / `--email` as flags to the tools
 — no env-var leakage into the Python side.
 
 The optional positional is a **per-review config** — one YAML that pins
-the query, year window, record cap, criteria/codebook paths, and the
-per-stage models/thresholds/context/concurrency. The runner validates it
-via `laglitsynth review-config` and applies **env > config > default**
-precedence to every knob. With no argument it uses the committed default
+the query, year window, record cap, criteria/codebook paths, the
+screening threshold, and the per-stage models/concurrency. The runner
+validates it via `laglitsynth review-config` and applies **env > config >
+default** precedence to every knob. With no argument it uses the committed
+default
 [`examples/reviews/lagrangian-oceanography.yaml`](examples/reviews/lagrangian-oceanography.yaml),
-which reproduces the historical smoke run, so the no-arg invocation
-behaves exactly as before. The historical `QUERY` and `N` env overrides
+the smoke run. The screening threshold has no default: set
+`screening_threshold` in the config or export `SCREENING_THRESHOLD`, or
+the runner exits. The historical `QUERY` and `N` env overrides
 still work and still win over the config. See
 [`docs/configs.md`](docs/configs.md#per-review-config-the-runners-config)
 for the config shape and the full `CFG_*` knob list.
@@ -128,66 +126,42 @@ runner:
 ollama serve                                                # stages 3, 7, 8
 docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0         # stage 6
 
-scripts/run-pipeline.sh                                     # default review config, N=5
-scripts/run-pipeline.sh examples/reviews/my-review.yaml     # a pinned review config
+SCREENING_THRESHOLD=50 scripts/run-pipeline.sh              # default review config, N=5
+scripts/run-pipeline.sh examples/reviews/my-review.yaml     # a review config that sets screening_threshold
 QUERY="particle dispersion" N=200 scripts/run-pipeline.sh   # env overrides win over the config
 STOP_AFTER_STAGE=3 scripts/run-pipeline.sh                  # stages 1..3 only
 ```
 
-### On NESH (GPU compute node)
+### On NESH
 
 [`scripts/nesh-pipeline.sbatch`](scripts/nesh-pipeline.sbatch) wraps the
-runner with the cluster's plumbing: it pulls (once) and starts a
-Singularity GROBID container, launches a bundled Ollama, pulls the LLM
-models via the NESH proxy, then invokes the runner. You don't need to
-start anything yourself.
+runner with the cluster's plumbing: it sets the compute-node proxy, pulls
+(once) and starts a Singularity GROBID container, then invokes the runner.
+It runs no LLM itself; the LLM stages call their endpoint through the
+proxy.
 
 ```bash
 mkdir -p logs
 sbatch scripts/nesh-pipeline.sbatch                                                     # smoke, N=10
 sbatch --export=ALL,QUERY="particle dispersion",N=200 scripts/nesh-pipeline.sbatch
 sbatch --export=ALL,STOP_AFTER_STAGE=3,N=500 scripts/nesh-pipeline.sbatch
-sbatch --export=ALL,EXTRACTION_NUM_CTX=16384 scripts/nesh-pipeline.sbatch                # smaller stage-8 KV cache
 ```
-
-Each LLM stage gets its own Ollama tag (`laglit-screen`,
-`laglit-eligibility`, `laglit-extract`) synthesised on the compute
-node from the upstream model with `PARAMETER num_ctx` baked in via a
-Modelfile heredoc — the per-request `num_ctx` hint via the OpenAI
-extra_body does not reliably size the runner. Override the model and
-its context window per stage with these env vars:
-
-| Stage | Model | num_ctx |
-|---|---|---|
-| 3 (screening-abstracts) | `SCREENING_MODEL` (default `gemma3:4b`) | `SCREENING_NUM_CTX` (default `8192`) |
-| 7 (fulltext-eligibility) | `ELIGIBILITY_MODEL` (default `gemma3:4b`) | `ELIGIBILITY_NUM_CTX` (default `32768`) |
-| 8 (extraction-codebook) | `EXTRACTION_MODEL` (default `llama3.1:8b`) | `EXTRACTION_NUM_CTX` (default `32768`) |
-
-A num_ctx that doesn't fit the KV cache alongside the model weights
-forces Ollama to spill layers to CPU; check
-`logs/ollama-*.log` for `offloaded N/N layers to GPU` after a run.
 
 Per-user prerequisites:
 
 - Repo cloned under `$WORK/2026_laglitsynth` (override with `REPO_DIR`).
 - `$REPO_DIR/.env` populated with `OPENALEX_API_KEY` and `UNPAYWALL_EMAIL`.
-- Bundled Ollama install at `$HOME/.local/share/ollama-install` — the
-  full tarball, not just the binary. See
-  [docs/explorations/nesh-ollama.md](docs/explorations/nesh-ollama.md).
 
-The job header requests `--partition=gpu --constraint=V100
---gpus-per-node=1 --cpus-per-task=4 --mem=32G --time=02:00:00`. Edit
-the sbatch script for H100 nodes; override the time budget on the
-command line with `sbatch --time=...` (see below).
+The job header requests `--partition=base --cpus-per-task=4 --mem=32G
+--time=02:00:00`; override the time budget on the command line with
+`sbatch --time=...` (see below).
 
 #### Production-run cheatsheet
 
 The sbatch header's 2 h is smoke-sized. For a real corpus run,
-override `N` and `--time`. `OLLAMA_NUM_PARALLEL=2` (and the derived
-`LLM_CONCURRENCY=4`) is the documented production default — see
-[docs/llm-concurrency.md](docs/llm-concurrency.md) for the
-benchmarking that landed there. Leave as-is unless your model's
-specific benchmark says otherwise.
+override `N` and `--time`. `LLM_CONCURRENCY` (default `1`) sets the
+in-flight requests of the LLM stages; see
+[docs/llm-concurrency.md](docs/llm-concurrency.md).
 
 ```bash
 sbatch \
@@ -201,9 +175,8 @@ Notes:
 - Stage 8 (extraction-codebook) is the throughput floor; budget
   `--time` against it. Stages 7 and 8 both honour `--concurrency`
   (dispatching through `laglitsynth.concurrency.map_concurrent`); the
-  runner forwards `LLM_CONCURRENCY` as that flag. Stage 8 defaults to
-  `--concurrency 1` because its TEI prompt is prefill-bound and Ollama
-  serialises prefill across requests.
+  runner forwards `LLM_CONCURRENCY` as that flag to stages 3 and 7, and
+  `EXTRACTION_CONCURRENCY` (default `1`) to stage 8.
 - Each stage's output is truncated at run start, so a wall-clock kill
   mid-stage means re-running that stage from scratch on the next
   submission. If you expect a tight budget, prefer running with

@@ -196,9 +196,7 @@ def test_cli_config_dispatch_does_not_bleed_across_subparsers(tmp_path: Path) ->
 
     # Sanity: invoking *without* --config does not read any file at all.
     captured.clear()
-    with patch(
-        "laglitsynth.screening_abstracts.screen.run", fake_run
-    ), patch("laglitsynth.screening_abstracts.screen.preflight"):
+    with patch("laglitsynth.screening_abstracts.screen.run", fake_run):
         main(
             [
                 "screening-abstracts",

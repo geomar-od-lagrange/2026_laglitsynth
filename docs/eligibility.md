@@ -118,9 +118,8 @@ class EligibilityMeta(BaseModel):
 [`src/laglitsynth/models.py`](../src/laglitsynth/models.py) — they
 carry `tool`, `tool_version`, `run_at`, `validation_skipped`, `model`,
 `temperature`, and `prompt_sha256`. `prompt_sha256` covers the loaded
-eligibility-criteria system prompt, `USER_TEMPLATE`, and the Ollama
-`num_ctx` setting, so any prompt- or context-window change shifts the
-hash.
+eligibility-criteria system prompt and `USER_TEMPLATE`, so any prompt
+change shifts the hash.
 
 `input_count` is the number of works that reached the stage (had a
 full-text extraction) — works skipped for lack of full text are neither
@@ -199,7 +198,7 @@ laglitsynth fulltext-eligibility \
     [--config <run-dir>/config.yaml] \
     [--skip-existing] [--max-records N] [--dry-run] \
     [--model gemma3:4b] [--base-url http://localhost:11434] \
-    [--concurrency 1] [--num-ctx 32768]
+    [--concurrency 1]
 ```
 
 The resolved output directory is `<data-dir>/fulltext-eligibility/<run-id>/`.
@@ -243,14 +242,9 @@ to run (see [run-manifest.md](run-manifest.md)).
   any downstream analysis.
 - `--max-records`: process only the first N works from the catalogue.
 - `--dry-run`: print verdicts to stderr without writing any output.
-- `--model`, `--base-url`: Ollama configuration. `--base-url` is checked
-  at startup with the same preflight pattern as
-  [`screening-abstracts`](screening-abstracts.md).
-- `--num-ctx`: context window size passed to the model via `extra_body`
-  (default: `32768`). For a guaranteed context window, bake the model
-  first with [`bake-model`](bake-model.md) and pass the baked tag via
-  `--model`. See [external-services.md](external-services.md) for the
-  bake-vs-flag tradeoff.
+- `--model`, `--base-url`: the model and the LLM server it is called on
+  (`--base-url` without `/v1`). The full rendered text is sent; a text
+  longer than the model's context is the server's to reject.
 - `--concurrency`: number of in-flight LLM requests (default: `1`).
   Stage 7's prompts are less prefill-heavy than stage 8's, so it can
   tolerate higher concurrency than stage 8 on the same GPU.

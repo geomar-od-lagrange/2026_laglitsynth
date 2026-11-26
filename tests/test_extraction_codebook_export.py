@@ -57,7 +57,6 @@ def _make_record(ctx: CodebookContext, work_id: str, **values: Any) -> BaseModel
         work_id=work_id,
         reason=None,
         seed=1,
-        truncated=False,
         raw_response='{"x": "y"}',
         **payload_fields,
     )
@@ -169,6 +168,33 @@ def test_work_sheet_follows_non_default_codebook(tmp_path: Path) -> None:
     assert ws["B14"].value == "B!"
     # No default-codebook field leaked in.
     assert ws["A15"].value == "reviewer_remarks"
+
+
+def test_llm_details_block_rows(tmp_path: Path) -> None:
+    """The collapsed LLM block lists its rows; there is no truncated row."""
+    alt_ctx = CodebookContext.from_spec(_ALT_CODEBOOK)
+    work = _make_work("https://openalex.org/W1")
+    record = _make_record(alt_ctx, "https://openalex.org/W1", alpha="A!", beta="B!")
+    records_path, catalogue_path, output_path = _write_inputs(
+        tmp_path, [work], [record]
+    )
+
+    export_review_xlsx(
+        records_path, catalogue_path, output_path, ctx=alt_ctx, n_subset=None
+    )
+    ws = load_workbook(output_path)["W1"]
+
+    # reviewer_remarks on row 15, blank row, LLM header on row 17.
+    assert ws["A17"].value == "LLM details (expand to peek)"
+    labels = [ws.cell(row=r, column=1).value for r in range(18, 18 + 6)]
+    assert labels == [
+        "reason",
+        "seed",
+        "llm_model",
+        "llm_temperature",
+        "llm_prompt_sha256",
+        "llm_raw_response",
+    ]
 
 
 # ── overview / Index sheet ──────────────────────────────────────────────────

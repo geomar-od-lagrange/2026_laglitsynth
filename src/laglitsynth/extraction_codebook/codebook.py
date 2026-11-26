@@ -37,7 +37,6 @@ class ExtractionRecordProto(Protocol):
     work_id: str
     reason: str | None
     seed: int | None
-    truncated: bool
     raw_response: str | None
 
 
@@ -202,7 +201,7 @@ def build_record_model(payload_model: type[BaseModel]) -> type[BaseModel]:
     """Compose the per-work ``ExtractionRecord`` class around ``payload_model``.
 
     Adds the identification block (``work_id``, ``reason``, ``seed``,
-    ``truncated``, ``raw_response``) on top of the payload model's
+    ``raw_response``) on top of the payload model's
     content fields. Keeping the record class dynamic — built once at
     startup from the loaded codebook — means record validation tracks
     the codebook spec without a class-edit.
@@ -213,6 +212,5 @@ def build_record_model(payload_model: type[BaseModel]) -> type[BaseModel]:
         work_id=(str, ...),
         reason=(str | None, ...),
         seed=(int | None, ...),
-        truncated=(bool, ...),
         raw_response=(str | None, None),
     )

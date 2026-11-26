@@ -1,12 +1,13 @@
 # Per-review config for scripts/run-pipeline.sh.
 #
-# This file reproduces the runner's historical smoke-run defaults, so
-# `scripts/run-pipeline.sh` with no argument behaves exactly as before.
-# Validated against the `ReviewConfig` model and emitted as CFG_* shell
+# This file carries the runner's smoke-run defaults; it is the config
+# `scripts/run-pipeline.sh` reads when given no argument. The screening
+# threshold has no default: set `screening_threshold` below or export
+# SCREENING_THRESHOLD before running. Validated against the `ReviewConfig` model and emitted as CFG_* shell
 # assignments by `laglitsynth review-config`. See docs/configs.md.
 #
 # Only the knobs a review actually pins are set here; every omitted knob
-# (models, thresholds, num_ctx, concurrency) falls back to the runner's
+# (models, concurrency) falls back to the runner's
 # built-in default. Env vars still override everything
 # (env > config > default).
 
@@ -25,18 +26,11 @@ codebook: ../codebooks/lagrangian-oceanography.yaml
 #
 # from_year: 2000
 # to_year: 2025
-# thresholds:
-#   retrieval: 50      # stage-5 PDF-fetch cutoff
-#   eligibility: 50    # stage-7 LLM-pass cutoff
+# screening_threshold: <0-100>   # relevance-score cutoff (required by the runner)
 # models:
 #   screening: gemma3:4b      # or a decisions model id, e.g. typesafe/jev-1.14
 #   eligibility: gemma3:4b
 #   extraction: llama3.1:8b
-# backends:
-#   screening: ollama         # or decisions (needs OPENROUTER_API_KEY in .env)
-# num_ctx:
-#   eligibility: 32768
-#   extraction: 32768
 # concurrency:
 #   llm: 1
 #   extraction: 1

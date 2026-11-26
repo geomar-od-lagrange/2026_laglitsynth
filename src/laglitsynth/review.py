@@ -3,7 +3,7 @@
 A *review config* is one handwritten YAML that captures the
 review-defining knobs the runner ([scripts/run-pipeline.sh]) needs:
 the query, the year window and record cap, the three criteria/codebook
-files, and the per-stage thresholds, models, context windows, and
+files, the screening threshold, and the per-stage models and
 concurrency. It is distinct from the per-stage ``config.yaml``
 run-snapshots written by the LLM stages (see ``laglitsynth.config`` and
 [docs/configs.md]) — those record one resolved stage invocation; this
@@ -33,28 +33,11 @@ from pydantic import BaseModel, ConfigDict
 _PATH_FIELDS = ("screening_criteria", "eligibility_criteria", "codebook")
 
 
-class _Thresholds(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    retrieval: float | None = None
-    eligibility: float | None = None
-
-
 class _Models(BaseModel):
     model_config = ConfigDict(extra="forbid")
     screening: str | None = None
     eligibility: str | None = None
     extraction: str | None = None
-
-
-class _Backends(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    screening: str | None = None  # "ollama" | "decisions"
-
-
-class _NumCtx(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    eligibility: int | None = None
-    extraction: int | None = None
 
 
 class _Concurrency(BaseModel):
@@ -80,10 +63,8 @@ class ReviewConfig(BaseModel):
     screening_criteria: Path | None = None
     eligibility_criteria: Path | None = None
     codebook: Path | None = None
-    thresholds: _Thresholds = _Thresholds()
+    screening_threshold: float | None = None
     models: _Models = _Models()
-    backends: _Backends = _Backends()
-    num_ctx: _NumCtx = _NumCtx()
     concurrency: _Concurrency = _Concurrency()
 
 
@@ -136,14 +117,10 @@ def emit_cfg_lines(config: ReviewConfig) -> list[str]:
         ("CFG_SCREENING_CRITERIA", config.screening_criteria),
         ("CFG_ELIGIBILITY_CRITERIA", config.eligibility_criteria),
         ("CFG_CODEBOOK", config.codebook),
-        ("CFG_RETRIEVAL_THRESHOLD", config.thresholds.retrieval),
-        ("CFG_ELIGIBILITY_THRESHOLD", config.thresholds.eligibility),
+        ("CFG_SCREENING_THRESHOLD", config.screening_threshold),
         ("CFG_SCREENING_MODEL", config.models.screening),
         ("CFG_ELIGIBILITY_MODEL", config.models.eligibility),
         ("CFG_EXTRACTION_MODEL", config.models.extraction),
-        ("CFG_SCREENING_BACKEND", config.backends.screening),
-        ("CFG_ELIGIBILITY_NUM_CTX", config.num_ctx.eligibility),
-        ("CFG_EXTRACTION_NUM_CTX", config.num_ctx.extraction),
         ("CFG_LLM_CONCURRENCY", config.concurrency.llm),
         ("CFG_EXTRACTION_CONCURRENCY", config.concurrency.extraction),
     ]

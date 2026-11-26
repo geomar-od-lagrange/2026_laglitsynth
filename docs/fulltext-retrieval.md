@@ -1,6 +1,6 @@
 # Full-text retrieval
 
-Stage 5 turns the screened catalogue into a corpus of PDFs. It maintains a
+Stage 5 turns the catalogue into a corpus of PDFs. It maintains a
 persistent, work-keyed PDF store under `data/pdfs/` and three subcommands
 that fill it: automatic retrieval from open-access sources, and an
 export/import loop that lets collaborators contribute PDFs they can reach
@@ -8,17 +8,14 @@ through their own institutional access. Text extraction (parsing PDFs into
 structured sections) is a separate concern handled by
 [fulltext-extraction.md](fulltext-extraction.md).
 
-The active work set is the screening-gated selection: the deduplicated
-catalogue joined against stage 3's verdict sidecar at a caller-supplied
-`--screening-threshold`. Works at or above the threshold (and works whose
-score is `None`, the sentinel reasons) are in scope.
-
-The join walks the catalogue and **silently drops** any work absent from
-the screening verdicts file: the `_active_works` helper does
-`if sv is None: continue`, so a work with no screening verdict produces no
-retrieval attempt and no record, without warning. Running against a partial
-or stale verdicts file therefore retrieves fewer works than the catalogue
-holds — confirm the verdicts file covers the catalogue before a run.
+`fulltext-retrieval` works on every work in `--catalogue` (default: the
+deduplicated catalogue); it reads no screening verdicts. The export, below,
+still selects by screening score: it joins the catalogue against stage 3's
+verdict sidecar at a caller-supplied `--screening-threshold`, keeping works
+at or above the threshold and works whose score is `None` (the sentinel
+reasons). That join **silently drops** any work absent from the screening
+verdicts file (`_active_works` does `if sv is None: continue`), so confirm
+the verdicts file covers the catalogue before an export.
 
 ## The persistent PDF store
 
@@ -95,7 +92,7 @@ over `PdfSource`.
 
 ## Automatic retrieval: `fulltext-retrieval`
 
-For each active work, retrieval tries OA sources and stops at the first
+For each catalogue work, retrieval tries OA sources and stops at the first
 success:
 
 1. OpenAlex open-access URLs — `primary_location.pdf_url` and

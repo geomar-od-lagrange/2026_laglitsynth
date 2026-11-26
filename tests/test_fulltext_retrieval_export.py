@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from laglitsynth.catalogue_fetch.models import Location, Source, Work
-from laglitsynth.fulltext_retrieval.export import run, split_packs, write_export
+from laglitsynth.fulltext_retrieval.export import _active_works, run, split_packs, write_export
 from laglitsynth.fulltext_retrieval.models import (
     EXPORT_TOOL_NAME,
     ExportMeta,
@@ -393,6 +393,102 @@ _BUNDLE_FILES = (
     "no-doi.csv",
     "README.md",
 )
+
+
+class TestActiveWorksJoin:
+    """Unit tests for the export's _active_works screening join."""
+
+    def test_active_works_threshold(self, tmp_path: Path) -> None:
+        """Works with a score at or above the threshold pass; those below are filtered."""
+        works = [
+            _make_work("https://openalex.org/W1"),
+            _make_work("https://openalex.org/W2"),
+            _make_work("https://openalex.org/W3"),
+        ]
+        verdicts = [
+            ScreeningVerdict(work_id="https://openalex.org/W1", relevance_score=80),
+            ScreeningVerdict(work_id="https://openalex.org/W2", relevance_score=49),
+            ScreeningVerdict(work_id="https://openalex.org/W3", relevance_score=50),
+        ]
+        catalogue_path = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        _write_works_jsonl(catalogue_path, works)
+        _write_verdicts_jsonl(verdicts_path, verdicts)
+
+        result = list(_active_works(catalogue_path, verdicts_path, screening_threshold=50.0))
+        ids = {w.id for w in result}
+        assert ids == {
+            "https://openalex.org/W1",
+            "https://openalex.org/W3",
+        }
+        assert "https://openalex.org/W2" not in ids
+
+    def test_null_score_sentinels_ride_through(self, tmp_path: Path) -> None:
+        """Works with relevance_score=None (sentinel reasons) always pass, regardless of threshold."""
+        works = [
+            _make_work("https://openalex.org/W1"),
+            _make_work("https://openalex.org/W2"),
+            _make_work("https://openalex.org/W3"),
+            _make_work("https://openalex.org/W4"),
+            _make_work("https://openalex.org/W5"),
+        ]
+        verdicts = [
+            ScreeningVerdict(
+                work_id="https://openalex.org/W1",
+                relevance_score=None,
+                reason="no-abstract",
+            ),
+            ScreeningVerdict(
+                work_id="https://openalex.org/W2",
+                relevance_score=None,
+                reason="llm-parse-failure",
+            ),
+            ScreeningVerdict(
+                work_id="https://openalex.org/W3",
+                relevance_score=None,
+                reason="llm-timeout",
+            ),
+            ScreeningVerdict(
+                work_id="https://openalex.org/W4",
+                relevance_score=80,
+            ),
+            ScreeningVerdict(
+                work_id="https://openalex.org/W5",
+                relevance_score=10,
+            ),
+        ]
+        catalogue_path = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        _write_works_jsonl(catalogue_path, works)
+        _write_verdicts_jsonl(verdicts_path, verdicts)
+
+        result = list(_active_works(catalogue_path, verdicts_path, screening_threshold=50.0))
+        ids = {w.id for w in result}
+        assert ids == {
+            "https://openalex.org/W1",
+            "https://openalex.org/W2",
+            "https://openalex.org/W3",
+            "https://openalex.org/W4",
+        }
+        assert "https://openalex.org/W5" not in ids
+
+    def test_works_without_verdicts_are_excluded(self, tmp_path: Path) -> None:
+        """Works present in the catalogue but absent from verdicts are excluded."""
+        works = [
+            _make_work("https://openalex.org/W1"),
+            _make_work("https://openalex.org/W2"),
+        ]
+        verdicts = [
+            ScreeningVerdict(work_id="https://openalex.org/W1", relevance_score=90),
+        ]
+        catalogue_path = tmp_path / "catalogue.jsonl"
+        verdicts_path = tmp_path / "verdicts.jsonl"
+        _write_works_jsonl(catalogue_path, works)
+        _write_verdicts_jsonl(verdicts_path, verdicts)
+
+        result = list(_active_works(catalogue_path, verdicts_path, screening_threshold=50.0))
+        assert len(result) == 1
+        assert result[0].id == "https://openalex.org/W1"
 
 
 class TestSplitPacks:

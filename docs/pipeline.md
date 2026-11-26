@@ -67,8 +67,7 @@ abstract-only. Full text is essential for RQ1.1 (Reproducibility),
 RQ1.2 (Prevalence), and RQ1.3 (Rationale). Numerical choices are
 rarely stated in abstracts.
 
-- **Consumes:** deduplicated catalogue, stage 3 screening verdict sidecar,
-  screening threshold
+- **Consumes:** deduplicated catalogue (every work; no screening join)
 - **Produces:** PDFs on disk, retrieval status records (per-work retrieval
   outcome and source)
 
@@ -223,8 +222,9 @@ flowchart TD
     DEDUP --> SCREEN[3 screening-abstracts]:::llm
     SCREEN --> H3([Reviewer: inspect scores<br/>flag, don't filter]):::human
 
-    SCREEN -->|score ≥ threshold| RETR[5 fulltext-retrieval<br/>OA links → Unpaywall]
+    DEDUP --> RETR[5 fulltext-retrieval<br/>OA links → Unpaywall]
     RETR --> PDFS[(data/pdfs/<br/>provenance.jsonl)]:::store
+    SCREEN -->|score ≥ threshold| EXPORT
     RETR -->|still missing| EXPORT[fulltext-retrieval-export<br/>dois.txt · missing.ris<br/>no-doi.csv · pdf-manifest.csv]
     EXPORT --> H5([Collaborators: fetch PDFs<br/>through institutional access,<br/>return the folder as is]):::human
     H5 --> IMPORT[fulltext-retrieval-import<br/>match by embedded DOI]

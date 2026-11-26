@@ -298,7 +298,6 @@ def build_work_sheet(
     llm_rows: list[tuple[str, object]] = [
         ("reason", record.reason or ""),
         ("seed", record.seed),
-        ("truncated", record.truncated),
         ("llm_model", llm_meta.model if llm_meta else ""),
         ("llm_temperature", llm_meta.temperature if llm_meta else None),
         ("llm_prompt_sha256", llm_meta.prompt_sha256 if llm_meta else ""),

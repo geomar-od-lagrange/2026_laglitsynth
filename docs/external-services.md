@@ -75,42 +75,6 @@ ollama pull llama3.1:8b
 it returns empty JSON. See [extraction-codebook.md](extraction-codebook.md)
 for model-sizing guidance.
 
-Every LLM stage runs a preflight check
-([`src/laglitsynth/ollama.py`](../src/laglitsynth/ollama.py)) before
-processing any work: it validates the `--base-url`, confirms the Ollama
-server is reachable, and confirms the requested `--model` (a plain tag
-or a baked tag) is actually pulled. If the model is missing the run
-aborts immediately with `Ollama responds at <url> but model 'X' is not
-pulled. Run \`ollama pull X\` first.` — so pull (or bake) the model
-before launching the stage.
-
-### Bake Modelfiles for `num_ctx`
-
-Ollama's OpenAI-compatible endpoint accepts a `num_ctx` hint via
-`extra_body`, but does not guarantee it is forwarded to the underlying
-model runner. The reliable approach is to bake `num_ctx` into a named
-Modelfile tag using `laglitsynth bake-model`:
-
-```bash
-laglitsynth bake-model --tag laglit-screen      --base gemma3:4b      --num-ctx 8192
-laglitsynth bake-model --tag laglit-eligibility --base gemma3:4b      --num-ctx 32768
-laglitsynth bake-model --tag laglit-extract     --base llama3.1:8b    --num-ctx 32768
-```
-
-Pass the baked tag as `--model` to the stage:
-
-```bash
-laglitsynth fulltext-eligibility --model laglit-eligibility ...
-laglitsynth extraction-codebook  --model laglit-extract     ...
-```
-
-See [bake-model.md](bake-model.md) for the full subcommand reference.
-The `--num-ctx N` flag on stages 7 and 8 is a lighter-weight alternative
-for one-off runs, but the `extra_body` path is less reliable than a baked
-tag. The NESH batch wrapper (`scripts/nesh-pipeline.sbatch`) bakes all
-three tags automatically at job start; local users who call
-`laglitsynth bake-model` themselves get the same guarantee.
-
 ### Remote Ollama via SSH tunnel
 
 Point any stage at a remote Ollama with `--base-url http://localhost:11434`
@@ -219,8 +183,10 @@ failed PDFs are submitted to GROBID.
 
 NESH (Kiel University HPC) uses Singularity rather than Docker and
 requires a proxy for internet access from compute nodes. The production
-batch wrapper is `scripts/nesh-pipeline.sbatch`; this section documents
-the key invocations for users writing their own sbatch scripts.
+batch wrapper is `scripts/nesh-pipeline.sbatch`: it runs on the `base`
+partition, starts GROBID, and reaches the LLM endpoint through the proxy;
+it runs no Ollama. This section documents the key invocations for users
+writing their own sbatch scripts.
 
 ### Ollama on NESH
 
@@ -268,28 +234,6 @@ ssh -A -L 11434:localhost:11434 user@nesh-login.rz.uni-kiel.de \
 See [explorations/nesh-ollama.md](explorations/nesh-ollama.md) for the
 full PoC script, timing benchmarks, and the explanation of why the
 reverse tunnel is needed.
-
-#### Baking tags on NESH
-
-`scripts/nesh-pipeline.sbatch` bakes all three model tags automatically.
-Users running their own sbatch scripts can replicate this with
-`laglitsynth bake-model` (same as local setup above) or with an explicit
-`ollama create` call:
-
-```bash
-MODELFILES_DIR="data/nesh/modelfiles"
-mkdir -p "$MODELFILES_DIR"
-cat >"$MODELFILES_DIR/laglit-extract.Modelfile" <<EOF
-FROM llama3.1:8b
-PARAMETER num_ctx 32768
-EOF
-"$OLLAMA_DIR/bin/ollama" create laglit-extract \
-    -f "$MODELFILES_DIR/laglit-extract.Modelfile"
-```
-
-Files are written to a path on `$WORK` rather than `/tmp` because
-`/tmp` on NESH compute nodes is not always usable. See the sbatch
-wrapper (lines 175–192) for the full three-tag sequence.
 
 ### GROBID on NESH (Singularity)
 

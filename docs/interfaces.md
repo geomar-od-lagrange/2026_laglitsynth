@@ -22,27 +22,26 @@ full design rationale.
 
 ### Resolution
 
-Stages 5, 7, and 8 each join the deduplicated catalogue against an upstream
-verdict sidecar at a caller-supplied threshold to determine their active work
-set. This logic lives in a small file-local `_active_works` helper in each
-stage's runner — three copies by design.
+Stage 7, stage 8 and `fulltext-retrieval-export` each join the deduplicated
+catalogue against an upstream verdict sidecar to determine their active work
+set (stage 7 and the export at a caller-supplied threshold). This logic lives
+in a small file-local helper in each module. Stage 5 (`fulltext-retrieval`)
+joins nothing: it runs over the whole catalogue.
 
 A catalogue work absent from the upstream verdicts file is **silently
 dropped** — it never enters the active set and produces no output row or
-count. In stages 5 and 7 the join walks the catalogue and skips any work
-with no screening verdict (`_active_works` does `if sv is None: continue`);
+count. In stage 7 and the export the join walks the catalogue and skips any
+work with no screening verdict (`_active_works` does `if sv is None: continue`);
 in stage 8 the join walks the eligibility verdicts and keeps only
 `eligible=True` ones, so a work without a verdict simply never appears.
-The practical consequence is the same in all three: running against a
+The practical consequence is the same in all of them: running against a
 partial or stale verdicts file yields fewer works than the catalogue
 holds, with no warning. (Stage 8 does raise on the opposite
 inconsistency — a verdict whose `work_id` is missing from the catalogue.)
 
-Thresholds are CLI flags (e.g. `--screening-threshold 50`). Each run's
-threshold is recorded in the stage's meta sidecar for provenance. A
-pipeline-level config file may replace CLI flags once thresholds are tuned
-on real data. Stages 3, 5, and 7 all take `--screening-threshold` as a
-`float` (default `50.0`), so fractional cutoffs are allowed uniformly.
+The screening threshold is a CLI flag (`--screening-threshold`, a `float`)
+on stage 7 and `fulltext-retrieval-export`; the export records it in its
+meta. Screening itself applies no threshold and records none.
 
 ## Artifact map
 
@@ -79,11 +78,11 @@ The meta files stay as per-run provenance records — they are not merged.
 | Path | Model | Description |
 |---|---|---|
 | `data/screening-abstracts/<run-id>/verdicts.jsonl` | [`ScreeningVerdict`](../src/laglitsynth/screening_abstracts/models.py) | Relevance score and reason for every work |
-| `data/screening-abstracts/<run-id>/screening-meta.json` | [`ScreeningMeta`](../src/laglitsynth/screening_abstracts/models.py) | Criterion (loaded `system_prompt`), model, threshold, counts |
+| `data/screening-abstracts/<run-id>/screening-meta.json` | [`ScreeningMeta`](../src/laglitsynth/screening_abstracts/models.py) | Criterion (loaded `system_prompt`), model, counts |
 
 Verdicts cover all works in the deduplicated catalogue, not just accepted
 ones. The accept/reject decision is derived from the relevance score and
-the `--screening-threshold` flag passed to downstream stages. No
+the `--screening-threshold` flag of the stage that reads the verdicts. No
 `screened.jsonl` or `rejected.jsonl` — the verdict sidecar is the only
 output.
 
@@ -97,9 +96,8 @@ output.
 | `data/pdfs/export/{dois.txt,missing.ris,no-doi.csv,pdf-manifest.csv,README.md}` | (plain text / CSV) | Export bundle for a collaborator: still-missing works as DOI links, RIS, the no-DOI worklist, the round-trip stem map, and the instructions; `pack-N/` subdirs hold the same for each slice when `--packs` is given |
 | `data/pdfs/export/export-meta.json` | [`ExportMeta`](../src/laglitsynth/fulltext_retrieval/models.py) | How the bundle was made: git commit, run-id, inputs, threshold, counts, pack sizes |
 
-Stage 5 joins the deduplicated catalogue against stage 3's `verdicts.jsonl`
-at the `--screening-threshold` cutoff to determine the active work set.
-`fulltext-retrieval` fills the store automatically from OA URLs and Unpaywall,
+Stage 5 runs over every work in the `--catalogue`; it reads no screening
+verdicts. `fulltext-retrieval` fills the store automatically from OA URLs and Unpaywall,
 recording a [`PdfProvenanceRecord`](../src/laglitsynth/fulltext_retrieval/models.py)
 per work (`source` one of `oa` / `unpaywall` / `missing`).
 `fulltext-retrieval-export` lists the still-missing selection for a
@@ -200,15 +198,13 @@ laglitsynth screening-abstracts [data/catalogue-dedup/deduplicated.jsonl] \
     [--screening-criteria FILE] \
     [--data-dir DIR] [--run-id ID] [--config FILE] \
     [--backend ollama|decisions] [--model MODEL] [--api-key KEY] \
-    [--decisions-url URL] [--screening-threshold FLOAT] \
-    [--base-url URL] [--max-records N] [--concurrency N] [--dry-run] \
-    [--pass-all]
+    [--decisions-url URL] \
+    [--base-url URL] [--max-records N] [--concurrency N] [--dry-run]
 
 # Stage 5 — fulltext-retrieval (automatic OA + Unpaywall into data/pdfs/)
 laglitsynth fulltext-retrieval \
     [--catalogue data/catalogue-dedup/deduplicated.jsonl] \
-    [--screening-verdicts data/screening-abstracts/<run-id>/verdicts.jsonl] \
-    [--run-id ID] [--screening-threshold 50] [--data-dir DIR] \
+    [--data-dir DIR] \
     --email EMAIL \
     [--refetch] [--dry-run]
 
@@ -242,7 +238,7 @@ laglitsynth fulltext-eligibility \
     [--eligibility-criteria FILE] [--config FILE] \
     [--skip-existing] [--max-records N] [--dry-run] \
     [--model MODEL] [--base-url URL] \
-    [--concurrency N] [--num-ctx N]
+    [--concurrency N]
 
 # Stage 8 — extraction-codebook
 laglitsynth extraction-codebook \
@@ -254,7 +250,7 @@ laglitsynth extraction-codebook \
     [--codebook FILE] [--config FILE] \
     [--skip-existing] [--max-records N] [--dry-run] \
     [--model MODEL] [--base-url URL] \
-    [--concurrency N] [--num-ctx N]
+    [--concurrency N]
 
 # Stage 8 — extraction-codebook-export (human review, XLSX only)
 laglitsynth extraction-codebook-export \
@@ -267,10 +263,8 @@ laglitsynth extraction-codebook-export \
 Stages 3, 7 and 8 use the run-id directory model: outputs land at
 `<data-dir>/<stage-subdir>/<run-id>/`. See [configs.md](configs.md).
 
-On stages 7 and 8, `--concurrency` (default `1`) sets the number of
-in-flight LLM requests and `--num-ctx` (default `32768`) sets the
-Ollama context-window hint passed via `extra_body`. See
-[llm-concurrency.md](llm-concurrency.md) and [bake-model.md](bake-model.md).
+On stages 3, 7 and 8, `--concurrency` (default `1`) sets the number of
+in-flight LLM requests. See [llm-concurrency.md](llm-concurrency.md).
 
 Stages 1 and 3 use positional arguments; the rest use keyword flags.
 Stages 1 and 3 should be harmonized to keyword flags when updated. No
@@ -331,7 +325,7 @@ laglitsynth catalogue-dedup
 laglitsynth screening-abstracts \
     --screening-criteria examples/screening-criteria/lagrangian-oceanography.yaml
 
-# 5. Fulltext retrieval (inline-joins catalogue + stage 3 verdicts).
+# 5. Fulltext retrieval (every work in the deduplicated catalogue).
 #    Sticky by default: re-runs skip works that already have a PDF and
 #    attempt only missing/unseen ones.
 laglitsynth fulltext-retrieval --email user@example.com
@@ -415,12 +409,8 @@ Per stage, the hash input is:
 | Stage | `prompt_sha256` covers |
 |---|---|
 | 3 — screening-abstracts | `system_prompt + "\n" + USER_TEMPLATE` (system_prompt loaded from the screening-criteria YAML) |
-| 7 — fulltext-eligibility | `SYSTEM_PROMPT + "\n" + USER_TEMPLATE + "\n" + num_ctx` |
-| 8 — extraction-codebook | `SYSTEM_PROMPT + "\n" + USER_TEMPLATE + "\n" + num_ctx + "\n" + CHAR_BUDGET` |
-
-Stages 7 and 8 fold their Ollama `num_ctx` setting into the hash so a
-context-window change produces a different digest. Stage 8 also folds
-`CHAR_BUDGET`, its prompt-truncation placeholder.
+| 7 — fulltext-eligibility | `SYSTEM_PROMPT + "\n" + USER_TEMPLATE` |
+| 8 — extraction-codebook | `SYSTEM_PROMPT + "\n" + USER_TEMPLATE` |
 
 ## Extra policy
 
@@ -469,7 +459,7 @@ context-window change produces a different digest. Stage 8 also folds
 | 1. catalogue-fetch | — | Work, FetchMeta |
 | 2. catalogue-dedup | Work | Work, DroppedRecord, DeduplicationMeta |
 | 3. screening-abstracts | Work | ScreeningVerdict, ScreeningMeta |
-| 5. fulltext-retrieval | Work + ScreeningVerdict (inline join) | PdfProvenanceRecord, RetrievalMeta |
+| 5. fulltext-retrieval | Work | PdfProvenanceRecord, RetrievalMeta |
 | 6. fulltext-extraction | (PDFs) | ExtractedDocument, ExtractionMeta |
 | 7. fulltext-eligibility | Work + ScreeningVerdict (inline join), ExtractedDocument | EligibilityVerdict, EligibilityMeta |
 | 8. extraction-codebook | Work + EligibilityVerdict (inline join), ExtractedDocument | ExtractionRecord, ExtractionCodebookMeta |
@@ -496,6 +486,6 @@ context-window change produces a different digest. Stage 8 also folds
 
 ### Resolve module
 
-Stages 5, 7, and 8 each perform an inline join of the deduplicated catalogue
-against upstream verdict sidecars at a caller-supplied threshold. This logic
-is duplicated per stage.
+Stage 7, stage 8 and `fulltext-retrieval-export` each perform an inline join
+of the deduplicated catalogue against upstream verdict sidecars. This logic
+is duplicated per module.

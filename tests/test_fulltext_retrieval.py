@@ -14,55 +14,33 @@ from laglitsynth.fulltext_retrieval.models import PdfSource
 from laglitsynth.fulltext_retrieval.retrieve import (
     _DOI_PREFIX_RE,
     _RateLimiter,
-    _active_works,
     _retrieve_one,
     _validate_pdf,
     run,
 )
 from laglitsynth.fulltext_retrieval.store import load_provenance, store_pdf_path
 from laglitsynth.ids import work_id_to_filename
-from laglitsynth.layout import deduplicated_path, screening_verdicts_path
-from laglitsynth.screening_abstracts.models import ScreeningVerdict
+from laglitsynth.layout import deduplicated_path
 
-from conftest import TEST_RUN_ID, _make_work, _write_manifest, _write_works_jsonl
-
-
-def _write_verdicts_jsonl(path: Path, verdicts: list[ScreeningVerdict]) -> None:
-    with open(path, "w") as f:
-        for v in verdicts:
-            f.write(v.model_dump_json() + "\n")
+from conftest import _make_work, _write_works_jsonl
 
 
 def _make_passthrough_args(
     tmp_path: Path,
     works: list[Work],
     *,
-    threshold: float = 50.0,
-    score: int = 80,
     data_subdir: str = "data",
     email: str = "test@example.com",
 ) -> MagicMock:
     """Build a MagicMock args suitable for calling ``run()``.
 
-    Writes ``catalogue.jsonl`` and ``verdicts.jsonl`` under ``tmp_path``.
-    Every work in ``works`` gets a verdict with ``relevance_score=score``
-    (above ``threshold`` by default), so the inline join passes all works
-    through unchanged.
+    Writes ``catalogue.jsonl`` under ``tmp_path``.
     """
     catalogue_path = tmp_path / "catalogue.jsonl"
-    verdicts_path = tmp_path / "verdicts.jsonl"
     _write_works_jsonl(catalogue_path, works)
-    verdicts = [
-        ScreeningVerdict(work_id=w.id, relevance_score=score)
-        for w in works
-    ]
-    _write_verdicts_jsonl(verdicts_path, verdicts)
 
     args = MagicMock()
     args.catalogue = catalogue_path
-    args.screening_verdicts = verdicts_path
-    args.run_id = None
-    args.screening_threshold = threshold
     args.data_dir = tmp_path / data_subdir
     args.email = email
     args.refetch = False
@@ -522,24 +500,17 @@ class TestValidationSkipped:
     def test_validation_skipped_counts_invalid_catalogue_lines(
         self, tmp_path: Path
     ) -> None:
-        """meta.run.validation_skipped reflects malformed lines in catalogue and verdicts."""
+        """meta.run.validation_skipped reflects malformed catalogue lines."""
         work = _make_work("https://openalex.org/W1", doi=None)
         catalogue_path = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
 
         with open(catalogue_path, "w") as f:
             f.write(work.model_dump_json() + "\n")
             f.write('{"not_a_real_field": "x"}\n')
-
-        verdict = ScreeningVerdict(work_id="https://openalex.org/W1", relevance_score=80)
-        with open(verdicts_path, "w") as f:
-            f.write(verdict.model_dump_json() + "\n")
             f.write('{"not_a_real_field": "y"}\n')
 
         args = MagicMock()
         args.catalogue = catalogue_path
-        args.screening_verdicts = verdicts_path
-        args.screening_threshold = 50.0
         args.data_dir = tmp_path / "data"
         args.email = "test@example.com"
         args.refetch = False
@@ -587,102 +558,6 @@ class TestRetrievalMeta:
         assert meta["retrieved_count"] == 0
         assert "abstract_only_count" not in meta
         assert "failed_count" not in meta
-
-
-class TestActiveWorksJoin:
-    """Unit tests for the _active_works inline-join helper."""
-
-    def test_active_works_threshold(self, tmp_path: Path) -> None:
-        """Works with a score at or above the threshold pass; those below are filtered."""
-        works = [
-            _make_work("https://openalex.org/W1"),
-            _make_work("https://openalex.org/W2"),
-            _make_work("https://openalex.org/W3"),
-        ]
-        verdicts = [
-            ScreeningVerdict(work_id="https://openalex.org/W1", relevance_score=80),
-            ScreeningVerdict(work_id="https://openalex.org/W2", relevance_score=49),
-            ScreeningVerdict(work_id="https://openalex.org/W3", relevance_score=50),
-        ]
-        catalogue_path = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        _write_works_jsonl(catalogue_path, works)
-        _write_verdicts_jsonl(verdicts_path, verdicts)
-
-        result = list(_active_works(catalogue_path, verdicts_path, screening_threshold=50.0))
-        ids = {w.id for w in result}
-        assert ids == {
-            "https://openalex.org/W1",
-            "https://openalex.org/W3",
-        }
-        assert "https://openalex.org/W2" not in ids
-
-    def test_null_score_sentinels_ride_through(self, tmp_path: Path) -> None:
-        """Works with relevance_score=None (sentinel reasons) always pass, regardless of threshold."""
-        works = [
-            _make_work("https://openalex.org/W1"),
-            _make_work("https://openalex.org/W2"),
-            _make_work("https://openalex.org/W3"),
-            _make_work("https://openalex.org/W4"),
-            _make_work("https://openalex.org/W5"),
-        ]
-        verdicts = [
-            ScreeningVerdict(
-                work_id="https://openalex.org/W1",
-                relevance_score=None,
-                reason="no-abstract",
-            ),
-            ScreeningVerdict(
-                work_id="https://openalex.org/W2",
-                relevance_score=None,
-                reason="llm-parse-failure",
-            ),
-            ScreeningVerdict(
-                work_id="https://openalex.org/W3",
-                relevance_score=None,
-                reason="llm-timeout",
-            ),
-            ScreeningVerdict(
-                work_id="https://openalex.org/W4",
-                relevance_score=80,
-            ),
-            ScreeningVerdict(
-                work_id="https://openalex.org/W5",
-                relevance_score=10,
-            ),
-        ]
-        catalogue_path = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        _write_works_jsonl(catalogue_path, works)
-        _write_verdicts_jsonl(verdicts_path, verdicts)
-
-        result = list(_active_works(catalogue_path, verdicts_path, screening_threshold=50.0))
-        ids = {w.id for w in result}
-        assert ids == {
-            "https://openalex.org/W1",
-            "https://openalex.org/W2",
-            "https://openalex.org/W3",
-            "https://openalex.org/W4",
-        }
-        assert "https://openalex.org/W5" not in ids
-
-    def test_works_without_verdicts_are_excluded(self, tmp_path: Path) -> None:
-        """Works present in the catalogue but absent from verdicts are excluded."""
-        works = [
-            _make_work("https://openalex.org/W1"),
-            _make_work("https://openalex.org/W2"),
-        ]
-        verdicts = [
-            ScreeningVerdict(work_id="https://openalex.org/W1", relevance_score=90),
-        ]
-        catalogue_path = tmp_path / "catalogue.jsonl"
-        verdicts_path = tmp_path / "verdicts.jsonl"
-        _write_works_jsonl(catalogue_path, works)
-        _write_verdicts_jsonl(verdicts_path, verdicts)
-
-        result = list(_active_works(catalogue_path, verdicts_path, screening_threshold=50.0))
-        assert len(result) == 1
-        assert result[0].id == "https://openalex.org/W1"
 
 
 class TestEmailDotenvFallback:
@@ -746,24 +621,9 @@ class TestEmailDotenvFallback:
 
 
 class TestConventionalPaths:
-    def _layout(self, data_dir: Path, run_id: str = TEST_RUN_ID) -> Work:
-        work = _make_work("https://openalex.org/W1", doi=None)
-        catalogue_path = deduplicated_path(data_dir)
-        catalogue_path.parent.mkdir(parents=True, exist_ok=True)
-        _write_works_jsonl(catalogue_path, [work])
-        verdicts_path = screening_verdicts_path(data_dir, run_id)
-        verdicts_path.parent.mkdir(parents=True, exist_ok=True)
-        _write_verdicts_jsonl(
-            verdicts_path, [ScreeningVerdict(work_id=work.id, relevance_score=80)]
-        )
-        return work
-
     def _args(self, data_dir: Path) -> MagicMock:
         args = MagicMock()
         args.catalogue = None
-        args.screening_verdicts = None
-        args.run_id = None
-        args.screening_threshold = 50.0
         args.data_dir = data_dir
         args.email = "test@example.com"
         args.refetch = False
@@ -778,50 +638,35 @@ class TestConventionalPaths:
         ):
             run(args)
 
-    def test_omitted_flags_resolve_to_conventional_paths(self, tmp_path: Path) -> None:
+    def test_omitted_catalogue_resolves_to_conventional_path(self, tmp_path: Path) -> None:
         data_dir = tmp_path / "data"
-        work = self._layout(data_dir)
-        _write_manifest(data_dir)
+        work = _make_work("https://openalex.org/W1", doi=None)
+        catalogue_path = deduplicated_path(data_dir)
+        catalogue_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_works_jsonl(catalogue_path, [work])
 
         self._run(self._args(data_dir))
 
         assert load_provenance(data_dir)[work.id].source == PdfSource.missing
 
-    def test_explicit_flag_wins(self, tmp_path: Path) -> None:
+    def test_explicit_catalogue_wins(self, tmp_path: Path) -> None:
         data_dir = tmp_path / "data"
-        self._layout(data_dir)
-        _write_manifest(data_dir)
+        catalogue_path = deduplicated_path(data_dir)
+        catalogue_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_works_jsonl(catalogue_path, [_make_work("https://openalex.org/W1", doi=None)])
 
         other = _make_work("https://openalex.org/W2", doi=None)
         explicit_catalogue = tmp_path / "explicit-catalogue.jsonl"
         _write_works_jsonl(explicit_catalogue, [other])
-        explicit_verdicts = tmp_path / "explicit-verdicts.jsonl"
-        _write_verdicts_jsonl(
-            explicit_verdicts,
-            [ScreeningVerdict(work_id=other.id, relevance_score=80)],
-        )
 
         args = self._args(data_dir)
         args.catalogue = explicit_catalogue
-        args.screening_verdicts = explicit_verdicts
         self._run(args)
 
         assert set(load_provenance(data_dir)) == {other.id}
 
-    def test_run_id_flag_picks_the_verdicts_leaf(self, tmp_path: Path) -> None:
-        data_dir = tmp_path / "data"
-        work = self._layout(data_dir, run_id="other-run")
-        _write_manifest(data_dir)
-
-        args = self._args(data_dir)
-        args.run_id = "other-run"
-        self._run(args)
-
-        assert work.id in load_provenance(data_dir)
-
     def test_missing_catalogue_names_upstream_and_flag(self, tmp_path: Path) -> None:
         data_dir = tmp_path / "data"
-        _write_manifest(data_dir)
 
         with pytest.raises(SystemExit) as exc_info:
             run(self._args(data_dir))
@@ -829,22 +674,25 @@ class TestConventionalPaths:
         assert "run catalogue-dedup first" in msg
         assert "--catalogue" in msg
 
-    def test_missing_verdicts_names_upstream_and_flag(self, tmp_path: Path) -> None:
-        data_dir = tmp_path / "data"
-        self._layout(data_dir)
-        screening_verdicts_path(data_dir, TEST_RUN_ID).unlink()
-        _write_manifest(data_dir)
 
-        with pytest.raises(SystemExit) as exc_info:
-            run(self._args(data_dir))
-        msg = str(exc_info.value)
-        assert "run screening-abstracts first" in msg
-        assert "--screening-verdicts" in msg
+def test_retrieval_covers_whole_catalogue(tmp_path: Path) -> None:
+    """Every catalogue work is attempted; no screening verdicts are read."""
+    works = [
+        _make_work("https://openalex.org/W1", doi=None),
+        _make_work("https://openalex.org/W2", doi=None),
+        _make_work("https://openalex.org/W3", doi=None),
+    ]
+    args = _make_passthrough_args(tmp_path, works)
+    assert not (tmp_path / "verdicts.jsonl").exists()
 
-    def test_no_manifest_and_no_run_id_exits(self, tmp_path: Path) -> None:
-        data_dir = tmp_path / "data"
-        self._layout(data_dir)
+    client_mock = MagicMock(spec=httpx.Client)
+    client_mock.get.side_effect = httpx.ConnectError("connection refused")
+    with patch(
+        "laglitsynth.fulltext_retrieval.retrieve.httpx.Client",
+        return_value=client_mock,
+    ):
+        run(args)
 
-        with pytest.raises(SystemExit) as exc_info:
-            run(self._args(data_dir))
-        assert "--run-id" in str(exc_info.value)
+    assert set(load_provenance(args.data_dir)) == {w.id for w in works}
+    meta_path = args.data_dir / "fulltext-retrieval" / "retrieval-meta.json"
+    assert json.loads(meta_path.read_text())["total_works"] == 3

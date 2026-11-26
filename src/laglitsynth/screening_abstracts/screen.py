@@ -1,4 +1,4 @@
-"""LLM-based abstract screening via Ollama."""
+"""LLM-based abstract screening."""
 
 from __future__ import annotations
 
@@ -33,7 +33,6 @@ from laglitsynth.layout import (
 )
 from laglitsynth.manifest import resolve_run_id
 from laglitsynth.models import LlmMeta, RunMeta
-from laglitsynth.ollama import preflight
 from laglitsynth.prompts import DecisionQuestion, load_decision_question, load_system_prompt
 from laglitsynth.screening_abstracts.decisions import (
     DEFAULT_DECISIONS_URL,
@@ -158,15 +157,6 @@ def _no_abstract_verdict(work_id: str) -> ScreeningVerdict:
     )
 
 
-def _unscreened_verdict(work_id: str) -> ScreeningVerdict:
-    return ScreeningVerdict(
-        work_id=work_id,
-        relevance_score=None,
-        reason="unscreened",
-        seed=None,
-    )
-
-
 def _load_works(input_path: Path, max_records: int | None) -> list[Work]:
     works: list[Work] = []
     for idx, work in enumerate(read_jsonl(input_path, Work)):
@@ -218,17 +208,6 @@ def decide_works(
         client.close()
 
 
-def pass_all_works(input_path: Path, *, max_records: int | None) -> Iterator[ScreeningVerdict]:
-    """Yield an ``unscreened`` sentinel per input work; no LLM is called.
-
-    Downstream stages treat a ``None`` score as in scope, so every work
-    passes. The run can be screened for real later; PDFs already held are
-    kept either way.
-    """
-    for work in _load_works(input_path, max_records):
-        yield _unscreened_verdict(work.id)
-
-
 def screen_works(
     input_path: Path,
     system_prompt: str,
@@ -244,8 +223,6 @@ def screen_works(
     ``concurrency`` workers (default 1, giving sequential dispatch).
     Works without an abstract yield a ``no-abstract`` sentinel immediately;
     abstract-backed verdicts are yielded in completion order.
-    The server's ``OLLAMA_NUM_PARALLEL`` must be at least ``concurrency``
-    for actual parallelism.
     """
     client = OpenAI(
         base_url=f"{base_url}/v1",
@@ -287,7 +264,7 @@ def build_subparser(
 ) -> argparse.ArgumentParser:
     parser = subparsers.add_parser(
         "screening-abstracts",
-        help="Screen JSONL works by abstract relevance using a local LLM.",
+        help="Score JSONL works for abstract relevance with an LLM.",
     )
     parser.add_argument(
         "input",
@@ -331,14 +308,14 @@ def build_subparser(
     parser.add_argument(
         "--model",
         default="gemma3:4b",
-        help="Model name for the chosen backend (default: gemma3:4b, an Ollama model)",
+        help="Model name for the chosen backend (default: gemma3:4b)",
     )
     parser.add_argument(
         "--api-key",
         default=None,
         help=(
             "API key for --backend decisions (falls back to OPENROUTER_API_KEY "
-            "in .env). Unused by the ollama backend."
+            "in .env). Unused by the chat backend."
         ),
     )
     parser.add_argument(
@@ -347,15 +324,9 @@ def build_subparser(
         help=f"Decisions endpoint for --backend decisions (default: {DEFAULT_DECISIONS_URL})",
     )
     parser.add_argument(
-        "--screening-threshold",
-        type=float,
-        default=50.0,
-        help="Relevance score cutoff, 0-100 (default: 50)",
-    )
-    parser.add_argument(
         "--base-url",
         default="http://localhost:11434",
-        help="Ollama API base URL (default: http://localhost:11434)",
+        help="Chat-backend API base URL, without /v1 (default: http://localhost:11434)",
     )
     parser.add_argument(
         "--max-records",
@@ -369,21 +340,11 @@ def build_subparser(
         help="Print verdicts to stderr without writing output",
     )
     parser.add_argument(
-        "--pass-all",
-        action="store_true",
-        help=(
-            "Write an 'unscreened' verdict (score null) for every work without "
-            "calling the LLM, so downstream stages take the whole catalogue. "
-            "Screen for real later by rerunning without this flag."
-        ),
-    )
-    parser.add_argument(
         "--concurrency",
         type=int,
         default=1,
         help=(
-            "In-flight LLM requests (default: 1). Must not exceed the "
-            "Ollama server's OLLAMA_NUM_PARALLEL for actual parallelism. "
+            "In-flight LLM requests (default: 1). "
             "See docs/llm-concurrency.md."
         ),
     )
@@ -401,12 +362,9 @@ def run(args: argparse.Namespace) -> None:
         upstream="catalogue-dedup",
     )
 
-    pass_all: bool = args.pass_all
     backend: str = args.backend
     api_key: str | None = None
-    if not pass_all and backend == "ollama":
-        preflight(base_url=args.base_url, model=args.model)
-    if not pass_all and backend == "decisions":
+    if backend == "decisions":
         api_key = args.api_key if args.api_key is not None else load_env_var("OPENROUTER_API_KEY")
         if api_key is None:
             raise SystemExit(
@@ -418,43 +376,34 @@ def run(args: argparse.Namespace) -> None:
     meta_path = output_dir / "screening-meta.json"
     if not args.dry_run:
         warn_existing_run_dir(output_dir, "verdicts.jsonl")
-    threshold: float = args.screening_threshold
 
-    # A pass-all run loads no criterion and calls no model: the meta's
-    # ``llm`` is None and ``criterion`` stays empty. The chat backend hashes
-    # the system prompt, the decisions backend the question; both fold in
-    # the user-render marker so the digest pins the shape of the state.
+    # The chat backend hashes the system prompt, the decisions backend the
+    # question; both fold in the user-render marker so the digest pins the
+    # shape of the state.
     system_prompt = ""
     question: DecisionQuestion | None = None
-    llm_meta: LlmMeta | None = None
-    criterion = ""
-    if not pass_all:
-        criteria_spec = resolve_yaml_arg(args.screening_criteria)
-        if backend == "decisions":
-            # Pass the un-resolved spec so a missing block names the file.
-            try:
-                question = load_decision_question(args.screening_criteria)
-            except ValueError as exc:
-                raise SystemExit(str(exc)) from exc
-            criterion = question.render()
-            hashed = question.canonical_json()
-            temperature: float | None = None
-        else:
-            system_prompt = load_system_prompt(criteria_spec)
-            criterion = system_prompt
-            hashed = system_prompt
-            temperature = _TEMPERATURE
-        prompt_sha256 = hashlib.sha256((hashed + "\n" + USER_TEMPLATE).encode("utf-8")).hexdigest()
-        llm_meta = LlmMeta(model=args.model, temperature=temperature, prompt_sha256=prompt_sha256)
+    criteria_spec = resolve_yaml_arg(args.screening_criteria)
+    if backend == "decisions":
+        # Pass the un-resolved spec so a missing block names the file.
+        try:
+            question = load_decision_question(args.screening_criteria)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        criterion = question.render()
+        hashed = question.canonical_json()
+        temperature: float | None = None
+    else:
+        system_prompt = load_system_prompt(criteria_spec)
+        criterion = system_prompt
+        hashed = system_prompt
+        temperature = _TEMPERATURE
+    prompt_sha256 = hashlib.sha256((hashed + "\n" + USER_TEMPLATE).encode("utf-8")).hexdigest()
+    llm_meta = LlmMeta(model=args.model, temperature=temperature, prompt_sha256=prompt_sha256)
 
     stats = JsonlReadStats()
     total = sum(1 for _ in read_jsonl(args.input, Work, stats))
 
-    if pass_all:
-        print(f"Passing all {total} works unscreened (no LLM call)", file=sys.stderr)
-    else:
-        print(f"Screening {total} works with {backend} model {args.model}", file=sys.stderr)
-    print(f"Threshold: {threshold}", file=sys.stderr)
+    print(f"Screening {total} works with {backend} model {args.model}", file=sys.stderr)
     if not args.dry_run:
         print(f"Output dir: {output_dir}", file=sys.stderr)
 
@@ -463,15 +412,12 @@ def run(args: argparse.Namespace) -> None:
     # docs/llm-concurrency.md.
     if not args.dry_run:
         output_dir.mkdir(parents=True, exist_ok=True)
-        save_resolved_config(
-            args, output_dir, inlines=[] if pass_all else ["screening_criteria"]
-        )
+        save_resolved_config(args, output_dir, inlines=["screening_criteria"])
         verdicts_path.unlink(missing_ok=True)
 
     def _build_meta(
         *,
-        above: int,
-        below: int,
+        scored: int,
         skipped: int,
         parse_failures: int,
         timeouts: int,
@@ -483,37 +429,32 @@ def run(args: argparse.Namespace) -> None:
                 validation_skipped=stats.skipped,
             ),
             llm=llm_meta,
-            threshold=threshold,
             input_path=str(args.input),
             input_count=total,
-            above_threshold_count=above,
-            below_threshold_count=below,
+            scored_count=scored,
             skipped_count=skipped,
             llm_parse_failure_count=parse_failures,
             llm_timeout_count=timeouts,
             criterion=criterion,
         )
 
-    # Write meta upfront so a mid-run reviewer-export sees prompt + LLM
+    # Write meta upfront so a mid-run reader sees prompt + LLM
     # fingerprint. Counts start at zero and get rewritten at the end.
     if not args.dry_run:
         write_meta(
             meta_path,
-            _build_meta(above=0, below=0, skipped=0, parse_failures=0, timeouts=0),
+            _build_meta(scored=0, skipped=0, parse_failures=0, timeouts=0),
         )
 
     t0 = time.monotonic()
-    above_threshold_count = 0
-    below_threshold_count = 0
+    scored_count = 0
     skipped_count = 0
     llm_parse_failure_count = 0
     llm_timeout_count = 0
     index = 0
 
     verdicts: Iterator[ScreeningVerdict]
-    if pass_all:
-        verdicts = pass_all_works(args.input, max_records=args.max_records)
-    elif backend == "decisions":
+    if backend == "decisions":
         assert question is not None and api_key is not None
         verdicts = decide_works(
             args.input,
@@ -537,7 +478,7 @@ def run(args: argparse.Namespace) -> None:
     for verdict in verdicts:
         index += 1
 
-        if verdict.reason in ("no-abstract", "llm-parse-failure", "llm-timeout", "unscreened"):
+        if verdict.relevance_score is None:
             skipped_count += 1
             if verdict.reason == "llm-parse-failure":
                 llm_parse_failure_count += 1
@@ -548,19 +489,10 @@ def run(args: argparse.Namespace) -> None:
                 f" — {verdict.work_id[-12:]}",
                 file=sys.stderr,
             )
-        elif verdict.relevance_score is not None and verdict.relevance_score >= threshold:
-            above_threshold_count += 1
-            print(
-                f"  [{index}/{total}] above threshold"
-                f" (score: {verdict.relevance_score})"
-                f" — {verdict.work_id[-12:]}",
-                file=sys.stderr,
-            )
         else:
-            below_threshold_count += 1
+            scored_count += 1
             print(
-                f"  [{index}/{total}] below threshold"
-                f" (score: {verdict.relevance_score})"
+                f"  [{index}/{total}] score {verdict.relevance_score}"
                 f" — {verdict.work_id[-12:]}",
                 file=sys.stderr,
             )
@@ -571,8 +503,7 @@ def run(args: argparse.Namespace) -> None:
     elapsed = time.monotonic() - t0
 
     print(
-        f"\nDone in {elapsed:.1f}s: {above_threshold_count} above threshold, "
-        f"{below_threshold_count} below threshold, {skipped_count} skipped.",
+        f"\nDone in {elapsed:.1f}s: {scored_count} scored, {skipped_count} skipped.",
         file=sys.stderr,
     )
 
@@ -580,8 +511,7 @@ def run(args: argparse.Namespace) -> None:
         write_meta(
             meta_path,
             _build_meta(
-                above=above_threshold_count,
-                below=below_threshold_count,
+                scored=scored_count,
                 skipped=skipped_count,
                 parse_failures=llm_parse_failure_count,
                 timeouts=llm_timeout_count,

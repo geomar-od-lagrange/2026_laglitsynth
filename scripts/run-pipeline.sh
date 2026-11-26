@@ -9,8 +9,8 @@
 #
 # Prerequisites:
 #   - .env with OPENALEX_API_KEY and UNPAYWALL_EMAIL
-#   - Ollama serving at $OLLAMA_BASE  (stages 3, 7, 8)
-#   - GROBID  serving at $GROBID_URL  (stage 6)
+#   - an LLM endpoint for stages 3, 7, 8
+#   - GROBID serving at $GROBID_URL (stage 6)
 #
 # Usage:
 #   scripts/run-pipeline.sh [config.yaml]
@@ -32,16 +32,9 @@
 #   SCREENING_CRITERIA     stage-3 screening-criteria YAML
 #   ELIGIBILITY_CRITERIA   stage-7 eligibility-criteria YAML
 #   CODEBOOK               stage-8 codebook YAML
-#   SCREENING_THRESHOLD    shared default for the two corpus thresholds (50)
-#   RETRIEVAL_THRESHOLD    stage-5 PDF-fetch cutoff   (default SCREENING_THRESHOLD)
-#   ELIGIBILITY_THRESHOLD  stage-7 LLM-pass cutoff    (default SCREENING_THRESHOLD)
-#   OUTPUT_ROOT, OLLAMA_BASE, GROBID_URL,
+#   SCREENING_THRESHOLD    relevance-score cutoff; required (env or config)
+#   OUTPUT_ROOT, GROBID_URL,
 #   SCREENING_MODEL, ELIGIBILITY_MODEL, EXTRACTION_MODEL,
-#   SCREENING_BACKEND      ollama (default) or decisions; decisions needs
-#                          OPENROUTER_API_KEY in .env and a SCREENING_MODEL
-#                          that is a decisions model id,
-#   ELIGIBILITY_NUM_CTX    (--num-ctx for stage 7; default 32768),
-#   EXTRACTION_NUM_CTX     (--num-ctx for stage 8; default 32768),
 #   LLM_CONCURRENCY        (--concurrency for stages 3 and 7; default 1),
 #   ELIGIBILITY_CONCURRENCY (--concurrency for stage 7 only; default LLM_CONCURRENCY),
 #   EXTRACTION_CONCURRENCY  (--concurrency for stage 8 only; default 1 — prefill-bound),
@@ -87,30 +80,14 @@ SCREENING_CRITERIA="${SCREENING_CRITERIA:-${CFG_SCREENING_CRITERIA:-examples/scr
 ELIGIBILITY_CRITERIA="${ELIGIBILITY_CRITERIA:-${CFG_ELIGIBILITY_CRITERIA:-examples/eligibility-criteria/lagrangian-oceanography.yaml}}"
 CODEBOOK="${CODEBOOK:-${CFG_CODEBOOK:-examples/codebooks/lagrangian-oceanography.yaml}}"
 
-# Corpus thresholds: independently settable, sharing a common default.
-# SCREENING_THRESHOLD is only the fallback both inherit when neither the
-# specific env var nor the config pins them.
-SCREENING_THRESHOLD="${SCREENING_THRESHOLD:-50}"
-RETRIEVAL_THRESHOLD="${RETRIEVAL_THRESHOLD:-${CFG_RETRIEVAL_THRESHOLD:-$SCREENING_THRESHOLD}}"
-ELIGIBILITY_THRESHOLD="${ELIGIBILITY_THRESHOLD:-${CFG_ELIGIBILITY_THRESHOLD:-$SCREENING_THRESHOLD}}"
+# Screening threshold: a review decision, so it has no built-in default.
+SCREENING_THRESHOLD="${SCREENING_THRESHOLD:-${CFG_SCREENING_THRESHOLD:-}}"
+: "${SCREENING_THRESHOLD:?SCREENING_THRESHOLD required — set screening_threshold in the review config or export it}"
 
 # Models.
 SCREENING_MODEL="${SCREENING_MODEL:-${CFG_SCREENING_MODEL:-gemma3:4b}}"
 ELIGIBILITY_MODEL="${ELIGIBILITY_MODEL:-${CFG_ELIGIBILITY_MODEL:-gemma3:4b}}"
 EXTRACTION_MODEL="${EXTRACTION_MODEL:-${CFG_EXTRACTION_MODEL:-llama3.1:8b}}"
-
-# Screening backend: ollama (local chat model) or decisions (hosted
-# decisions model via OpenRouter; passes the key from .env).
-SCREENING_BACKEND="${SCREENING_BACKEND:-${CFG_SCREENING_BACKEND:-ollama}}"
-screening_backend_flags=(--backend "$SCREENING_BACKEND")
-if [[ "$SCREENING_BACKEND" == "decisions" ]]; then
-    : "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY required for SCREENING_BACKEND=decisions — set in .env}"
-    screening_backend_flags+=(--api-key "$OPENROUTER_API_KEY")
-fi
-
-# Context windows.
-ELIGIBILITY_NUM_CTX="${ELIGIBILITY_NUM_CTX:-${CFG_ELIGIBILITY_NUM_CTX:-32768}}"
-EXTRACTION_NUM_CTX="${EXTRACTION_NUM_CTX:-${CFG_EXTRACTION_NUM_CTX:-32768}}"
 
 # Concurrency.
 LLM_CONCURRENCY="${LLM_CONCURRENCY:-${CFG_LLM_CONCURRENCY:-1}}"
@@ -121,7 +98,6 @@ EXTRACTION_CONCURRENCY="${EXTRACTION_CONCURRENCY:-${CFG_EXTRACTION_CONCURRENCY:-
 EXPORT_GAP="${EXPORT_GAP:-0}"
 
 ROOT="${OUTPUT_ROOT:-data/run}"
-OLLAMA_BASE="${OLLAMA_BASE:-http://localhost:11434}"
 GROBID_URL="${GROBID_URL:-http://localhost:8070}"
 STOP_AFTER_STAGE="${STOP_AFTER_STAGE:-8}"
 
@@ -175,22 +151,18 @@ run_stage 3 screening-abstracts \
         --screening-criteria "$SCREENING_CRITERIA" \
         --data-dir "$ROOT" \
         ${run_id_flags[@]+"${run_id_flags[@]}"} \
-        "${screening_backend_flags[@]}" \
         --model "$SCREENING_MODEL" \
-        --base-url "$OLLAMA_BASE" \
         --concurrency "$LLM_CONCURRENCY"
 
 run_stage 5 fulltext-retrieval \
     laglitsynth fulltext-retrieval \
-        --screening-threshold "$RETRIEVAL_THRESHOLD" \
         --data-dir "$ROOT" \
-        ${run_id_flags[@]+"${run_id_flags[@]}"} \
         --email "$UNPAYWALL_EMAIL"
 
 if [[ "$EXPORT_GAP" == "1" ]]; then
     run_stage 5 "fulltext-retrieval-export (handoff bundle)" \
         laglitsynth fulltext-retrieval-export \
-            --screening-threshold "$RETRIEVAL_THRESHOLD" \
+            --screening-threshold "$SCREENING_THRESHOLD" \
             --data-dir "$ROOT" \
             ${run_id_flags[@]+"${run_id_flags[@]}"}
 fi
@@ -203,13 +175,11 @@ run_stage 6 fulltext-extraction \
 
 run_stage 7 fulltext-eligibility \
     laglitsynth fulltext-eligibility \
-        --screening-threshold "$ELIGIBILITY_THRESHOLD" \
+        --screening-threshold "$SCREENING_THRESHOLD" \
         --eligibility-criteria "$ELIGIBILITY_CRITERIA" \
         --data-dir "$ROOT" \
         ${run_id_flags[@]+"${run_id_flags[@]}"} \
         --model "$ELIGIBILITY_MODEL" \
-        --base-url "$OLLAMA_BASE" \
-        --num-ctx "$ELIGIBILITY_NUM_CTX" \
         --concurrency "$ELIGIBILITY_CONCURRENCY"
 
 run_stage 8 extraction-codebook \
@@ -218,8 +188,6 @@ run_stage 8 extraction-codebook \
         --data-dir "$ROOT" \
         ${run_id_flags[@]+"${run_id_flags[@]}"} \
         --model "$EXTRACTION_MODEL" \
-        --base-url "$OLLAMA_BASE" \
-        --num-ctx "$EXTRACTION_NUM_CTX" \
         --concurrency "$EXTRACTION_CONCURRENCY"
 
 echo

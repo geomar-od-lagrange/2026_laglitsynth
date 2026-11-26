@@ -79,15 +79,14 @@ A per-review config is validated against the typed `ReviewConfig`
 [src/laglitsynth/review.py](../src/laglitsynth/review.py). Its fields are
 the query, the year window (`from_year` / `to_year`) and record cap
 (`max_records`), the three criteria/codebook paths (`screening_criteria`,
-`eligibility_criteria`, `codebook`), and nested per-stage groups for
-`thresholds.{retrieval,eligibility}`, `models.{screening,eligibility,extraction}`,
-`backends.screening` (`ollama` or `decisions`),
-`num_ctx.{eligibility,extraction}`, and `concurrency.{llm,extraction}`.
+`eligibility_criteria`, `codebook`), the `screening_threshold`, and nested
+per-stage groups for `models.{screening,eligibility,extraction}` and
+`concurrency.{llm,extraction}`.
 Only `query` is required; every other field is optional. An absent
 optional field means "fall back to the runner's built-in default" — it
 is not invented at validation time (None means None). The committed
 default is [examples/reviews/lagrangian-oceanography.yaml](../examples/reviews/lagrangian-oceanography.yaml),
-which reproduces the runner's historical smoke-run behaviour.
+the smoke-run config; it leaves `screening_threshold` unset.
 
 ### The `review-config` subcommand
 
@@ -105,10 +104,8 @@ The stable, documented name set is:
 | `CFG_SCREENING_CRITERIA` | `screening_criteria` |
 | `CFG_ELIGIBILITY_CRITERIA` | `eligibility_criteria` |
 | `CFG_CODEBOOK` | `codebook` |
-| `CFG_RETRIEVAL_THRESHOLD` / `CFG_ELIGIBILITY_THRESHOLD` | `thresholds.{retrieval,eligibility}` |
+| `CFG_SCREENING_THRESHOLD` | `screening_threshold` |
 | `CFG_SCREENING_MODEL` / `CFG_ELIGIBILITY_MODEL` / `CFG_EXTRACTION_MODEL` | `models.{screening,eligibility,extraction}` |
-| `CFG_SCREENING_BACKEND` | `backends.screening` |
-| `CFG_ELIGIBILITY_NUM_CTX` / `CFG_EXTRACTION_NUM_CTX` | `num_ctx.{eligibility,extraction}` |
 | `CFG_LLM_CONCURRENCY` / `CFG_EXTRACTION_CONCURRENCY` | `concurrency.{llm,extraction}` |
 
 The three criteria/codebook paths are resolved against the config file's
@@ -124,10 +121,10 @@ The runner `eval`s the emitted block, then resolves every knob as
 `sbatch --export=`) wins over the config file, which wins over the
 runner's built-in default; an absent config field falls through to that
 default. The historical `QUERY` and `N` env overrides keep working
-through this same mechanism (`N` maps to `CFG_MAX_RECORDS`). The two
-corpus thresholds (`RETRIEVAL_THRESHOLD`, `ELIGIBILITY_THRESHOLD`) stay
-independently settable but share a common fallback `SCREENING_THRESHOLD`
-when neither the specific env var nor the config pins them. See
+through this same mechanism (`N` maps to `CFG_MAX_RECORDS`). The
+screening threshold has no built-in default: the runner exits unless
+`SCREENING_THRESHOLD` is set in the environment or `screening_threshold`
+in the config. See
 [README.md](../README.md#running-the-pipeline) for the invocation.
 
 ## Quick recipes

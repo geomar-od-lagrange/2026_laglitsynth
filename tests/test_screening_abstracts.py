@@ -242,13 +242,13 @@ def test_screen_works_basic(tmp_path: Path) -> None:
     assert len(results) == 3
     by_id = {v.work_id: v for v in results}
     assert set(by_id) == {"W1", "W2", "W3"}
-    # W1: above threshold
+    # W1: high score
     assert by_id["W1"].relevance_score == 80
     assert by_id["W1"].reason == "relevant"
     # W2: skipped (no abstract)
     assert by_id["W2"].relevance_score is None
     assert by_id["W2"].reason == "no-abstract"
-    # W3: below threshold but still emitted
+    # W3: low score, still emitted
     assert by_id["W3"].relevance_score == 30
     assert by_id["W3"].reason == "not relevant"
 
@@ -426,16 +426,15 @@ def test_screening_meta_serialization() -> None:
     meta = ScreeningMeta(
         run=run_meta,
         llm=llm_meta,
-        threshold=50,
         input_path="data/catalogue-dedup/deduplicated.jsonl",
         input_count=17,
-        above_threshold_count=10,
-        below_threshold_count=5,
+        scored_count=15,
         skipped_count=2,
     )
     data = meta.model_dump()
     assert data["run"]["tool"] == "laglitsynth.screening_abstracts.screen"
-    assert data["above_threshold_count"] == 10
+    assert data["scored_count"] == 15
+    assert "threshold" not in data
     assert data["llm"]["temperature"] == 0.8
 
 
@@ -451,12 +450,10 @@ def _run_args(tmp_path: Path, **overrides: Any) -> argparse.Namespace:
         "run_id": "test-run-id",
         "model": "m",
         "base_url": "http://x",
-        "screening_threshold": 50.0,
         "max_records": None,
         "dry_run": False,
         "concurrency": 1,
         "config": None,
-        "pass_all": False,
         "backend": "ollama",
         "api_key": None,
         "decisions_url": DEFAULT_DECISIONS_URL,
@@ -481,7 +478,6 @@ def test_run_dry_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None
     out_dir = tmp_path / "screening-abstracts" / "test-run-id"
 
     with (
-        patch("laglitsynth.screening_abstracts.screen.preflight"),
         patch(
             "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=_mock_classify(classify_results),
@@ -515,7 +511,6 @@ def test_run_writes_output_files(tmp_path: Path) -> None:
     out_dir = tmp_path / "screening-abstracts" / "test-run-id"
 
     with (
-        patch("laglitsynth.screening_abstracts.screen.preflight"),
         patch(
             "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=_mock_classify(classify_results),
@@ -544,8 +539,7 @@ def test_run_writes_output_files(tmp_path: Path) -> None:
 
     # Meta should exist with correct counts and nested run/llm structure
     meta = json.loads((out_dir / "screening-meta.json").read_text())
-    assert meta["above_threshold_count"] == 1
-    assert meta["below_threshold_count"] == 1
+    assert meta["scored_count"] == 2
     assert meta["skipped_count"] == 1
     assert meta["run"]["tool"] == "laglitsynth.screening_abstracts.screen"
     assert meta["llm"]["temperature"] == 0.8
@@ -632,7 +626,6 @@ def test_prompt_sha256_matches(tmp_path: Path) -> None:
     out_dir = tmp_path / "screening-abstracts" / "test-run-id"
 
     with (
-        patch("laglitsynth.screening_abstracts.screen.preflight"),
         patch(
             "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=_mock_classify(classify_results),
@@ -701,7 +694,7 @@ def test_screen_works_concurrent_processes_all(tmp_path: Path) -> None:
 
 
 def test_run_writes_meta_before_loop_starts(tmp_path: Path) -> None:
-    """Meta is written upfront so a mid-run reviewer-export sees it.
+    """Meta is written upfront so a mid-run reader sees it.
 
     Asserts that screening-meta.json exists by the time the LLM call
     on the first work begins, with prompt + LLM fingerprint populated
@@ -736,7 +729,6 @@ def test_run_writes_meta_before_loop_starts(tmp_path: Path) -> None:
     args = _run_args(tmp_path)
 
     with (
-        patch("laglitsynth.screening_abstracts.screen.preflight"),
         patch(
             "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=side_effect,
@@ -750,14 +742,13 @@ def test_run_writes_meta_before_loop_starts(tmp_path: Path) -> None:
     assert captured["first_call_meta_present"] is True
     upfront = captured["first_call_meta"]
     assert upfront["criterion"] == _TEST_CRITERIA_SPEC["system_prompt"]
-    assert upfront["above_threshold_count"] == 0
-    assert upfront["below_threshold_count"] == 0
+    assert upfront["scored_count"] == 0
     assert upfront["llm"]["model"] == "m"
     assert upfront["input_count"] == 3
 
     # Final meta has the real counts.
     final = json.loads(meta_path.read_text())
-    assert final["above_threshold_count"] == 3
+    assert final["scored_count"] == 3
 
 
 def test_run_streaming_append_partial_is_valid(tmp_path: Path) -> None:
@@ -788,7 +779,6 @@ def test_run_streaming_append_partial_is_valid(tmp_path: Path) -> None:
     args = _run_args(tmp_path)
 
     with (
-        patch("laglitsynth.screening_abstracts.screen.preflight"),
         patch(
             "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=side_effect,
@@ -818,7 +808,6 @@ def test_config_yaml_records_resolved_args(tmp_path: Path) -> None:
 
     classify_results = {"W1": {"relevance_score": 80, "reason": "ok"}}
     with (
-        patch("laglitsynth.screening_abstracts.screen.preflight"),
         patch(
             "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=_mock_classify(classify_results),
@@ -834,7 +823,8 @@ def test_config_yaml_records_resolved_args(tmp_path: Path) -> None:
     out_dir = tmp_path / "screening-abstracts" / "test-run-id"
     written = _yaml.safe_load((out_dir / "config.yaml").read_text())
     assert written["model"] == "gemma3:4b"
-    assert written["screening_threshold"] == 50.0
+    assert "screening_threshold" not in written
+    assert "pass_all" not in written
     # screening_criteria is inlined as a mapping (not a path string).
     assert written["screening_criteria"]["system_prompt"] == (
         _TEST_CRITERIA_SPEC["system_prompt"]
@@ -849,7 +839,7 @@ def test_config_seeds_defaults_explicit_cli_wins(tmp_path: Path) -> None:
     """End-to-end through cli.main: --config seeds defaults; explicit CLI flag wins."""
     cfg = tmp_path / "cfg.yaml"
     cfg.write_text(
-        "model: from-config\nscreening_threshold: 75\nconcurrency: 4\n",
+        "model: from-config\nmax_records: 75\nconcurrency: 4\n",
         encoding="utf-8",
     )
 
@@ -873,7 +863,7 @@ def test_config_seeds_defaults_explicit_cli_wins(tmp_path: Path) -> None:
 
     args = captured["args"]
     assert args.model == "from-cli"  # CLI wins
-    assert args.screening_threshold == 75  # config seeded
+    assert args.max_records == 75  # config seeded
     assert args.concurrency == 4  # config seeded
 
 
@@ -889,7 +879,6 @@ def test_run_dir_printed_to_stderr_at_end(
     expected_dir = tmp_path / "screening-abstracts" / "test-run-id"
 
     with (
-        patch("laglitsynth.screening_abstracts.screen.preflight"),
         patch(
             "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=_mock_classify(classify_results),
@@ -913,20 +902,19 @@ def test_run_dir_printed_to_stderr_at_end(
 
 
 def _run_patched(args: argparse.Namespace) -> MagicMock:
-    """Run ``screen.run`` with preflight/LLM mocked; return the preflight mock."""
+    """Run ``screen.run`` with the LLM mocked; return the classify mock."""
     classify_results = {"W1": {"relevance_score": 80, "reason": "yes"}}
     with (
-        patch("laglitsynth.screening_abstracts.screen.preflight") as mock_preflight,
         patch(
             "laglitsynth.screening_abstracts.screen.classify_abstract",
             side_effect=_mock_classify(classify_results),
-        ),
+        ) as mock_classify,
         patch("laglitsynth.screening_abstracts.screen.OpenAI"),
     ):
         from laglitsynth.screening_abstracts.screen import run
 
         run(args)
-    return mock_preflight
+    return mock_classify
 
 
 class TestDataDirResolution:
@@ -951,8 +939,7 @@ class TestDataDirResolution:
         args = _run_args(tmp_path, input=None)
 
         with (
-            patch("laglitsynth.screening_abstracts.screen.preflight") as mock_preflight,
-            patch("laglitsynth.screening_abstracts.screen.OpenAI"),
+            patch("laglitsynth.screening_abstracts.screen.OpenAI") as mock_openai,
             pytest.raises(SystemExit, match="catalogue-dedup") as exc_info,
         ):
             from laglitsynth.screening_abstracts.screen import run
@@ -960,7 +947,7 @@ class TestDataDirResolution:
             run(args)
 
         assert "deduplicated.jsonl" in str(exc_info.value)
-        mock_preflight.assert_not_called()
+        mock_openai.assert_not_called()
         assert not (tmp_path / "screening-abstracts").exists()
 
     def test_omitted_run_id_adopts_the_manifest(self, tmp_path: Path) -> None:
@@ -1001,7 +988,6 @@ class TestDataDirResolution:
         args = _run_args(tmp_path, run_id=None)
 
         with (
-            patch("laglitsynth.screening_abstracts.screen.preflight") as mock_preflight,
             patch(
                 "laglitsynth.screening_abstracts.screen.classify_abstract"
             ) as mock_classify,
@@ -1012,7 +998,6 @@ class TestDataDirResolution:
 
             run(args)
 
-        mock_preflight.assert_not_called()
         mock_classify.assert_not_called()
         assert not (tmp_path / "screening-abstracts").exists()
 
@@ -1037,103 +1022,6 @@ class TestDataDirResolution:
         _run_patched(_run_args(tmp_path))
 
         assert not (tmp_path / "manifest.json").exists()
-
-
-# ---------------------------------------------------------------------------
-# --pass-all: an unscreened sentinel per work, no LLM
-# ---------------------------------------------------------------------------
-
-
-class TestPassAll:
-    def _run(self, args: argparse.Namespace) -> tuple[MagicMock, MagicMock]:
-        """Run with preflight and the OpenAI client patched; return both mocks."""
-        with (
-            patch("laglitsynth.screening_abstracts.screen.preflight") as mock_preflight,
-            patch("laglitsynth.screening_abstracts.screen.OpenAI") as mock_openai,
-        ):
-            from laglitsynth.screening_abstracts.screen import run
-
-            run(args)
-        return mock_preflight, mock_openai
-
-    def _works(self, tmp_path: Path) -> list[str]:
-        works = [
-            _make_work("W1", abstract="Ocean currents."),
-            _make_work("W2", abstract=None),
-            _make_work("W3", abstract="Forest ecology."),
-        ]
-        _write_works_jsonl(tmp_path / "input.jsonl", works)
-        return [w.id for w in works]
-
-    def test_writes_unscreened_verdict_per_work(self, tmp_path: Path) -> None:
-        ids = self._works(tmp_path)
-        mock_preflight, mock_openai = self._run(_run_args(tmp_path, pass_all=True))
-
-        mock_preflight.assert_not_called()
-        mock_openai.assert_not_called()
-
-        out_dir = tmp_path / "screening-abstracts" / "test-run-id"
-        verdicts = [
-            ScreeningVerdict.model_validate_json(line)
-            for line in (out_dir / "verdicts.jsonl").read_text().splitlines()
-        ]
-        assert [v.work_id for v in verdicts] == ids
-        for v in verdicts:
-            assert v.reason == "unscreened"
-            assert v.relevance_score is None
-            assert v.seed is None
-            assert v.raw_response is None
-
-    def test_meta_has_no_llm_and_counts_all_skipped(self, tmp_path: Path) -> None:
-        self._works(tmp_path)
-        self._run(_run_args(tmp_path, pass_all=True))
-
-        out_dir = tmp_path / "screening-abstracts" / "test-run-id"
-        raw = json.loads((out_dir / "screening-meta.json").read_text())
-        assert raw["llm"] is None
-        meta = ScreeningMeta.model_validate(raw)
-        assert meta.llm is None
-        assert meta.criterion == ""
-        assert meta.input_count == 3
-        assert meta.skipped_count == meta.input_count
-        assert meta.above_threshold_count == 0
-        assert meta.below_threshold_count == 0
-        assert meta.llm_parse_failure_count == 0
-        assert meta.llm_timeout_count == 0
-
-    def test_config_yaml_records_pass_all(self, tmp_path: Path) -> None:
-        import yaml as _yaml
-
-        self._works(tmp_path)
-        self._run(_run_args(tmp_path, pass_all=True))
-
-        out_dir = tmp_path / "screening-abstracts" / "test-run-id"
-        written = _yaml.safe_load((out_dir / "config.yaml").read_text())
-        assert written["pass_all"] is True
-
-    def test_max_records_caps_the_verdicts(self, tmp_path: Path) -> None:
-        ids = self._works(tmp_path)
-        self._run(_run_args(tmp_path, pass_all=True, max_records=2))
-
-        out_dir = tmp_path / "screening-abstracts" / "test-run-id"
-        lines = (out_dir / "verdicts.jsonl").read_text().splitlines()
-        assert [json.loads(line)["work_id"] for line in lines] == ids[:2]
-
-    def test_stage5_join_keeps_unscreened_works(self, tmp_path: Path) -> None:
-        from laglitsynth.fulltext_retrieval.retrieve import _active_works
-
-        catalogue = tmp_path / "catalogue.jsonl"
-        _write_works_jsonl(catalogue, [_make_work("W1"), _make_work("W2")])
-        verdicts = tmp_path / "verdicts.jsonl"
-        verdicts.write_text(
-            ScreeningVerdict(work_id="W1", reason="unscreened").model_dump_json()
-            + "\n"
-            + ScreeningVerdict(work_id="W2", relevance_score=10).model_dump_json()
-            + "\n"
-        )
-
-        active = [w.id for w in _active_works(catalogue, verdicts, 50.0)]
-        assert active == ["W1"]
 
 
 # ---------------------------------------------------------------------------
@@ -1174,7 +1062,7 @@ class TestDecisionsBackend:
     def _run(
         self, args: argparse.Namespace
     ) -> tuple[MagicMock, MagicMock, list[dict[str, Any]]]:
-        """Run with the decisions endpoint mocked; return preflight, client factory, bodies."""
+        """Run with the decisions endpoint mocked; return OpenAI mock, client factory, bodies."""
         import httpx
 
         bodies: list[dict[str, Any]] = []
@@ -1189,26 +1077,25 @@ class TestDecisionsBackend:
             return httpx.Client(transport=httpx.MockTransport(handler))
 
         with (
-            patch("laglitsynth.screening_abstracts.screen.preflight") as mock_preflight,
             patch(
                 "laglitsynth.screening_abstracts.screen.decisions_client",
                 side_effect=make_client,
             ) as mock_client,
-            patch("laglitsynth.screening_abstracts.screen.OpenAI"),
+            patch("laglitsynth.screening_abstracts.screen.OpenAI") as mock_openai,
         ):
             from laglitsynth.screening_abstracts.screen import run
 
             run(args)
-        return mock_preflight, mock_client, bodies
+        return mock_openai, mock_client, bodies
 
     def _out_dir(self, tmp_path: Path) -> Path:
         return tmp_path / "screening-abstracts" / "test-run-id"
 
     def test_writes_probability_scores_and_no_abstract(self, tmp_path: Path) -> None:
         self._works(tmp_path)
-        mock_preflight, mock_client, bodies = self._run(self._args(tmp_path))
+        mock_openai, mock_client, bodies = self._run(self._args(tmp_path))
 
-        mock_preflight.assert_not_called()
+        mock_openai.assert_not_called()
         mock_client.assert_called_once_with("k")
         assert len(bodies) == 2
         assert {b["model"] for b in bodies} == {"typesafe/jev"}
@@ -1249,8 +1136,7 @@ class TestDecisionsBackend:
 
         meta = ScreeningMeta.model_validate(raw)
         assert meta.input_count == 3
-        assert meta.above_threshold_count == 1
-        assert meta.below_threshold_count == 1
+        assert meta.scored_count == 2
         assert meta.skipped_count == 1
 
     def test_config_yaml_records_backend(self, tmp_path: Path) -> None:
@@ -1301,7 +1187,7 @@ class TestDecisionsBackend:
             self._run(self._args(tmp_path, screening_criteria=str(criteria)))
 
     def test_ollama_backend_ignores_api_key(self, tmp_path: Path) -> None:
-        """Default backend still preflights and never builds a decisions client."""
+        """Default backend never builds a decisions client."""
         self._works(tmp_path)
         args = _run_args(tmp_path, screening_criteria=_DECISIONS_CRITERIA_SPEC)
         classify_results = {
@@ -1309,7 +1195,6 @@ class TestDecisionsBackend:
             "W3": {"relevance_score": 10, "reason": "no"},
         }
         with (
-            patch("laglitsynth.screening_abstracts.screen.preflight") as mock_preflight,
             patch(
                 "laglitsynth.screening_abstracts.screen.classify_abstract",
                 side_effect=_mock_classify(classify_results),
@@ -1321,7 +1206,6 @@ class TestDecisionsBackend:
             from laglitsynth.screening_abstracts.screen import run
 
             run(args)
-        mock_preflight.assert_called_once()
         mock_dc.assert_not_called()
         mock_env.assert_not_called()
         raw = json.loads((self._out_dir(tmp_path) / "screening-meta.json").read_text())

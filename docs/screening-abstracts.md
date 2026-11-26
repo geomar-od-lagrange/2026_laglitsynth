@@ -29,9 +29,6 @@ laglitsynth screening-abstracts data/catalogue-dedup/deduplicated.jsonl
 laglitsynth screening-abstracts input.jsonl \
   --screening-criteria examples/screening-criteria/my-topic.yaml
 
-# stricter threshold (float)
-laglitsynth screening-abstracts input.jsonl --screening-threshold 70
-
 # bucket root override (e.g. for sweeps writing into a sibling tree)
 laglitsynth screening-abstracts input.jsonl --data-dir runs/sweep-A
 
@@ -61,9 +58,7 @@ laglitsynth screening-abstracts --backend decisions --model typesafe/jev-1.14 --
 | `--model` | Model name for the chosen backend (default: `gemma3:4b`, an Ollama tag). |
 | `--api-key` | API key for `--backend decisions`; falls back to `OPENROUTER_API_KEY` in `.env`. |
 | `--decisions-url` | Decisions endpoint (default: `https://openrouter.ai/api/alpha/decisions`). |
-| `--screening-threshold` | Relevance score cutoff, 0--100 as a `float` (default: `50.0`). |
 | `--base-url` | Ollama API base URL (default: `http://localhost:11434`); unused by the decisions backend. |
-| `--pass-all` | Write an `unscreened` verdict per work and call no model. See [Passing everything through](#passing-everything-through---pass-all). |
 | `--max-records` | Process only the first N works. Useful with `--dry-run`. |
 | `--dry-run` | Print verdicts to stderr without writing any output files. |
 | `--concurrency` | In-flight LLM requests (default: `1`). See [llm-concurrency.md](llm-concurrency.md). |
@@ -113,7 +108,6 @@ for the decisions backend; keep the two in step when the scope changes.
 A chat completion against the Ollama server at `--base-url`, system prompt
 from the YAML, user message the work listing, JSON response parsed into
 the verdict. Temperature `0.8` with a random per-call seed, both recorded.
-The Ollama preflight (server reachable, model pulled) runs first.
 
 ### `decisions`
 
@@ -124,7 +118,7 @@ as `state` and the YAML's `decision` block as a single `noul` (yes/no)
 question; the answer is a probability that the work is relevant, which
 becomes `relevance_score = round(100 * p)`. The model returns no
 justification, so `reason` is `null`; the raw answer JSON (with the exact
-probability) is kept in `raw_response`. No Ollama preflight runs; a missing
+probability) is kept in `raw_response`. A missing
 key or a criteria file without a `decision` block exits before any request.
 Retries: transport errors, HTTP 5xx and 429 are retried four times with a
 growing backoff, then the work gets the `llm-timeout` sentinel; a 2xx body
@@ -146,8 +140,8 @@ Each run produces three files in `<data-dir>/screening-abstracts/<run-id>/`:
 - **`verdicts.jsonl`** — one `ScreeningVerdict` per input work, appended
   per-record so a partial file from a killed run is still valid JSONL.
 - **`screening-meta.json`** — `ScreeningMeta` sidecar with nested `run`
-  and `llm` blocks, threshold, input path, input count, `criterion` (the
-  loaded `system_prompt`), and above/below/skipped counts. Written upfront
+  and `llm` blocks, input path, input count, `criterion` (the
+  loaded `system_prompt`), and scored/skipped counts. Written upfront
   with zeroed counts when the run starts and rewritten with the real counts
   at the end, so a mid-run reader still sees the criterion + LLM
   fingerprint.
@@ -167,7 +161,7 @@ Each run produces three files in `<data-dir>/screening-abstracts/<run-id>/`:
 
 ### Sentinel reason values
 
-Four fixed strings mark non-LLM outcomes:
+Three fixed strings mark non-LLM outcomes:
 
 - `reason="no-abstract"` — the work had no abstract; the LLM was not
   called. `relevance_score=null`, `seed=null`, `raw_response=null`.
@@ -179,28 +173,14 @@ Four fixed strings mark non-LLM outcomes:
   per-work call site catches the exception so a single hang does not
   kill the whole stage. `relevance_score=null`, `seed=null`,
   `raw_response=null`.
-- `reason="unscreened"` — the run was made with `--pass-all` (below); no
-  LLM was called for any work. `relevance_score=null`, `seed=null`,
-  `raw_response=null`.
 
 All other `reason` values are the LLM's free-text justification, or `null`
 on a decisions-backend verdict (the model gives none). `raw_response` is
 set on successful verdicts and on `llm-parse-failure` sentinels; it is
 `None` on the other sentinels.
 
-Downstream stages never filter on a `null` score, so every sentinel passes
-the threshold gate.
-
-### Passing everything through: `--pass-all`
-
-`screening-abstracts --pass-all` writes an `unscreened` verdict for every
-input work and contacts no model: no Ollama preflight, no criteria file
-loaded. The run dir is otherwise normal, so stage 5 and the export take the
-whole catalogue through the usual join. Use it to retrieve PDFs before
-deciding on screening; a later real run under a new run-id screens the same
-catalogue, and the PDFs already held are kept. The meta's `llm` block is
-`null` and `criterion` is empty on such a run; `config.yaml` records
-`pass_all: true`.
+The stage writes scores only; it applies no threshold. Which scores count
+as relevant is decided downstream on `verdicts.jsonl`.
 
 ### LLM input format
 
@@ -223,19 +203,18 @@ latency — adjust the constants in `screen.py` if a real run hits them.
 The meta sidecar nests two shared blocks:
 
 - **`run`** (`RunMeta`): `tool`, `tool_version`, `run_at`, `validation_skipped`.
-- **`llm`** (`LlmMeta | null`): `model`, `temperature` (`0.8` for the
+- **`llm`** (`LlmMeta`): `model`, `temperature` (`0.8` for the
   ollama backend, `null` for decisions), `prompt_sha256` (sha256 of
   `system_prompt + "\n" + USER_TEMPLATE` for ollama, of the decision
   question's canonical JSON + `"\n"` + `USER_TEMPLATE` for decisions; 64 hex
-  chars, where `USER_TEMPLATE` is the user-render marker). `null` on a
-  `--pass-all` run.
+  chars, where `USER_TEMPLATE` is the user-render marker).
 
 The loaded `system_prompt` (or the rendered decision question) is also
 stored verbatim on the meta as `criterion`, so the exact question the
 model saw is on record.
 
-Alongside `above_threshold_count`, `below_threshold_count`, and
-`skipped_count`, the meta records two failure counters:
+Alongside `scored_count` (verdicts with a score) and `skipped_count`
+(sentinels), the meta records two failure counters:
 `llm_parse_failure_count` (LLM responses that did not validate against the
 verdict schema) and `llm_timeout_count` (calls that timed out or lost the
 connection after retries). Both are `0` for a clean run.
@@ -256,9 +235,8 @@ laglitsynth screening-abstracts input.jsonl \
   --dry-run --max-records 10
 ```
 
-Edit the `system_prompt` field in the screening-criteria YAML and adjust
-`--screening-threshold` until the above/below split looks right, then run
-without `--dry-run` for the full set.
+Edit the `system_prompt` field in the screening-criteria YAML until the
+scores look right, then run without `--dry-run` for the full set.
 
 ## Reproducibility
 
