@@ -315,8 +315,9 @@ when the flag is omitted, and emits a one-line stderr notice
 never silent. The LLM stages' `--api-key` falls back to `LLM_API_KEY` in
 the environment first, then in `.env`. All other run-affecting parameters
 (`--base-url`, `--grobid-url`, model names, thresholds) are CLI-only. The
-driver script [scripts/run-pipeline.sh](../scripts/run-pipeline.sh) sources
-`.env` (`set -a; source .env; set +a`) and passes the OpenAlex key and the
+driver script [scripts/run-pipeline.sh](../scripts/run-pipeline.sh) exports
+each `.env` variable that the environment leaves unset or empty, so an
+exported value wins over `.env`, and passes the OpenAlex key and the
 Unpaywall email as `--flag "$VAR"`; it never passes the LLM key as a flag,
 so it stays out of the process list.
 

@@ -91,8 +91,9 @@ built. Each stage has its own doc under [`docs/`](docs/).
 
 [`scripts/run-pipeline.sh [config.yaml]`](scripts/run-pipeline.sh) runs
 stages 1..8 end-to-end, writing outputs under `data/run/`. The runner
-sources `.env` and passes the OpenAlex `--api-key` and `--email` as flags
-to stages 1 and 5. The LLM key (`LLM_API_KEY`) is never passed as a flag:
+exports each `.env` variable that the environment leaves unset or empty
+(an exported value wins over `.env`) and passes the OpenAlex `--api-key`
+and `--email` as flags to stages 1 and 5. The LLM key (`LLM_API_KEY`) is never passed as a flag:
 the LLM stages read it from the environment, so it stays out of the
 process list.
 

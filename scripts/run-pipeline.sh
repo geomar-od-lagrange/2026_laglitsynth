@@ -9,7 +9,9 @@
 # output without re-fetching.
 #
 # Prerequisites:
-#   - .env with OPENALEX_API_KEY, UNPAYWALL_EMAIL and LLM_API_KEY
+#   - OPENALEX_API_KEY, UNPAYWALL_EMAIL and LLM_API_KEY, exported or in
+#     .env. The runner exports each .env variable that the environment
+#     leaves unset or empty, so an exported value wins over .env.
 #   - an OpenAI-compatible LLM endpoint for stages 3, 7, 8 (LLM_BASE_URL)
 #   - GROBID serving at $GROBID_URL (stage 6)
 #
@@ -78,18 +80,42 @@
 
 set -euo pipefail
 
+# Export each KEY=VALUE of .env whose variable the environment leaves
+# unset or empty, so an exported variable wins over .env. Parsed like
+# laglitsynth.dotenv.load_env_var: blank lines and # comments skipped,
+# key and value trimmed, one pair of surrounding quotes stripped; the
+# value is never evaluated by the shell.
+load_dotenv() {
+    local line key value
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        [[ -z "$line" || "$line" == \#* || "$line" != *=* ]] && continue
+        key="${line%%=*}"
+        key="${key%"${key##*[![:space:]]}"}"
+        value="${line#*=}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
+        if [[ ${#value} -ge 2 && ( "$value" == \"*\" || "$value" == \'*\' ) ]]; then
+            value="${value:1:${#value}-2}"
+        fi
+        [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        [[ -n "${!key:-}" ]] && continue
+        export "$key=$value"
+    done < "$1"
+}
+
 if [[ -f .env ]]; then
-    set -a
-    source .env
-    set +a
+    load_dotenv .env
 fi
 
 CONFIG="${1:-examples/reviews/lagrangian-oceanography.yaml}"
 
 # Validate the per-review config and pull in its CFG_* assignments. The
 # CFG_* values become the middle tier of the env > config > default
-# precedence applied below.
-eval "$(laglitsynth review-config "$CONFIG")"
+# precedence applied below. The assignment, unlike a bare eval of a
+# command substitution, stops the runner (set -e) when validation fails.
+cfg="$(laglitsynth review-config "$CONFIG")"
+eval "$cfg"
 
 # Query / record cap (historical env overrides preserved).
 QUERY="${QUERY:-${CFG_QUERY:-Lagrangian particle tracking}}"
@@ -108,7 +134,7 @@ SCREENING_THRESHOLD="${SCREENING_THRESHOLD:-${CFG_SCREENING_THRESHOLD:-}}"
 
 # LLM endpoint and models: no built-in defaults, the review names them.
 # Checked below, once STOP_AFTER_STAGE says which stages run. The API key
-# (LLM_API_KEY, env or the sourced .env) is never passed as a flag: the
+# (LLM_API_KEY, env or the loaded .env) is never passed as a flag: the
 # CLI reads it itself, so it stays out of the process list.
 LLM_BASE_URL="${LLM_BASE_URL:-${CFG_LLM_BASE_URL:-}}"
 LLM_DECISIONS_URL="${LLM_DECISIONS_URL:-${CFG_LLM_DECISIONS_URL:-}}"
@@ -130,7 +156,7 @@ ROOT="${OUTPUT_ROOT:-data/run}"
 GROBID_URL="${GROBID_URL:-http://localhost:8070}"
 STOP_AFTER_STAGE="${STOP_AFTER_STAGE:-8}"
 
-[[ "$STOP_AFTER_STAGE" =~ ^[0-9]+$ ]] || {
+[[ "$STOP_AFTER_STAGE" =~ ^[1-9][0-9]*$ ]] || {
     echo "STOP_AFTER_STAGE must be a positive integer (got $STOP_AFTER_STAGE)" >&2
     exit 2
 }

@@ -140,7 +140,7 @@ screening threshold has no built-in default: when the run reaches stage
 `SCREENING_THRESHOLD` is set in the environment or `screening_threshold`
 in the config. The LLM endpoint has no default either: from stage 3 on the
 runner requires `LLM_BASE_URL` (env or `llm_base_url`), `LLM_API_KEY`
-(env or the sourced `.env`) and the model of every stage it reaches, and
+(env, else `.env`) and the model of every stage it reaches, and
 exits naming whichever is missing. `LLM_DECISIONS_URL` is passed to stages
 3 and 7 as `--decisions-url` when set, and `EXTRACTION_REASONING_EFFORT`
 to stage 8 as `--reasoning-effort` when set; the key is never passed as a
