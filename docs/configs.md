@@ -89,7 +89,7 @@ the query, the year window (`from_year` / `to_year`) and record cap
 endpoint URLs (`llm_base_url`, `llm_decisions_url`), and nested per-stage
 groups for `models.{screening,eligibility,extraction}` plus
 `models.extraction_reasoning_effort` (`low`, `medium` or `high`) and
-`concurrency.{llm,extraction}`.
+`concurrency.{llm,extraction,grobid}`.
 Only `query` is required; every other field is optional. An absent
 optional field means "fall back to the runner's built-in default" — it
 is not invented at validation time (None means None). The committed
@@ -119,7 +119,7 @@ The stable, documented name set is:
 | `CFG_LLM_DECISIONS_URL` | `llm_decisions_url` |
 | `CFG_SCREENING_MODEL` / `CFG_ELIGIBILITY_MODEL` / `CFG_EXTRACTION_MODEL` | `models.{screening,eligibility,extraction}` |
 | `CFG_EXTRACTION_REASONING_EFFORT` | `models.extraction_reasoning_effort` |
-| `CFG_LLM_CONCURRENCY` / `CFG_EXTRACTION_CONCURRENCY` | `concurrency.{llm,extraction}` |
+| `CFG_LLM_CONCURRENCY` / `CFG_EXTRACTION_CONCURRENCY` / `CFG_GROBID_CONCURRENCY` | `concurrency.{llm,extraction,grobid}` |
 
 The three criteria/codebook paths are resolved against the config file's
 own directory before emission (mirroring the

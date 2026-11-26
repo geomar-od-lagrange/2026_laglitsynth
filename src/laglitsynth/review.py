@@ -46,6 +46,7 @@ class _Concurrency(BaseModel):
     model_config = ConfigDict(extra="forbid")
     llm: int | None = None
     extraction: int | None = None
+    grobid: int | None = None
 
 
 class ReviewConfig(BaseModel):
@@ -130,6 +131,7 @@ def emit_cfg_lines(config: ReviewConfig) -> list[str]:
         ("CFG_EXTRACTION_REASONING_EFFORT", config.models.extraction_reasoning_effort),
         ("CFG_LLM_CONCURRENCY", config.concurrency.llm),
         ("CFG_EXTRACTION_CONCURRENCY", config.concurrency.extraction),
+        ("CFG_GROBID_CONCURRENCY", config.concurrency.grobid),
     ]
     return [f"{name}={_shell_value(value)}" for name, value in pairs]
 

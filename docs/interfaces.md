@@ -256,7 +256,8 @@ laglitsynth corpus-assemble \
 laglitsynth fulltext-extraction \
     [--corpus-dir data/corpus/] \
     [--output-dir data/fulltext-extraction/] \
-    [--data-dir DIR] [--grobid-url URL] [--skip-existing]
+    [--data-dir DIR] [--grobid-url URL] [--skip-existing] \
+    [--concurrency N]
 
 # Stage 7 — fulltext-eligibility
 laglitsynth fulltext-eligibility \
@@ -348,6 +349,27 @@ The runner passes `LLM_CONCURRENCY` (default `1`) to stage 3,
 `EXTRACTION_CONCURRENCY` (default `1`) to stage 8; the review config
 sets the first and last as `concurrency.llm` and
 `concurrency.extraction`.
+
+### GROBID concurrency
+
+Stage 6 uses the same helper for its GROBID requests: `--concurrency`
+(default `1`) workers each POST one corpus PDF to
+`/api/processFulltextDocument` through one shared `httpx.Client`, whose
+connection pool holds one connection per worker. Only the main thread
+writes the TEI files and appends to `extraction.jsonl`. A request that
+fails is counted in `failed_count` and written nowhere; the other
+workers carry on. At `--concurrency 1` PDFs go one after another in
+corpus order.
+
+Records land in completion order. Each work is sent at most once per
+run, and consumers join on `work_id` and take a work's last record, so
+the order carries no meaning. A killed run leaves valid JSONL and a TEI
+file for every record in it; `--skip-existing` resumes it, sending only
+the works without a record for their current corpus PDF. The useful
+value depends on the CPU and memory given to GROBID.
+
+The runner passes `GROBID_CONCURRENCY` (default `3`) to stage 6; the
+review config sets it as `concurrency.grobid`.
 
 ### End-to-end sequence
 

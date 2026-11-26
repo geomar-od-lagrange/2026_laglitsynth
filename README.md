@@ -154,7 +154,8 @@ STOP_AFTER_STAGE=3 scripts/run-pipeline.sh                                     #
 
 For a real corpus run, raise `N` (or set `max_records` in the review
 config). `LLM_CONCURRENCY` (default `1`) sets the in-flight requests of
-the LLM stages; see
+the LLM stages and `GROBID_CONCURRENCY` (default `3`) those of stage 6;
+see
 [docs/interfaces.md](docs/interfaces.md#llm-concurrency).
 
 ```bash

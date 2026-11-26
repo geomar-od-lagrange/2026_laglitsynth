@@ -221,7 +221,8 @@ laglitsynth fulltext-extraction \
     [--grobid-url http://localhost:8070] \
     [--timeout 120] \
     [--skip-existing] \
-    [--consolidate-citations 0]
+    [--consolidate-citations 0] \
+    [--concurrency 1]
 ```
 
 ### Arguments
@@ -245,15 +246,19 @@ laglitsynth fulltext-extraction \
   to enrich extracted references with DOIs via Crossref / Semantic Scholar
   (needs internet during processing and is slower); since OpenAlex is the
   metadata authority, `0` is recommended.
+- `--concurrency`: number of in-flight GROBID requests (default: `1`).
+  See [interfaces.md](interfaces.md#grobid-concurrency).
 
 ### Flow
 
 1. Read the `CorpusPdf` rows of `<corpus-dir>/provenance.jsonl` that
    carry a `pdf_path`; works without a PDF are not listed.
 2. Load existing `extraction.jsonl` if present (for `--skip-existing`).
-3. For each work not skipped:
+3. For each work not skipped, with up to `--concurrency` requests in
+   flight:
    a. Submit `<corpus-dir>/<pdf_path>` to GROBID.
-   b. Save TEI XML to `tei/<stem>.tei.xml`.
+   b. Save TEI XML to `tei/<stem>.tei.xml` (the main thread does this
+      and step d, in completion order).
    c. Hash the TEI bytes (`sha256`).
    d. Append `ExtractedDocument(work_id, tei_path, content_sha256,
       pdf_sha256, extracted_at)` to `extraction.jsonl`.
@@ -288,7 +293,6 @@ for the macOS/Apple Silicon Rosetta workaround if GROBID fails to start.
   tool, so adding one is a code change, not a schema change.
   `ExtractionMeta.failed_count` shows how often GROBID fails on the
   corpus.
-- PDFs are processed one at a time.
 - The operator starts and stops GROBID; the CLI only checks and uses it.
 - GROBID's TEI varies across paper types. The parser handles the known
   shapes listed above; other shapes surface downstream as

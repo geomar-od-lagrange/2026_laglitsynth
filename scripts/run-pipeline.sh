@@ -22,9 +22,9 @@
 #                `laglitsynth review-config`; see docs/configs.md.
 #
 # Precedence for every knob is env > config > built-in default. Each is
-# resolved as VAR="${VAR:-${CFG_VAR:-default}}", so an env var (or
-# `sbatch --export=`) overrides the config, which overrides the default,
-# and an absent config field falls through to today's default.
+# resolved as VAR="${VAR:-${CFG_VAR:-default}}", so an env var overrides
+# the config, which overrides the default, and an absent config field
+# falls through to today's default.
 #
 # Env overrides (each wins over the config file):
 #   QUERY                  OpenAlex search string
@@ -49,6 +49,7 @@
 #                          --reasoning-effort when set (default: unset, the
 #                          provider's default)
 #   OUTPUT_ROOT, GROBID_URL,
+#   GROBID_CONCURRENCY     (--concurrency for stage 6; default 3),
 #   LLM_CONCURRENCY        (--concurrency for stages 3 and 7; default 1),
 #   ELIGIBILITY_CONCURRENCY (--concurrency for stage 7 only; default LLM_CONCURRENCY),
 #   EXTRACTION_CONCURRENCY  (--concurrency for stage 8 only; default 1 — long full-text prompts),
@@ -120,6 +121,7 @@ EXTRACTION_REASONING_EFFORT="${EXTRACTION_REASONING_EFFORT:-${CFG_EXTRACTION_REA
 LLM_CONCURRENCY="${LLM_CONCURRENCY:-${CFG_LLM_CONCURRENCY:-1}}"
 ELIGIBILITY_CONCURRENCY="${ELIGIBILITY_CONCURRENCY:-$LLM_CONCURRENCY}"
 EXTRACTION_CONCURRENCY="${EXTRACTION_CONCURRENCY:-${CFG_EXTRACTION_CONCURRENCY:-1}}"
+GROBID_CONCURRENCY="${GROBID_CONCURRENCY:-${CFG_GROBID_CONCURRENCY:-3}}"
 
 # Collaborator handoff: export the still-missing selection after stage 5.
 EXPORT_GAP="${EXPORT_GAP:-0}"
@@ -242,7 +244,8 @@ run_stage 6 fulltext-extraction \
     laglitsynth fulltext-extraction \
         --data-dir "$ROOT" \
         --grobid-url "$GROBID_URL" \
-        --skip-existing
+        --skip-existing \
+        --concurrency "$GROBID_CONCURRENCY"
 
 run_stage 7 fulltext-eligibility \
     laglitsynth fulltext-eligibility \

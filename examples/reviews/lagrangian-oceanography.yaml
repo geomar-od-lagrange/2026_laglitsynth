@@ -38,3 +38,4 @@ codebook: ../codebooks/lagrangian-oceanography.yaml
 # concurrency:
 #   llm: 1
 #   extraction: 1
+#   grobid: 3                     # in-flight GROBID requests at stage 6

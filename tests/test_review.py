@@ -42,6 +42,7 @@ def test_minimal_query_only_validates() -> None:
     assert config.screening_threshold is None
     assert config.models.screening is None
     assert config.concurrency.llm is None
+    assert config.concurrency.grobid is None
 
 
 def test_extra_top_level_key_rejected() -> None:
@@ -75,7 +76,7 @@ def test_emit_full_config_round_trips(tmp_path: Path) -> None:
                 "extraction": "chatter",
                 "extraction_reasoning_effort": "high",
             },
-            "concurrency": {"llm": 4, "extraction": 1},
+            "concurrency": {"llm": 4, "extraction": 1, "grobid": 3},
         },
     )
     parsed = _as_dict(emit_cfg_lines(load_review_config(cfg)))
@@ -97,6 +98,16 @@ def test_emit_full_config_round_trips(tmp_path: Path) -> None:
     assert parsed["CFG_EXTRACTION_REASONING_EFFORT"] == "high"
     assert parsed["CFG_LLM_CONCURRENCY"] == "4"
     assert parsed["CFG_EXTRACTION_CONCURRENCY"] == "1"
+    assert parsed["CFG_GROBID_CONCURRENCY"] == "3"
+
+
+def test_grobid_concurrency_knob() -> None:
+    """concurrency.grobid is typed and emitted as CFG_GROBID_CONCURRENCY."""
+    config = ReviewConfig.model_validate({"query": "x", "concurrency": {"grobid": 5}})
+    assert config.concurrency.grobid == 5
+    assert "CFG_GROBID_CONCURRENCY=5" in emit_cfg_lines(config)
+    with pytest.raises(ValidationError):
+        ReviewConfig.model_validate({"query": "x", "concurrency": {"grobid": "many"}})
 
 
 def test_emit_none_fields_are_empty(tmp_path: Path) -> None:
@@ -121,6 +132,7 @@ def test_emit_none_fields_are_empty(tmp_path: Path) -> None:
         "CFG_EXTRACTION_REASONING_EFFORT",
         "CFG_LLM_CONCURRENCY",
         "CFG_EXTRACTION_CONCURRENCY",
+        "CFG_GROBID_CONCURRENCY",
     ):
         assert parsed[name] == "", name
     # Empty value is literally `''` in the raw line so `eval` is safe.
