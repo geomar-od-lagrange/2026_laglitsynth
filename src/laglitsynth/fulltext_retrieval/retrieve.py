@@ -53,6 +53,9 @@ _SOURCE_LABELS: dict[PdfSource, str] = {
     PdfSource.unpaywall: "Retrieved (Unpaywall)",
     PdfSource.zotero_import: "Imported (Zotero)",
     PdfSource.manual: "Imported (manual)",
+    PdfSource.institutional: "Retrieved (institutional)",
+    PdfSource.zotero_desktop: "Retrieved (Zotero desktop)",
+    PdfSource.browser: "Retrieved (browser)",
     PdfSource.missing: "Missing",
 }
 

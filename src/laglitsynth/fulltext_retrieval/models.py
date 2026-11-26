@@ -8,10 +8,13 @@ TOOL_NAME = "laglitsynth.fulltext_retrieval.retrieve"
 
 
 class PdfSource(str, Enum):
-    oa = "oa"  # OA URL on the Work record
+    oa = "oa"  # OA URL: OpenAlex location, Semantic Scholar or arXiv
     unpaywall = "unpaywall"  # Unpaywall best_oa_location
     zotero_import = "zotero-import"  # ingested from a Zotero-exported folder
     manual = "manual"  # ingested from a plain folder drop
+    institutional = "institutional"  # scripted fetch over an institution's network
+    zotero_desktop = "zotero-desktop"  # Zotero desktop "Find Available PDF"
+    browser = "browser"  # browser session: Zotero connector or a clicked PDF link
     missing = "missing"  # no PDF yet; recorded so gaps are addressable
 
 

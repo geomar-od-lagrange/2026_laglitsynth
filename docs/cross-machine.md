@@ -106,14 +106,16 @@ Syncing between machines is rsync of subtrees of `data/`. The right
 direction and merge mode differ by subdir, because the stages differ in
 how they write. The categories:
 
-- Bulk, fetch-once, union-safe — the PDFs and TEI. A PDF is fetched once
-  per work and reused everywhere; a TEI file is GROBID's deterministic
-  output for one PDF. These are content-addressed by work and never
-  rewritten in place, so they only ever accumulate. Sync them by **union
-  in either direction** (rsync without `--delete`), and prefer to move
-  them **once** (laptop or collaborator → NESH) rather than round-trip
-  the bulk. Never `rsync --delete` these — a stale side would delete
-  PDFs the other side fetched.
+- The PDF store, `data/pdfs/` — not rsynced. It is versioned in the
+  private `data/` submodule ([pdf-store.md](pdf-store.md)): A commits and
+  pushes after retrieval or import, other machines `git pull` inside
+  `data/`.
+- Bulk, fetch-once, union-safe — the TEI. A TEI file is GROBID's
+  deterministic output for one PDF, keyed by work and never rewritten in
+  place, so it only ever accumulates. Sync it by **union in either
+  direction** (rsync without `--delete`), and prefer to move it **once**
+  rather than round-trip the bulk. Never `rsync --delete` it — a stale
+  side would delete files the other side produced.
 - Per-run-id, authoritative-side-wins — the gate stages
   ([`screening-abstracts`](interfaces.md#stage-3--screening-abstracts-exists),
   [`fulltext-eligibility`](interfaces.md#stage-7--fulltext-eligibility-exists),

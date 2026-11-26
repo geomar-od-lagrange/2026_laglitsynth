@@ -43,7 +43,8 @@ them; every work has an OpenAlex id and therefore a stem, so stem-keying
 gives every work a slot uniformly. DOI is recorded as provenance and used as
 a match hint at import, never as the filesystem name.
 
-PDFs are not committed to git; add `data/pdfs/` to `.gitignore`.
+`data/pdfs/` is versioned in the private `data/` submodule, with the PDFs in
+Git LFS; see [pdf-store.md](pdf-store.md).
 
 ## Provenance sidecar
 
@@ -53,10 +54,13 @@ one PDF came from or that it is still missing. Each line is a
 
 ```python
 class PdfSource(str, Enum):
-    oa = "oa"                        # OA URL on the Work record
+    oa = "oa"                        # OA URL: OpenAlex location, Semantic Scholar or arXiv
     unpaywall = "unpaywall"          # Unpaywall best_oa_location
     zotero_import = "zotero-import"  # ingested from a Zotero-exported folder
     manual = "manual"                # ingested from a plain folder drop
+    institutional = "institutional"  # scripted fetch over an institution's network
+    zotero_desktop = "zotero-desktop"  # Zotero desktop "Find Available PDF"
+    browser = "browser"              # browser session: Zotero connector or a clicked PDF link
     missing = "missing"              # no PDF yet; recorded so gaps are addressable
 
 
@@ -123,7 +127,10 @@ what would be retrieved without downloading.
 Sci-Hub and shadow libraries, publisher APIs, and Google Scholar scraping
 are all out of scope — legal risk or integration cost not appropriate for a
 systematic review. Paywalled PDFs come in through the import loop below,
-where a human exercises institutional access normally.
+where a human exercises institutional access normally. The store's
+`institutional` PDFs come from a one-off scripted fetch outside the CLI
+(see [pdf-store.md](pdf-store.md)); no such fetcher is part of the
+pipeline.
 
 ## Export → collaborator → import
 
