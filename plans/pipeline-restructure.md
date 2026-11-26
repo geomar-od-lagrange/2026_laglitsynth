@@ -33,7 +33,8 @@ frequencies) happens before the corpus.
 
 1. **catalogue-fetch** and **catalogue-dedup**: unchanged.
 2. **fulltext-retrieval**: open-access retrieval over the whole
-   deduplicated catalogue. Screening never gates it.
+   deduplicated catalogue, trying every OpenAlex location of a work plus
+   Semantic Scholar and arXiv. Screening never gates it.
 3. **screening-abstracts**: runs independently of retrieval, before, after
    or in parallel. It annotates works.
 4. **Export/import loop**: the export lists missing PDFs for collaborators
@@ -42,7 +43,7 @@ frequencies) happens before the corpus.
    procedure on their own network, in this order: Zotero desktop
    retrieval on an RIS import of the export, then the Zotero browser
    connector on doi.org tabs, then clicking PDF links by hand. See
-   [pdf-acquisition-trial.md](../docs/explorations/pdf-acquisition-trial.md).
+   [pdf-store.md](../docs/pdf-store.md).
    The export therefore includes an RIS file carrying the work id. There
    is no paid-access fetcher in the CLI, and publisher scraping stays out
    of scope. Every PDF obtained off the central machine comes back through the

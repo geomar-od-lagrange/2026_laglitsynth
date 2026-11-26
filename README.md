@@ -16,6 +16,8 @@ cp .env.example .env  # then fill in OPENALEX_API_KEY and UNPAYWALL_EMAIL
 LFS) in the private repo
 [willi-rath/2026_laglitsynth_data](https://git.geomar.de/willi-rath/2026_laglitsynth_data).
 With access, fetch it with `git lfs install && git submodule update --init`.
+See [docs/pdf-store.md](docs/pdf-store.md) for what it holds and how to add
+PDFs.
 Everything else the pipeline writes under `data/` stays local.
 
 Stages 1 and 5 read `OPENALEX_API_KEY` and `UNPAYWALL_EMAIL` from `.env`
