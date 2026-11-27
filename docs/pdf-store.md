@@ -60,8 +60,9 @@ including the RIS file below; `--screening-threshold` narrows it to works
 worth a collaborator's time. `laglitsynth fulltext-retrieval-import
 --import-dir <folder> --source zotero-desktop|browser|institutional|manual`
 brings a folder back. Import matches each PDF against the whole
-deduplicated catalogue, by the DOI the file carries or by a `<stem>.pdf`
-name, so a folder needs no prior export and any PDF of a known work lands.
+deduplicated catalogue, by the DOI the file carries, by a `<stem>.pdf`
+name, or by a catalogue title it carries when it has no usable DOI, so a
+folder needs no prior export and any PDF of a known work lands.
 See [fulltext-retrieval.md](fulltext-retrieval.md) for the matching rules.
 
 ### Zotero desktop
@@ -144,7 +145,8 @@ The PDFs attached so far are counted through the local API at
 Open doi.org tabs for the works still missing. Save each with the Zotero
 connector, or click the PDF link. Items saved by the connector lose `AN`,
 and downloads carry no work id at all. Collect the PDFs in one folder and
-import it with `--source browser`: import reads the DOI out of each file.
+import it with `--source browser`: import reads the DOI, or failing that
+the title, out of each file.
 A PDF it reports as unmatched is matched to the catalogue by hand (by
 title, confirmed against its first pages), renamed to `<stem>.pdf` and
 imported again.

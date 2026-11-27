@@ -2,11 +2,11 @@
 
 ## Goal
 
-Let [`fulltext-retrieval-import`](../src/laglitsynth/fulltext_retrieval/import_.py)
+Let [`fulltext-retrieval-import`](../../src/laglitsynth/fulltext_retrieval/import_.py)
 file a returned PDF that carries no DOI it can use, by the catalogue title
 the PDF carries, with an acceptance rule chosen against the PDF store rather
 than invented. The DOI path is exhausted
-([contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md)):
+([contributor-pdf-matching.md](../../docs/explorations/contributor-pdf-matching.md)):
 what is still unmatched embeds no DOI in any inspected location.
 
 ## Non-goals
@@ -19,7 +19,7 @@ DOI-confirmed store PDFs under a wrong work.
 ## Target state
 
 A new module
-[`title_match.py`](../src/laglitsynth/fulltext_retrieval/title_match.py)
+[`title_match.py`](../../src/laglitsynth/fulltext_retrieval/title_match.py)
 holds a `TitleIndex` built once per import from the catalogue's titles.
 Titles and PDF text are compared as keys: markup dropped, NFKC, casefolded,
 every non-alphanumeric character removed, so line breaks, hyphenation and
@@ -47,20 +47,20 @@ a book review, an affiliation) files under that work at every margin tried.
 ## Implementation sequence
 
 1. This plan, and the measurement added to
-   [contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md).
+   [contributor-pdf-matching.md](../../docs/explorations/contributor-pdf-matching.md).
 2. `title_match.py`, the `rapidfuzz` dependency and the importer wiring.
-   Tests in [test_title_match.py](../tests/test_title_match.py): keys ignore
+   Tests in [test_title_match.py](../../tests/test_title_match.py): keys ignore
    case, spacing, punctuation, ligatures, markup and end-of-line hyphenation;
    a title over three lines is one candidate; lines below the top 40 are not
    read; exact and slightly misspelt titles are accepted; a distant title and
    a related title differing in a few words are not; an untitled work is not indexed; a shared title names both works. In
-   [test_fulltext_retrieval_import.py](../tests/test_fulltext_retrieval_import.py):
+   [test_fulltext_retrieval_import.py](../../tests/test_fulltext_retrieval_import.py):
    a DOI-less PDF files by a title broken over page-1 lines and by a
    metadata title alone; a DOI and a `<stem>.pdf` name each beat another
    work's title; two works with one title and two near-same titles are
    refused; a short title met in an affiliation is not accepted.
-3. Docs ([fulltext-retrieval.md](../docs/fulltext-retrieval.md),
-   [pdf-store.md](../docs/pdf-store.md)) and the roadmap; this plan moves to
+3. Docs ([fulltext-retrieval.md](../../docs/fulltext-retrieval.md),
+   [pdf-store.md](../../docs/pdf-store.md)) and the roadmap; this plan moves to
    `plans/done/`.
 
 ## Follow-ups
@@ -73,7 +73,7 @@ question, not an import one.
 
 ## Critical files
 
-- [src/laglitsynth/fulltext_retrieval/import_.py](../src/laglitsynth/fulltext_retrieval/import_.py)
-- [tests/test_fulltext_retrieval_import.py](../tests/test_fulltext_retrieval_import.py)
-- [docs/explorations/contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md)
-- [docs/fulltext-retrieval.md](../docs/fulltext-retrieval.md)
+- [src/laglitsynth/fulltext_retrieval/import_.py](../../src/laglitsynth/fulltext_retrieval/import_.py)
+- [tests/test_fulltext_retrieval_import.py](../../tests/test_fulltext_retrieval_import.py)
+- [docs/explorations/contributor-pdf-matching.md](../../docs/explorations/contributor-pdf-matching.md)
+- [docs/fulltext-retrieval.md](../../docs/fulltext-retrieval.md)
