@@ -39,8 +39,8 @@ rsync -a --exclude pdfs/ data.local/ data/
 ## External services
 
 [`docs/external-services.md`](docs/external-services.md) is the setup
-runbook; each stage doc opens with a Prerequisites block naming what that
-stage needs.
+runbook; each stage doc has a Prerequisites block, right after its
+introduction, naming what that stage needs.
 
 - OpenAlex API key (stage 1) — free, register at
   <https://openalex.org/settings/api>; `OPENALEX_API_KEY` in `.env`.
@@ -102,10 +102,12 @@ built. Each stage has its own doc under [`docs/`](docs/).
 ## Running the pipeline
 
 [`scripts/run-pipeline.sh [config.yaml]`](scripts/run-pipeline.sh) runs
-stages 1..8 end-to-end with `--data-dir` set to `OUTPUT_ROOT` (default
-`data/run/`). That is not the `data/` the stages default to, so the
-runner's PDF store is `data/run/pdfs/`, not the submodule's `data/pdfs/`;
-set `OUTPUT_ROOT=data` to run on the shared store. The runner exports each
+stages 1..8 end-to-end with all output under `OUTPUT_ROOT` (default
+`data/run/`): stage 1 gets
+`--output $OUTPUT_ROOT/catalogue-fetch/catalogue.jsonl`, every later stage `--data-dir $OUTPUT_ROOT`. That is not the `data/` the
+stages default to, so the runner's PDF store is `data/run/pdfs/`, not the
+submodule's `data/pdfs/`; set `OUTPUT_ROOT=data` to run on the shared
+store. The runner exports each
 `.env` variable that the environment leaves unset or empty (an exported
 value wins over `.env`) and passes the OpenAlex key and the Unpaywall
 email as flags to stages 1 and 5. It never passes `LLM_API_KEY` as a
@@ -181,8 +183,9 @@ its prompts carry whole full texts. The runner starts each LLM stage's
 output afresh (stage 6 runs with `--skip-existing`), so an interrupted run
 means re-running the LLM stage it stopped in. To split a long run, use
 `STOP_AFTER_STAGE=6` first to land catalogue, retrieval, corpus and
-extraction, then run stages 7 and 8 by hand, where `--skip-existing`
-resumes an interrupted run.
+extraction, then run stages 7 and 8 by hand with
+`--data-dir data/run` (or the `OUTPUT_ROOT` value), since by hand they
+default to `data/`; there `--skip-existing` resumes an interrupted run.
 
 ### Running stages by hand
 

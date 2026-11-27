@@ -238,10 +238,10 @@ Update this file when a plan is written, implemented, or archived.
 
 - [Usability docs](done/usability-docs.md) — the external-services runbook
   ([external-services.md](../docs/external-services.md)), one Prerequisites
-  block shape (inputs, services, credentials) at the top of every stage
-  doc, and a leaner README. The Ollama, Apple Silicon and "STOP HERE"
-  parts were dropped after the pipeline restructure; the plan's status
-  note lists what was dropped and why.
+  block shape (inputs, services, credentials) right after the
+  introduction of every stage doc, and a leaner README. The Ollama, Apple
+  Silicon and "STOP HERE" parts were dropped after the pipeline
+  restructure; the plan's status note lists what was dropped and why.
 
 - [Cross-machine + storage convention](../docs/cross-machine.md) — the
   project is the working directory, every stage runs from the repo root

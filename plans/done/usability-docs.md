@@ -11,9 +11,9 @@ with a provider-neutral LLM endpoint section in place of the Ollama steps,
 and an OpenAlex and Unpaywall section added later. D2: every stage doc
 (catalogue-fetch, catalogue-dedup, screening-abstracts,
 fulltext-retrieval, corpus, fulltext-extraction, eligibility,
-extraction-codebook) opens with a Prerequisites block of one shape —
-inputs, services, credentials — and `external-services.md` hands
-citation consolidation and crash recovery to
+extraction-codebook) has a Prerequisites block of one shape — inputs,
+services, credentials — right after its introduction, and
+`external-services.md` hands citation consolidation and crash recovery to
 [`fulltext-extraction.md`](../../docs/fulltext-extraction.md) instead of
 repeating them. D3: the README folds its four credential and service
 sections into one External services list, states that the runner's data

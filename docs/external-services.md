@@ -2,8 +2,9 @@
 
 Runbook for the external services the pipeline depends on: the
 OpenAlex and Unpaywall APIs (stages 1 and 5), an OpenAI-compatible LLM
-endpoint (stages 3, 7 and 8) and GROBID (stage 6). Each stage doc opens
-with a Prerequisites block naming what that stage needs.
+endpoint (stages 3, 7 and 8) and GROBID (stage 6). Each stage doc has a
+Prerequisites block, right after its introduction, naming what that
+stage needs.
 
 ## OpenAlex and Unpaywall
 

@@ -1,18 +1,18 @@
 # Cross-machine and storage convention
 
 The pipeline runs across more than one machine: the operator's laptop
-for the pipeline stages, with GROBID in Docker and the LLM stages calling
-the review's hosted endpoint; and one or more collaborators' machines,
-where PDFs are fetched by hand behind their own institutional access. The two halves
-of the [pipeline](pipeline.md) meet at the self-contained
-[corpus](corpus.md), so a machine running the
-analysis half needs `data/corpus/` and nothing else from the first half.
-This document states the conventions that make that work — the project
+for the pipeline stages, with GROBID in Docker and the LLM stages
+calling the review's hosted endpoint; and one or more collaborators'
+machines, where PDFs are fetched by hand behind their own institutional
+access. The two halves of the [pipeline](pipeline.md) meet at the
+self-contained [corpus](corpus.md), so a machine running the analysis
+half needs `data/corpus/` and nothing else from the first half. This
+document states the conventions that make that work — the project
 boundary, the path contract, per-machine credentials, and the safe
 direction to sync each `data/` subdir. It is the written form of the
 "many machines" and "where to store things" sections of
-[running-the-pipeline.md](explorations/running-the-pipeline.md); read that
-exploration for the reasoning, this document for the rules.
+[running-the-pipeline.md](explorations/running-the-pipeline.md); read
+that exploration for the reasoning, this document for the rules.
 
 ## The project is the working directory
 
@@ -54,15 +54,16 @@ stop resolving on the next machine.
 ## `.env` is per-machine and never synced
 
 Each machine that runs stages has its own `.env` (see
-[.env.example](../.env.example)), and it is never copied between machines:
-it is a credentials file and has no place in a synced data tree.
-Collaborators run no stage and need no `.env`. Keep it out of any rsync of `data/` (it lives at the
-repo root, not under `data/`, so a `data/`-scoped sync already excludes
-it); when setting up a new machine, write a fresh `.env` there. The
-explicit `--api-key` / `--email` flags always win over `.env` (as does an
-exported `LLM_API_KEY` for the LLM stages), and the
-`.env` read is announced on stderr (`Loaded <KEY> from .env`), never
-silent — see [interfaces.md](interfaces.md#configuration-flags-first-env-fallback-for-credentials).
+[.env.example](../.env.example)), and it is never copied between
+machines: it is a credentials file and has no place in a synced data
+tree. Collaborators run no stage and need no `.env`. Keep it out of any
+rsync of `data/` (it lives at the repo root, not under `data/`, so a
+`data/`-scoped sync already excludes it); when setting up a new machine,
+write a fresh `.env` there. The explicit `--api-key` / `--email` flags
+always win over `.env` (as does an exported `LLM_API_KEY` for the LLM
+stages), and the `.env` read is announced on stderr (`Loaded <KEY> from
+.env`), never silent — see
+[interfaces.md](interfaces.md#configuration-flags-first-env-fallback-for-credentials).
 
 ## The division of labour
 
@@ -136,30 +137,34 @@ how they write. The categories:
   would delete files the other side produced.
 - Per-run-id, authoritative-side-wins — the gate stages
   ([`screening-abstracts`](screening-abstracts.md),
-  [`fulltext-eligibility`](eligibility.md),
-  and [`extraction-codebook`](extraction-codebook.md))
-  each write whole-file outputs under a `<run-id>/` leaf — its
-  `verdicts.jsonl` / `records.jsonl`, the meta, and a `config.yaml`
-  snapshot. A given run-id directory is produced whole by
-  one machine; the machine that ran that stage is authoritative for that
-  run-id. Sync the whole `<run-id>/` directory **from the authoritative
-  side**, treating it as a unit, and **never `--delete`** — a wrong-way
-  delete loses a run's verdicts irrecoverably. These are tiny JSONL plus
-  meta and travel trivially, but they are whole-file outputs, not
-  append-only logs: if two machines each ran the stage over part of the
-  catalogue under the *same* run-id there is no merge tool. Different run-ids do not collide, so unioning distinct
-  run directories across machines is safe; what is unsafe is two machines
-  writing the **same** run-id and then overwriting each other.
+  [`fulltext-eligibility`](eligibility.md), and
+  [`extraction-codebook`](extraction-codebook.md)) each write whole-file
+  outputs under a `<run-id>/` leaf — its `verdicts.jsonl` /
+  `records.jsonl`, the meta, and a `config.yaml` snapshot. A given
+  run-id directory is produced whole by one machine; the machine that
+  ran that stage is authoritative for that run-id. Sync the whole
+  `<run-id>/` directory **from the authoritative side**, treating it as
+  a unit, and **never `--delete`** — a wrong-way delete loses a run's
+  verdicts irrecoverably. These are tiny JSONL plus meta and travel
+  trivially, but they are whole-file outputs, not append-only logs: if
+  two machines each ran the stage over part of the catalogue under the
+  *same* run-id there is no merge tool. Different run-ids do not
+  collide, so unioning distinct run directories across machines is safe;
+  what is unsafe is two machines writing the **same** run-id and then
+  overwriting each other.
 
 The spine — the deduplicated catalogue and its siblings under
-[`data/catalogue-dedup/`](../data) (`deduplicated.jsonl`, `dropped.jsonl`,
-the meta) — is machine-independent, small, and has no run-id. Rsync it
-once, early, and treat it as read-only on the downstream machines; the
-first-half stages and `corpus-assemble` read `deduplicated.jsonl`, so it
-must be identical everywhere they run. The stage-1 (`catalogue-fetch`) and stage-5
-(`fulltext-retrieval`) record files are likewise run-id-less whole-file
-outputs; sync them deliberately from the side that produced them, never
-with `--delete`.
+[`data/catalogue-dedup/`](../data) (`deduplicated.jsonl`,
+`dropped.jsonl`, the meta) — is machine-independent, small, and has no
+run-id. Rsync it once, early, and treat it as read-only on the
+downstream machines; the first-half stages and `corpus-assemble` read
+`deduplicated.jsonl`, so it must be identical everywhere they run. The
+stage-1 files under `data/catalogue-fetch/` are likewise run-id-less
+whole-file outputs; sync them deliberately from the side that produced
+them, never with `--delete`. Stage 5 writes into the versioned store
+`data/pdfs/` (above) and leaves only its per-invocation counts in
+`data/fulltext-retrieval/retrieval-meta.json`, which belongs to the
+machine that ran it and needs no sync.
 
 What makes a wrong-direction sync dangerous is the combination of
 whole-file outputs and `--delete`: rsyncing a stale `data/` over a fresh

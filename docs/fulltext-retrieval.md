@@ -9,17 +9,6 @@ own institutional access. The store is the first half's input to
 the corpus. Text extraction (parsing PDFs into structured sections) is a
 separate concern handled by [fulltext-extraction.md](fulltext-extraction.md).
 
-`fulltext-retrieval` works on every work in `--catalogue` (default: the
-deduplicated catalogue); it reads no screening verdicts, so screening and
-retrieval run in either order. The export, below, lists every catalogue
-work without a PDF. With `--screening-threshold` it narrows that list by
-screening score, since collaborator time is the cost worth saving: it joins
-the catalogue against stage 3's verdict sidecar, keeping works at or above
-the threshold and works whose score is `None` (the sentinel reasons). That
-join **silently drops** any work absent from the screening verdicts file
-(`_active_works` does `if sv is None: continue`), so confirm the verdicts
-file covers the catalogue before a filtered export.
-
 ## Prerequisites
 
 - Inputs: the deduplicated catalogue from
@@ -35,6 +24,17 @@ file covers the catalogue before a filtered export.
 - Credentials: `fulltext-retrieval` needs a contact email for Unpaywall, as
   `--email` or `UNPAYWALL_EMAIL` in `.env` (see
   [external-services.md](external-services.md#openalex-and-unpaywall)).
+
+`fulltext-retrieval` works on every work in `--catalogue` (default: the
+deduplicated catalogue); it reads no screening verdicts, so screening and
+retrieval run in either order. The export, below, lists every catalogue
+work without a PDF. With `--screening-threshold` it narrows that list by
+screening score, since collaborator time is the cost worth saving: it joins
+the catalogue against stage 3's verdict sidecar, keeping works at or above
+the threshold and works whose score is `None` (the sentinel reasons). That
+join **silently drops** any work absent from the screening verdicts file
+(`_active_works` does `if sv is None: continue`), so confirm the verdicts
+file covers the catalogue before a filtered export.
 
 ## The persistent PDF store
 
