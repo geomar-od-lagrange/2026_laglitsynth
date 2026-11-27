@@ -15,10 +15,17 @@ Swapping the review topic is configuration work — edit the `decision` block
 
 ## Prerequisites
 
-An OpenAI-compatible endpoint that serves decisions, and its API key as
-`LLM_API_KEY` (exported, or in `.env`; see
-[.env.example](../.env.example)). See
-[external-services.md](external-services.md).
+- Inputs: the deduplicated catalogue from
+  [catalogue-dedup](catalogue-dedup.md),
+  `<data-dir>/catalogue-dedup/deduplicated.jsonl` (the positional input
+  overrides); the screening-criteria YAML (`--screening-criteria`); the
+  run-id from `<data-dir>/manifest.json`, written by `manifest-init` (see
+  [run-manifest.md](run-manifest.md)), unless `--run-id` is passed.
+- Services: an OpenAI-compatible endpoint that serves decisions:
+  `--base-url` and `--model` are required, `--decisions-url` names a
+  decisions endpoint other than `<base-url>/decisions` (see
+  [external-services.md](external-services.md#llm-endpoint)).
+- Credentials: `LLM_API_KEY`, exported or in `.env`, or `--api-key`.
 
 ## Usage
 

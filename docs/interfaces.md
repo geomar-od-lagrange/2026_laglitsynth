@@ -63,18 +63,18 @@ passed explicitly to override. The screening run-id leaf comes from
 |---|---|---|
 | `data/manifest.json` | [`RunManifest`](../src/laglitsynth/manifest.py) | The review's queries and screening run-id; written once by `manifest-init` |
 
-### Stage 1 — catalogue-fetch *(exists)*
+### Stage 1 — catalogue-fetch
 
 | Path | Model | Description |
 |---|---|---|
 | `data/catalogue-fetch/<slug>_<ts>.jsonl` | [`Work`](../src/laglitsynth/catalogue_fetch/models.py) | Retrieved catalogue records |
 | `data/catalogue-fetch/<slug>_<ts>.meta.json` | [`FetchMeta`](../src/laglitsynth/catalogue_fetch/models.py) | Per-run provenance |
 
-Multiple search runs produce separate timestamped files. Only the JSONL
-records are concatenated for stage 2 (`cat data/catalogue-fetch/*.jsonl`).
-The meta files stay as per-run provenance records — they are not merged.
+Multiple search runs produce separate timestamped files. Stage 2 reads
+every `data/catalogue-fetch/*.jsonl` in one pass; the meta files stay as
+per-run provenance records and are not merged.
 
-### Stage 2 — catalogue-dedup *(exists)*
+### Stage 2 — catalogue-dedup
 
 | Path | Model | Description |
 |---|---|---|
@@ -83,7 +83,7 @@ The meta files stay as per-run provenance records — they are not merged.
 | `data/catalogue-dedup/dedup-meta.json` | [`DeduplicationMeta`](../src/laglitsynth/catalogue_dedup/models.py) | Counts by matching rule |
 | `data/catalogue-dedup/sample-<n>-seed<seed>.jsonl` | [`Work`](../src/laglitsynth/catalogue_fetch/models.py) | Optional seeded subset written by `catalogue-sample`, passed downstream as `--catalogue`; `.meta.json` sidecar is a [`SampleMeta`](../src/laglitsynth/catalogue_dedup/models.py) |
 
-### Stage 3 — screening-abstracts *(exists)*
+### Stage 3 — screening-abstracts
 
 | Path | Model | Description |
 |---|---|---|
@@ -96,7 +96,7 @@ relevance score and its `--screening-threshold` flag. No
 `screened.jsonl` or `rejected.jsonl` — the verdict sidecar is the only
 output.
 
-### Stage 5 — fulltext-retrieval *(exists)*
+### Stage 5 — fulltext-retrieval
 
 | Path | Model | Description |
 |---|---|---|
@@ -117,7 +117,7 @@ for a collaborator, optionally narrowed by `--screening-threshold`;
 works through the whole deduplicated catalogue, so no prior export is
 needed.
 
-### corpus-assemble *(exists)*
+### corpus-assemble
 
 | Path | Model | Description |
 |---|---|---|
@@ -148,7 +148,7 @@ afresh otherwise. The readers for stages 6–8 are in
 | `data/fulltext-extraction/extraction-meta.json` | [`ExtractionMeta`](../src/laglitsynth/fulltext_extraction/models.py) | `corpus_id`, GROBID version, counts |
 | `data/fulltext-extraction/tei/<work_id>.tei.xml` | (XML) | Canonical GROBID TEI output — read lazily via [`TeiDocument`](../src/laglitsynth/fulltext_extraction/tei.py) |
 
-### Stage 7 — fulltext-eligibility *(exists)*
+### Stage 7 — fulltext-eligibility
 
 | Path | Model | Description |
 |---|---|---|
@@ -162,7 +162,7 @@ count), not flagged.
 `verdicts.jsonl` is the source of truth and the sole machine output; there
 is no derived `eligible.jsonl`.
 
-### Stage 8 — extraction-codebook *(exists)*
+### Stage 8 — extraction-codebook
 
 | Path | Model | Description |
 |---|---|---|
@@ -203,8 +203,8 @@ named. `--run-id` on stage 3 and the export, and `--screening-run-id` on
 laglitsynth manifest-init QUERY [QUERY ...] [--data-dir DIR]
 
 # Stage 1 — catalogue-fetch
-laglitsynth catalogue-fetch QUERY --api-key KEY \
-    [-o data/catalogue-fetch/<slug>_<timestamp>.jsonl] \
+laglitsynth catalogue-fetch QUERY [--api-key KEY] \
+    [-o data/catalogue-fetch/<slug>_<timestamp>.jsonl] [--data-dir DIR] \
     [--from-year YEAR] [--to-year YEAR] [--max-records N]
 
 # Stage 2 — catalogue-dedup
@@ -227,8 +227,7 @@ laglitsynth screening-abstracts [data/catalogue-dedup/deduplicated.jsonl] \
 # Stage 5 — fulltext-retrieval (automatic OA + Unpaywall into data/pdfs/)
 laglitsynth fulltext-retrieval \
     [--catalogue data/catalogue-dedup/deduplicated.jsonl] \
-    [--data-dir DIR] \
-    --email EMAIL \
+    [--data-dir DIR] [--email EMAIL] \
     [--refetch] [--dry-run]
 
 # Stage 5 — fulltext-retrieval-export (handoff bundle for a collaborator)
@@ -256,8 +255,8 @@ laglitsynth corpus-assemble \
 laglitsynth fulltext-extraction \
     [--corpus-dir data/corpus/] \
     [--output-dir data/fulltext-extraction/] \
-    [--data-dir DIR] [--grobid-url URL] [--skip-existing] \
-    [--concurrency N]
+    [--data-dir DIR] [--grobid-url URL] [--timeout SECONDS] \
+    [--skip-existing] [--consolidate-citations 0|1] [--concurrency N]
 
 # Stage 7 — fulltext-eligibility
 laglitsynth fulltext-eligibility \
@@ -310,10 +309,13 @@ positional argument; the rest use keyword flags.
 
 Every parameter is a CLI flag on the stage tool. For credential flags
 (`--api-key`, `--email`) the tool also reads `.env` in the working directory
-when the flag is omitted, and emits a one-line stderr notice
+when the flag is omitted (`OPENALEX_API_KEY`, `UNPAYWALL_EMAIL`,
+`LLM_API_KEY`), and emits a one-line stderr notice
 (`Loaded <KEY> from .env`). The explicit flag always wins; the `.env` read is
-never silent. The LLM stages' `--api-key` falls back to `LLM_API_KEY` in
-the environment first, then in `.env` (announced the same way). All other run-affecting parameters
+never silent. Only the LLM stages also read their key, `LLM_API_KEY`, from
+the environment, before `.env`. Each stage doc's Prerequisites block names
+the credentials it needs; [external-services.md](external-services.md) has
+the setup. All other run-affecting parameters
 (`--base-url`, `--grobid-url`, model names, thresholds) are CLI-only. The
 driver script [scripts/run-pipeline.sh](../scripts/run-pipeline.sh) exports
 each `.env` variable that the environment leaves unset or empty, so an
@@ -389,7 +391,10 @@ review config sets it as `concurrency.grobid`.
 
 ### End-to-end sequence
 
-A complete pipeline run with manual steps noted.
+A complete pipeline run by hand, from the repository root, with manual
+steps noted. Credentials come from `.env` (see
+[external-services.md](external-services.md)); `$LLM_BASE_URL` and the
+model names stand for the review's endpoint and models.
 
 ```sh
 # 0. Initialise the review: mints the run-id every later stage reads
@@ -397,8 +402,8 @@ laglitsynth manifest-init "lagrangian particle tracking" "ocean tracer simulatio
 
 # 1. Catalogue fetch (repeat for different keyword sets; each lands as its
 #    own timestamped file under data/catalogue-fetch/)
-laglitsynth catalogue-fetch "lagrangian particle tracking" --api-key "$OPENALEX_API_KEY"
-laglitsynth catalogue-fetch "ocean tracer simulation" --api-key "$OPENALEX_API_KEY"
+laglitsynth catalogue-fetch "lagrangian particle tracking"
+laglitsynth catalogue-fetch "ocean tracer simulation"
 
 # 2. Catalogue dedup (reads data/catalogue-fetch/*.jsonl)
 laglitsynth catalogue-dedup
@@ -408,12 +413,12 @@ laglitsynth catalogue-dedup
 # decision block (default: the Lagrangian-oceanography example).
 laglitsynth screening-abstracts \
     --screening-criteria examples/screening-criteria/lagrangian-oceanography.yaml \
-    --base-url https://llm.example.org/v1 --model <decisions-model>
+    --base-url "$LLM_BASE_URL" --model <decisions-model>
 
 # 5. Fulltext retrieval (every work in the deduplicated catalogue).
 #    Sticky by default: re-runs skip works that already have a PDF and
 #    attempt only missing/unseen ones.
-laglitsynth fulltext-retrieval --email user@example.com
+laglitsynth fulltext-retrieval
 
 # Diversify the still-missing margin via collaborators with library access:
 # export the gap, hand the bundle to a collaborator, import what they return.
@@ -427,14 +432,18 @@ laglitsynth fulltext-retrieval-import \
 laglitsynth corpus-assemble --screening-threshold 50
 
 # 6. Fulltext extraction
-# Manual: start GROBID container first
-laglitsynth fulltext-extraction --grobid-url http://localhost:8070
+# Manual: start GROBID first (docker run --rm -p 8070:8070 grobid/grobid:0.9.0-crf)
+laglitsynth fulltext-extraction
 
 # 7. Fulltext eligibility (writes to data/fulltext-eligibility/<run-id>/)
-laglitsynth fulltext-eligibility
+laglitsynth fulltext-eligibility --base-url "$LLM_BASE_URL" --model <decisions-model>
 
 # 8. Extraction codebook (writes to data/extraction-codebook/<run-id>/)
-laglitsynth extraction-codebook
+laglitsynth extraction-codebook --base-url "$LLM_BASE_URL" --model <chat-model>
+
+# Optional: review workbook for a sample of the stage 8 records
+laglitsynth extraction-codebook-export \
+    --records data/extraction-codebook/<run-id>/records.jsonl --n-subset 30
 ```
 
 The sequence ends at stage 8: synthesis is planned but not built.

@@ -1,36 +1,53 @@
 # Usability — documentation fixes
 
-Status: the Ollama parts of this plan are obsolete. The
-[pipeline restructure](done/pipeline-restructure.md) removed local LLMs: every
-LLM stage calls one OpenAI-compatible endpoint, `bake-model`, `num_ctx`
-and `OLLAMA_NUM_PARALLEL` are gone, and `docs/llm-concurrency.md` was
-deleted (concurrency is described in
-[interfaces.md](../docs/interfaces.md#llm-concurrency)). NESH is dropped
-as a pipeline target (see the [roadmap](roadmap.md#withdrawn)), so its
-batch wrapper and the manual NESH runbook section are gone too. Obsolete:
-runbook steps 1–5, the Reproducibility subsections
-on temperature and seed, the "No `--concurrency` flag" one-liner, the
-model-pull hints, and the README's Ollama section. The switch to the
-multi-arch `grobid/grobid:0.9.0-crf` image makes the Apple Silicon
-GROBID guidance obsolete as well: the README GROBID section's Rosetta
-comment (G2), the matching README hygiene bullet, the "Apple Silicon
-GROBID guidance is approximate" risk, and step 7's "GROBID wants ~2 GB
-itself" remark. The other GROBID steps, the per-stage prerequisite
-links and the remaining README hygiene items still apply.
+Status: done, in the form the [pipeline restructure](pipeline-restructure.md)
+left room for. The restructure removed local LLMs (every LLM stage calls
+one OpenAI-compatible endpoint), switched GROBID to the multi-arch
+`grobid/grobid:0.9.0-crf` image and dropped NESH, so the plan below is
+kept as written for the record, but only part of it was built.
+
+Done. D1: [`docs/external-services.md`](../../docs/external-services.md),
+with a provider-neutral LLM endpoint section in place of the Ollama steps,
+and an OpenAlex and Unpaywall section added later. D2: every stage doc
+(catalogue-fetch, catalogue-dedup, screening-abstracts,
+fulltext-retrieval, corpus, fulltext-extraction, eligibility,
+extraction-codebook) has a Prerequisites block of one shape — inputs,
+services, credentials — right after its introduction, and
+`external-services.md` hands citation consolidation and crash recovery to
+[`fulltext-extraction.md`](../../docs/fulltext-extraction.md) instead of
+repeating them. D3: the README folds its four credential and service
+sections into one External services list, states that the runner's data
+dir is `data/run/` rather than the submodule's `data/`, and points at the
+[end-to-end sequence](../../docs/interfaces.md#end-to-end-sequence) for
+running stages by hand, which also covers the "Run by hand" follow-up.
+
+Dropped. Runbook steps 1–5 (Ollama install, `OLLAMA_NUM_PARALLEL`, model
+pulls, Modelfile bake, SSH tunnel) and the README Ollama section: no local
+LLM is left. The Reproducibility subsections on temperature and seed: no
+temperature or seed is sent, which
+[interfaces.md](../../docs/interfaces.md#llmmeta) states once. The "No
+`--concurrency` flag" one-liner: stages 3, 7 and 8 all take
+`--concurrency`. The model-pull and model-size hints beyond "small models
+can return empty JSON". The Apple Silicon and Rosetta guidance: the image
+is multi-arch. The `interfaces.md` "STOP HERE" block: the end-to-end
+sequence ends at stage 8 and says so, and stages 9–12 no longer exist as
+such. The README `set -a; source .env; set +a` line: every stage reads its
+credential from `.env` itself. The `examples/` framing fix and the
+pipeline-level config consolidation are not taken up here.
 
 ## Goal
 
 Close the documentation gap a manual user hits when running stages 1–8
-without [`scripts/run-pipeline.sh`](../scripts/run-pipeline.sh). The
-[usability review](../docs/explorations/usability-review.md) catalogued
+without [`scripts/run-pipeline.sh`](../../scripts/run-pipeline.sh). The
+[usability review](../../docs/explorations/usability-review.md) catalogued
 twenty-five findings; this plan addresses every doc-only one. Code-side
 fixes (`--num-ctx`, `--concurrency` on stages 7/8, preflight error
 split, `.env` fallback, stage 8 default model, `bake-model`,
 `pipeline-up`) live in
-[`usability-cli.md`](done/usability-cli.md).
+[`usability-cli.md`](usability-cli.md).
 
 The centrepiece is one new file:
-[`docs/external-services.md`](../docs/external-services.md). It
+[`docs/external-services.md`](../../docs/external-services.md). It
 consolidates the Ollama and GROBID setup story that's currently
 scattered across four docs and one source file. Per-stage docs reduce
 their prerequisites blocks to a single link; the README's `## Setup`
@@ -40,17 +57,17 @@ section gains the missing install hints; investigative docs under
 ## Non-goals
 
 - Anything that changes a CLI flag or error message — code work, in
-  [`usability-cli.md`](done/usability-cli.md).
+  [`usability-cli.md`](usability-cli.md).
 - The architectural shifts from
-  [`usability-review.md` section 4](../docs/explorations/usability-review.md)
+  [`usability-review.md` section 4](../../docs/explorations/usability-review.md)
   (pipeline-level config, run-id elevation, `pipeline-up` subcommand,
   `examples/` rename) — separate plans when each is decided.
 - Path-bug fixes in per-stage docs that
-  [`verdicts-only-cutover.md`](done/verdicts-only-cutover.md) already
+  [`verdicts-only-cutover.md`](verdicts-only-cutover.md) already
   rewrites in its step 6 doc sweep — overlap is intentional but not
   duplicated work.
 - README cleanup beyond the four hygiene items below
-  ([`README.md`](../README.md) section reordering, prose tightening,
+  ([`README.md`](../../README.md) section reordering, prose tightening,
   reviewer-export schema details). The README rewrite that the cutover
   plan does in step 6 covers the structural shape; this plan adds the
   external-deps content gap.
@@ -64,7 +81,7 @@ Single runbook a manual user reads before stages 3, 6, 7, 8. Sequence:
 1. **Ollama install** — link to <https://ollama.com/download>; Linux
    `curl -fsSL https://ollama.com/install.sh | sh` (full installer,
    not just the binary, per the lessons in
-   [`nesh-ollama.md`](../docs/explorations/nesh-ollama.md)); macOS
+   [`nesh-ollama.md`](../../docs/explorations/nesh-ollama.md)); macOS
    `brew install --cask ollama`.
 2. **Start Ollama with `OLLAMA_NUM_PARALLEL` set** — explicit warning
    that the env var is read at `ollama serve` start time and exporting
@@ -73,97 +90,97 @@ Single runbook a manual user reads before stages 3, 6, 7, 8. Sequence:
 3. **Pull the models** — `gemma3:4b` for stages 3 and 7,
    `llama3.1:8b` (or larger) for stage 8 with the empty-JSON warning
    from
-   [`extraction-codebook.md`](../docs/extraction-codebook.md)
+   [`extraction-codebook.md`](../../docs/extraction-codebook.md)
    L251–256. Single-line quick-start: `ollama pull gemma3:4b && ollama
    pull llama3.1:8b`.
 4. **Bake Modelfiles for `num_ctx`** — the batch wrapper's (since
    deleted) Modelfile heredoc lifted into a doc-side recipe with `ollama create
    laglit-extract -f Modelfile`. Explain that the OpenAI `extra_body`
    `num_ctx` hint is not reliable; only the bake works. Cross-link to
-   [`usability-cli.md`](done/usability-cli.md) for the future
+   [`usability-cli.md`](usability-cli.md) for the future
    `bake-model` subcommand.
 5. **Remote Ollama via SSH tunnel** — concrete `ssh -L
    11434:localhost:11434 user@host`, plus the two-hop
    `ssh -A -L … && ssh -R …` pattern from
-   [`nesh-ollama.md`](../docs/explorations/nesh-ollama.md) L33–55.
+   [`nesh-ollama.md`](../../docs/explorations/nesh-ollama.md) L33–55.
 6. **GROBID install** — `docker run --rm -p 8070:8070
    grobid/grobid:0.9.0-crf` (multi-arch, native on Apple Silicon); health
    check `curl http://localhost:8070/api/isalive`.
 7. **GROBID memory tuning** — Docker Desktop default is 2 GB; GROBID
    wants ~2 GB itself; recommend 6–8 GB to give the JVM headroom (per
-   [`nesh-grobid.md`](../docs/explorations/nesh-grobid.md) L125).
+   [`nesh-grobid.md`](../../docs/explorations/nesh-grobid.md) L125).
 8. **macOS Docker `localhost:8070` workaround** — promote the
-   [`grobid-lessons.md`](../docs/grobid-lessons.md) L54–69
+   [`grobid-lessons.md`](../../docs/grobid-lessons.md) L54–69
    network-namespace trick into canonical guidance under a clearly
    labelled "macOS troubleshooting" subsection.
 9. **`consolidateCitations=0` rationale** — one short subsection
    explaining the default-off and pointing at
-   [`grobid-lessons.md`](../docs/grobid-lessons.md) for the cost
+   [`grobid-lessons.md`](../../docs/grobid-lessons.md) for the cost
    reasoning. Don't expose the flag here; that's a CLI decision in
-   [`usability-cli.md`](done/usability-cli.md).
+   [`usability-cli.md`](usability-cli.md).
 10. **GROBID mid-corpus crash recovery** — name `--skip-existing` as
     the recovery path explicitly. "If GROBID crashed at PDF 47/200,
     re-run with `--skip-existing` after restarting the container."
 
-The doc lives in [`docs/`](../docs/), not under `docs/explorations/`,
-because per [AGENTS.md](../AGENTS.md) it's descriptive (states facts
+The doc lives in [`docs/`](../../docs/), not under `docs/explorations/`,
+because per [AGENTS.md](../../AGENTS.md) it's descriptive (states facts
 about how to set the dependencies up), not investigative.
 
 ### Per-stage doc updates
 
 Each stage doc that today opens with "ollama serve" or "expects GROBID
 at port 8070" gets its prerequisites block replaced with a one-line
-link to [`external-services.md`](../docs/external-services.md). The
+link to [`external-services.md`](../../docs/external-services.md). The
 in-line snippets (e.g. the `ollama pull gemma3:4b` line in
-[`screening-abstracts.md`](../docs/screening-abstracts.md) L13) shrink
+[`screening-abstracts.md`](../../docs/screening-abstracts.md) L13) shrink
 to a quick-start example with the link for full setup.
 
 Specific edits:
 
-- [`docs/screening-abstracts.md`](../docs/screening-abstracts.md)
+- [`docs/screening-abstracts.md`](../../docs/screening-abstracts.md)
   L8–22 — replace the "Prerequisites" block with a link; add a
   "Reproducibility" subsection (~one paragraph) explaining
   `temperature=0.8` + per-call `seed` + `prompt_sha256` doesn't
-  include the seed (closes [O7](../docs/explorations/usability-review.md)).
-- [`docs/eligibility.md`](../docs/eligibility.md) — add a
+  include the seed (closes [O7](../../docs/explorations/usability-review.md)).
+- [`docs/eligibility.md`](../../docs/eligibility.md) — add a
   "Prerequisites" block linking to `external-services.md`; add a
   one-liner "**No `--concurrency` flag.** Stage 7 calls Ollama
   sequentially regardless of `OLLAMA_NUM_PARALLEL`. See
   llm-concurrency.md." (closes
-  [O5](../docs/explorations/usability-review.md) doc-side).
-- [`docs/extraction-codebook.md`](../docs/extraction-codebook.md) —
+  [O5](../../docs/explorations/usability-review.md) doc-side).
+- [`docs/extraction-codebook.md`](../../docs/extraction-codebook.md) —
   same prerequisites + concurrency note as eligibility; add the
   Reproducibility cross-reference; in the "Pass a bigger model"
   sentence at L256, append `pull it first with ollama pull
   llama3.1:8b (or gemma3:12b, qwen2.5:14b)` (closes
-  [O4](../docs/explorations/usability-review.md)).
-- [`docs/fulltext-extraction.md`](../docs/fulltext-extraction.md) —
+  [O4](../../docs/explorations/usability-review.md)).
+- [`docs/fulltext-extraction.md`](../../docs/fulltext-extraction.md) —
   add a "Prerequisites" block at the top with the GROBID `docker run`
   command and a link to `external-services.md` for everything else
-  (closes [G1](../docs/explorations/usability-review.md));
+  (closes [G1](../../docs/explorations/usability-review.md));
   pull in a `--skip-existing` recovery one-liner under "If GROBID
   crashes mid-corpus" (closes
-  [G5](../docs/explorations/usability-review.md)). The macOS
+  [G5](../../docs/explorations/usability-review.md)). The macOS
   workaround stays in `external-services.md`; this doc just links to
   it.
 
 ### `interfaces.md` end-to-end caveat
 
-[`docs/interfaces.md`](../docs/interfaces.md) — add a clearly visible
+[`docs/interfaces.md`](../../docs/interfaces.md) — add a clearly visible
 "STOP HERE — stages 9–12 are not yet implemented" block between the
 stage 8 and stage 9 commands in the End-to-end sequence (currently at
 L338–358). Keeps the canonical sequence honest.
 
 ### README hygiene
 
-[`README.md`](../README.md) edits, all in `## Tools`, `## Setup`,
+[`README.md`](../../README.md) edits, all in `## Tools`, `## Setup`,
 `## Ollama (for LLM stages)`, and `## GROBID (for full-text
 extraction)`:
 
 - **Number the eight implemented stages 1.–8.** in `## Tools`. Match
   the `Stage 1 — …` / `Stage 8 — …` form used in
-  [`docs/pipeline.md`](../docs/pipeline.md) and
-  [`docs/interfaces.md`](../docs/interfaces.md).
+  [`docs/pipeline.md`](../../docs/pipeline.md) and
+  [`docs/interfaces.md`](../../docs/interfaces.md).
   (P10)
 - **Fold the trailing "Stage 9+ are specified in pipeline.md but not
   yet implemented" paragraph** into the section's lead sentence —
@@ -171,7 +188,7 @@ extraction)`:
   stages 9–12 explicitly. (P10)
 - **Setup block: add `set -a; source .env; set +a` example** —
   one-liner under
-  [`## Setup`](../README.md) saying ".env is read by the wrappers; if
+  [`## Setup`](../../README.md) saying ".env is read by the wrappers; if
   you invoke stages by hand, source it first." (P6 doc-side, closes
   the manual-user trap.)
 - **Ollama section: install hint, `OLLAMA_NUM_PARALLEL` warning, link
@@ -181,7 +198,7 @@ extraction)`:
   - Change `ollama serve` to
     `OLLAMA_NUM_PARALLEL=2 ollama serve  # set before serve; export after start is silently ignored`
     with the explanation as a code-block comment. (O2)
-  - Append a "See [`external-services.md`](../docs/external-services.md)
+  - Append a "See [`external-services.md`](../../docs/external-services.md)
     for the full setup runbook" line at the end of the section.
 - **GROBID section: Apple Silicon caveat + link** — append a comment
   to the docker run line at L237: `# Apple Silicon: image is
@@ -202,33 +219,33 @@ above. Cross-link from each section back to the original
 reader who wants the full investigation can find it. Keep prose
 tight; the doc is for setup, not for explanation. Target length
 roughly 150–250 lines. Add the file to
-[`plans/roadmap.md`](roadmap.md) as a documentation-stage artefact.
+[`plans/roadmap.md`](../roadmap.md) as a documentation-stage artefact.
 
 ### 2. Per-stage doc updates + `interfaces.md` STOP HERE
 
 One commit covering:
 
-- [`docs/screening-abstracts.md`](../docs/screening-abstracts.md) —
+- [`docs/screening-abstracts.md`](../../docs/screening-abstracts.md) —
   prereq block link; new Reproducibility subsection.
-- [`docs/eligibility.md`](../docs/eligibility.md) — prereq block link;
+- [`docs/eligibility.md`](../../docs/eligibility.md) — prereq block link;
   no-concurrency one-liner.
-- [`docs/extraction-codebook.md`](../docs/extraction-codebook.md) —
+- [`docs/extraction-codebook.md`](../../docs/extraction-codebook.md) —
   prereq block link; no-concurrency one-liner; pull-the-model hint;
   Reproducibility cross-reference.
-- [`docs/fulltext-extraction.md`](../docs/fulltext-extraction.md) —
+- [`docs/fulltext-extraction.md`](../../docs/fulltext-extraction.md) —
   GROBID prereq block; crash-recovery note.
-- [`docs/interfaces.md`](../docs/interfaces.md) — STOP HERE block
+- [`docs/interfaces.md`](../../docs/interfaces.md) — STOP HERE block
   between stages 8 and 9 in the end-to-end sequence.
 
 The
-[`verdicts-only-cutover.md`](done/verdicts-only-cutover.md) plan's step 6
+[`verdicts-only-cutover.md`](verdicts-only-cutover.md) plan's step 6
 doc sweep happens later. If that plan lands first, this commit
 rebases against the rewritten path examples; the prereq blocks and
 Reproducibility subsections are additive in either order.
 
 ### 3. README hygiene
 
-One commit touching only [`README.md`](../README.md):
+One commit touching only [`README.md`](../../README.md):
 
 - Stage list numbered, trailing paragraph folded.
 - Setup block: `set -a; source .env; set +a` line.
@@ -245,21 +262,21 @@ belongs to a follow-up plan once `external-services.md` exists and a
 
 - README "Run by hand" subsection — add after
   `external-services.md` and the cutover land. Pulls the manual
-  end-to-end sequence from [`interfaces.md`](../docs/interfaces.md)
+  end-to-end sequence from [`interfaces.md`](../../docs/interfaces.md)
   and links each step into the right per-stage doc.
-- [`examples/`](../examples/) framing fix
-  ([A5](../docs/explorations/usability-review.md)) —
+- [`examples/`](../../examples/) framing fix
+  ([A5](../../docs/explorations/usability-review.md)) —
   rename to `defaults/` or add an `examples/README.md` saying "these
   are the shipped defaults, not optional sample data." Tiny
   commit, defer until the cutover docs are settled.
 - Pipeline-level config consolidation
-  ([A1](../docs/explorations/usability-review.md)) — bigger
+  ([A1](../../docs/explorations/usability-review.md)) — bigger
   architectural plan. Out of scope for any usability doc.
 
 ## Risks
 
 **Cutover-plan rebase.** If the
-[`verdicts-only-cutover.md`](done/verdicts-only-cutover.md) plan lands
+[`verdicts-only-cutover.md`](verdicts-only-cutover.md) plan lands
 between commit 1 and commit 2 here, the per-stage doc edits in step 2
 need to rebase against the rewritten CLI examples. Low cost —
 the prereq-block additions and Reproducibility subsections are
@@ -269,22 +286,22 @@ orthogonal to the CLI shape. Worst case is a five-minute rebase.
 recipe (`softwareupdate --install-rosetta`) is the standard
 Apple-recommended path, but the experience varies with Docker Desktop
 versions. The doc should say "if this doesn't work, see
-[grobid-lessons.md](../docs/grobid-lessons.md) for the
+[grobid-lessons.md](../../docs/grobid-lessons.md) for the
 network-namespace workaround that's known to work."
 
 ## Critical files
 
-- New: [`docs/external-services.md`](../docs/external-services.md).
-- Edited: [`docs/screening-abstracts.md`](../docs/screening-abstracts.md),
-  [`docs/eligibility.md`](../docs/eligibility.md),
-  [`docs/extraction-codebook.md`](../docs/extraction-codebook.md),
-  [`docs/fulltext-extraction.md`](../docs/fulltext-extraction.md),
-  [`docs/interfaces.md`](../docs/interfaces.md),
-  [`README.md`](../README.md).
+- New: [`docs/external-services.md`](../../docs/external-services.md).
+- Edited: [`docs/screening-abstracts.md`](../../docs/screening-abstracts.md),
+  [`docs/eligibility.md`](../../docs/eligibility.md),
+  [`docs/extraction-codebook.md`](../../docs/extraction-codebook.md),
+  [`docs/fulltext-extraction.md`](../../docs/fulltext-extraction.md),
+  [`docs/interfaces.md`](../../docs/interfaces.md),
+  [`README.md`](../../README.md).
 - Read for content (not edited):
-  [`docs/explorations/nesh-ollama.md`](../docs/explorations/nesh-ollama.md),
-  [`docs/explorations/nesh-grobid.md`](../docs/explorations/nesh-grobid.md),
-  [`docs/grobid-lessons.md`](../docs/grobid-lessons.md),
+  [`docs/explorations/nesh-ollama.md`](../../docs/explorations/nesh-ollama.md),
+  [`docs/explorations/nesh-grobid.md`](../../docs/explorations/nesh-grobid.md),
+  [`docs/grobid-lessons.md`](../../docs/grobid-lessons.md),
   `docs/llm-concurrency.md` (deleted).
-- Roadmap: [`plans/roadmap.md`](roadmap.md) — add this plan as
+- Roadmap: [`plans/roadmap.md`](../roadmap.md) — add this plan as
   in-flight; archive when each commit lands.

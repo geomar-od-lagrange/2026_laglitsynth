@@ -236,10 +236,24 @@ Update this file when a plan is written, implemented, or archived.
   via the shared `io.drop_jsonl_rows`), so a run cut short by
   a budget limit or an outage resumes without hand-editing.
 
+- [Usability docs](done/usability-docs.md) — the external-services runbook
+  ([external-services.md](../docs/external-services.md)), one Prerequisites
+  block shape (inputs, services, credentials) right after the
+  introduction of every stage doc, and a leaner README. The Ollama, Apple
+  Silicon and "STOP HERE" parts were dropped after the pipeline
+  restructure; the plan's status note lists what was dropped and why.
+
+- [Cross-machine + storage convention](../docs/cross-machine.md) — the
+  project is the working directory, every stage runs from the repo root
+  against a fixed `data/`, `.env` is per machine, and each `data/` subdir
+  has one safe sync direction; collaborators run no stage and hand back
+  folders of PDFs. The Zotero-import open question from
+  [fulltext-retrieval-diversified.md](done/fulltext-retrieval-diversified.md)
+  is withdrawn (see below).
+
 ## In flight
 
-- [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. Its Ollama parts are obsolete: the [pipeline restructure](done/pipeline-restructure.md) removed local LLMs, and the runbook's LLM section is now a provider-neutral endpoint section. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate is now planned as the [run manifest](done/run-manifest.md).
-- [Cross-machine + storage convention](../docs/cross-machine.md) — the third follow-up candidate from [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) landed as an authoritative doc: project = working-directory boundary, run-from-root + fixed-`data/` path contract, per-machine `.env`, and the safe sync direction per `data/` subdir (bulk PDFs/TEI union, per-run-id gate outputs authoritative-side-wins, deduplicated spine rsynced once read-only). The Zotero-import open question from [fulltext-retrieval-diversified.md](done/fulltext-retrieval-diversified.md) is withdrawn: import reads identifiers out of the PDF and matches them against the catalogue, so Zotero's filename convention does not enter the design. The probe script and its note are removed; the reasoning is recorded in [contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md).
+Nothing.
 
 ## Queued — ready to plan
 
@@ -345,8 +359,11 @@ dropped and why, so the same idea is not re-proposed from the gap it leaves.
   screening review back into search or calibration. The restructure
   removes them: refining the search, criteria, codebook or vocabulary is
   ordinary editing of the configs followed by a re-run.
-- **Zotero export probe.** Withdrawn with the Zotero-import open question,
-  under [Cross-machine + storage convention](#in-flight) above.
+- **Zotero export probe and the Zotero-import open question.** Import reads
+  identifiers out of the PDF and matches them against the catalogue, so
+  Zotero's filename convention does not enter the design. The probe script
+  and its note are removed; the reasoning is in
+  [contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md).
 - NESH (the Kiel HPC cluster) as a pipeline target is dropped, with its
   batch wrapper: the LLM stages call a hosted endpoint and GROBID runs in
   Docker on the laptop, which leaves nothing for the cluster to do.

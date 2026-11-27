@@ -9,6 +9,22 @@ own institutional access. The store is the first half's input to
 the corpus. Text extraction (parsing PDFs into structured sections) is a
 separate concern handled by [fulltext-extraction.md](fulltext-extraction.md).
 
+## Prerequisites
+
+- Inputs: the deduplicated catalogue from
+  [catalogue-dedup](catalogue-dedup.md),
+  `<data-dir>/catalogue-dedup/deduplicated.jsonl` (`--catalogue`
+  overrides). The store `<data-dir>/pdfs/` is created when absent; to fill
+  the shared store, initialise the `data/` submodule first (see
+  [pdf-store.md](pdf-store.md)). A filtered export also reads stage 3's
+  verdicts, under the run-id in `<data-dir>/manifest.json` unless `--run-id`
+  is passed. Import takes `--import-dir` and `--source`.
+- Services: `fulltext-retrieval` downloads from OpenAlex open-access URLs
+  and the Unpaywall API (network access). Export and import work offline.
+- Credentials: `fulltext-retrieval` needs a contact email for Unpaywall, as
+  `--email` or `UNPAYWALL_EMAIL` in `.env` (see
+  [external-services.md](external-services.md#openalex-and-unpaywall)).
+
 `fulltext-retrieval` works on every work in `--catalogue` (default: the
 deduplicated catalogue); it reads no screening verdicts, so screening and
 retrieval run in either order. The export, below, lists every catalogue

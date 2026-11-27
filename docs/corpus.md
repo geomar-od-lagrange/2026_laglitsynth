@@ -8,6 +8,18 @@ corpus; the analysis half (stages 6–8) reads only the corpus. The corpus
 is the durable product of acquisition, and it is useful on its own,
 independent of any analysis built on it.
 
+## Prerequisites
+
+- Inputs: the deduplicated catalogue,
+  `<data-dir>/catalogue-dedup/deduplicated.jsonl` (`--catalogue`
+  overrides); stage 3's `verdicts.jsonl` with `screening-meta.json` beside
+  it, under the run-id in `<data-dir>/manifest.json` (`--screening-run-id`
+  or `--screening-verdicts` override); the PDF store `<data-dir>/pdfs/`
+  with its Git LFS content pulled (see [pdf-store.md](pdf-store.md)).
+  `--screening-threshold` is required.
+- Services: none.
+- Credentials: none.
+
 ## What it holds
 
 The corpus is self-contained: it holds copies, not links into the PDF

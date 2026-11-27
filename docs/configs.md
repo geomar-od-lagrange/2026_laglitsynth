@@ -160,11 +160,12 @@ to stages 7 and 8, which otherwise take the corpus's `analysis_run_id`. See
 
 ```bash
 # run with defaults: inputs at their conventional paths under data/,
-# run-id from data/corpus/corpus-meta.json, default codebook YAML
-laglitsynth extraction-codebook
+# run-id from data/corpus/corpus-meta.json, default codebook YAML;
+# the endpoint and model have no default
+laglitsynth extraction-codebook --base-url "$LLM_BASE_URL" --model <chat-model>
 
 # write under a run-id other than the corpus's
-laglitsynth extraction-codebook --run-id 2026-05-03T14-30-00_abc123def456
+laglitsynth extraction-codebook ... --run-id 2026-05-03T14-30-00_abc123def456
 
 # rerun a saved snapshot from its config
 laglitsynth extraction-codebook --config data/extraction-codebook/<run-id>/config.yaml

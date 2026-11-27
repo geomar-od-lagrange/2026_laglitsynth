@@ -487,7 +487,7 @@ s3 commit 5, s4 commit 6, s5 commit 7 and s6 commit 8.
    shared export helper and the open abstract-lookup question become
    Withdrawn entries or the synthesis entry, retrieval over every OpenAlex
    location plus Semantic Scholar and arXiv gets a Queued entry, and the
-   Ollama parts of [usability-docs.md](../usability-docs.md) are marked
+   Ollama parts of [usability-docs.md](usability-docs.md) are marked
    obsolete. Tests: none new.
 
 8. Export/import for the collaborator procedure. In
