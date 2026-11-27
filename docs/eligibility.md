@@ -8,8 +8,17 @@ that it is a review article rather than primary research.
 
 ## Prerequisites
 
-An OpenAI-compatible endpoint and its key as `LLM_API_KEY`; see
-[external-services.md](external-services.md#llm-endpoint).
+- Inputs: the corpus from [`corpus-assemble`](corpus.md),
+  `<data-dir>/corpus/` (`--corpus-dir` overrides); stage 6's
+  `<data-dir>/fulltext-extraction/extraction.jsonl` with
+  `extraction-meta.json` beside it, made on the same corpus
+  (`--extractions` overrides); the eligibility-criteria YAML
+  (`--eligibility-criteria`).
+- Services: an OpenAI-compatible endpoint that serves decisions:
+  `--base-url` and `--model` are required, `--decisions-url` names a
+  decisions endpoint other than `<base-url>/decisions` (see
+  [external-services.md](external-services.md#llm-endpoint)).
+- Credentials: `LLM_API_KEY`, exported or in `.env`, or `--api-key`.
 
 ## Scope
 

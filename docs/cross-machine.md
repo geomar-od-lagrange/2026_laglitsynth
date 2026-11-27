@@ -2,8 +2,8 @@
 
 The pipeline runs across more than one machine: the operator's laptop
 for the pipeline stages, with GROBID in Docker and the LLM stages calling
-the review's hosted endpoint; and one or more collaborators' machines for
-full-text retrieval behind their own institutional access. The two halves
+the review's hosted endpoint; and one or more collaborators' machines,
+where PDFs are fetched by hand behind their own institutional access. The two halves
 of the [pipeline](pipeline.md) meet at the self-contained
 [corpus](corpus.md), so a machine running the
 analysis half needs `data/corpus/` and nothing else from the first half.
@@ -53,12 +53,10 @@ stop resolving on the next machine.
 
 ## `.env` is per-machine and never synced
 
-Each machine has its own [`.env`](../src/laglitsynth/dotenv.py), and it is
-never copied between machines. A collaborator retrieving paywalled PDFs
-needs **their own** Unpaywall email and OpenAlex key — their
-institutional access, not yours — so the credentials must differ per
-machine by design. `.env` is also a credentials file and has no place in
-a synced data tree. Keep it out of any rsync of `data/` (it lives at the
+Each machine that runs stages has its own `.env` (see
+[.env.example](../.env.example)), and it is never copied between machines:
+it is a credentials file and has no place in a synced data tree.
+Collaborators run no stage and need no `.env`. Keep it out of any rsync of `data/` (it lives at the
 repo root, not under `data/`, so a `data/`-scoped sync already excludes
 it); when setting up a new machine, write a fresh `.env` there. The
 explicit `--api-key` / `--email` flags always win over `.env` (as does an
@@ -71,21 +69,22 @@ silent — see [interfaces.md](interfaces.md#configuration-flags-first-env-fallb
 The stage graph suggests a natural split across machines:
 
 - Laptop — every stage the operator drives:
-  [`catalogue-fetch`](interfaces.md#stage-1--catalogue-fetch-exists),
-  [`catalogue-dedup`](interfaces.md#stage-2--catalogue-dedup-exists),
-  [`screening-abstracts`](interfaces.md#stage-3--screening-abstracts-exists),
-  retrieval and `corpus-assemble`, and the analysis half
-  ([`fulltext-extraction`](interfaces.md#stage-6--fulltext-extraction),
-  [`fulltext-eligibility`](interfaces.md#stage-7--fulltext-eligibility-exists),
-  [`extraction-codebook`](interfaces.md#stage-8--extraction-codebook-exists)).
+  [`catalogue-fetch`](catalogue-fetch.md),
+  [`catalogue-dedup`](catalogue-dedup.md),
+  [`screening-abstracts`](screening-abstracts.md),
+  [retrieval](fulltext-retrieval.md) and [`corpus-assemble`](corpus.md),
+  and the analysis half
+  ([`fulltext-extraction`](fulltext-extraction.md),
+  [`fulltext-eligibility`](eligibility.md),
+  [`extraction-codebook`](extraction-codebook.md)).
   GROBID runs in Docker and the LLM stages call the review's hosted
   endpoint (see [external-services.md](external-services.md)), so no stage
   needs local GPU. Because the analysis half reads only the corpus, it can
   move to any other machine with GROBID by copying `data/corpus/`.
-- Collaborators — full-text
-  [`fulltext-retrieval`](interfaces.md#stage-5--fulltext-retrieval-exists)
-  of paywalled PDFs via their own institutional access. This is the one
-  stage that cannot be centralised, because access is per-person; the
+- Collaborators — paywalled PDFs fetched through their own institutional
+  access from an export bundle, returned as a folder (see the drop-zone
+  rule below). This is the one step that cannot be centralised, because
+  access is per-person; the
   [diversified-retrieval design](../plans/done/fulltext-retrieval-diversified.md)
   is built around it.
 
@@ -136,20 +135,19 @@ how they write. The categories:
   than round-trip the bulk. Never `rsync --delete` it — a stale side
   would delete files the other side produced.
 - Per-run-id, authoritative-side-wins — the gate stages
-  ([`screening-abstracts`](interfaces.md#stage-3--screening-abstracts-exists),
-  [`fulltext-eligibility`](interfaces.md#stage-7--fulltext-eligibility-exists),
-  and [`extraction-codebook`](interfaces.md#stage-8--extraction-codebook-exists))
+  ([`screening-abstracts`](screening-abstracts.md),
+  [`fulltext-eligibility`](eligibility.md),
+  and [`extraction-codebook`](extraction-codebook.md))
   each write whole-file outputs under a `<run-id>/` leaf — its
-  `verdicts.jsonl` / `records.jsonl`, the meta, and (for 7 and 8) a
-  `config.yaml` snapshot. A given run-id directory is produced whole by
+  `verdicts.jsonl` / `records.jsonl`, the meta, and a `config.yaml`
+  snapshot. A given run-id directory is produced whole by
   one machine; the machine that ran that stage is authoritative for that
   run-id. Sync the whole `<run-id>/` directory **from the authoritative
   side**, treating it as a unit, and **never `--delete`** — a wrong-way
   delete loses a run's verdicts irrecoverably. These are tiny JSONL plus
   meta and travel trivially, but they are whole-file outputs, not
   append-only logs: if two machines each ran the stage over part of the
-  catalogue under the *same* run-id there is no merge tool today (see the
-  caveat below). Different run-ids do not collide, so unioning distinct
+  catalogue under the *same* run-id there is no merge tool. Different run-ids do not collide, so unioning distinct
   run directories across machines is safe; what is unsafe is two machines
   writing the **same** run-id and then overwriting each other.
 

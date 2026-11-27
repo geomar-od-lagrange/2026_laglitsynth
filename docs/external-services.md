@@ -1,9 +1,20 @@
 # External services setup
 
-Runbook for the external services the pipeline depends on: an
-**OpenAI-compatible LLM endpoint** (stages 3, 7, 8) and **GROBID** (PDF
-extraction for stage 6). Read this before running any LLM or full-text
-stage.
+Runbook for the external services the pipeline depends on: the
+OpenAlex and Unpaywall APIs (stages 1 and 5), an OpenAI-compatible LLM
+endpoint (stages 3, 7 and 8) and GROBID (stage 6). Each stage doc opens
+with a Prerequisites block naming what that stage needs.
+
+## OpenAlex and Unpaywall
+
+`catalogue-fetch` needs a free OpenAlex API key, registered at
+<https://openalex.org/settings/api>; `fulltext-retrieval` needs a contact
+email for the Unpaywall API. Each takes its value as a flag (`--api-key`,
+`--email`) or, when the flag is absent, reads `OPENALEX_API_KEY` or
+`UNPAYWALL_EMAIL` from `.env` in the working directory (see
+[.env.example](../.env.example)) and says so on stderr. An exported
+variable of that name is not read by the stage itself; the runner exports
+`.env` and passes both as flags.
 
 ## LLM endpoint
 
@@ -78,30 +89,13 @@ to `/api/processFulltextDocument` with `httpx`. If stage 6 fails with connection
 macOS despite the container being alive, try this network-namespace
 approach. Full context in [grobid-lessons.md](grobid-lessons.md).
 
-### `consolidateCitations`
+### Citation consolidation and crash recovery
 
-Stage 6 sends `consolidateCitations=0` by default, exposed via the
-`--consolidate-citations {0,1}` flag. Setting it to `1` instructs GROBID
-to call Crossref and Semantic Scholar to enrich extracted references with
-DOIs. That lookup requires internet access during processing and noticeably
-slows extraction. The pipeline keeps OpenAlex as the authoritative metadata
-source, so citation enrichment adds no value at the default. See
-[grobid-lessons.md](grobid-lessons.md) for the original rationale.
-
-### Mid-corpus crash recovery
-
-If GROBID or the Docker container crashes during a long stage-6 run,
-restart the container and re-run with `--skip-existing`:
-
-```bash
-docker run --rm -p 8070:8070 grobid/grobid:0.9.0-crf &
-# wait for /api/isalive ...
-laglitsynth fulltext-extraction --skip-existing \
-    --corpus-dir data/corpus/ --output-dir data/fulltext-extraction/ ...
-```
-
-Stage 6 has no `--run-id` flag; `laglitsynth fulltext-extraction --help`
-lists the flags it takes. `--skip-existing` loads any prior
-`extraction.jsonl` from the output directory and skips works whose
-latest record was made from the current corpus PDF (same `pdf_sha256`).
-Only new, changed or previously failed PDFs are submitted to GROBID.
+Stage 6 leaves GROBID's `consolidateCitations` off by default, so GROBID
+needs no internet access while it processes PDFs; the
+`--consolidate-citations` flag and the reasoning are in
+[fulltext-extraction.md](fulltext-extraction.md#operational-details). If
+GROBID or its container crashes mid-corpus, restart it and re-run stage 6
+with `--skip-existing`, which sends only the PDFs without a current
+extraction (see
+[fulltext-extraction.md](fulltext-extraction.md#recovery-after-a-grobid-crash)).

@@ -13,16 +13,14 @@ means:
 
 ## Prerequisites
 
-Start the GROBID container before running this stage:
-
-```bash
-docker run --rm -p 8070:8070 grobid/grobid:0.9.0-crf
-```
-
-Wait for the health check before running the stage:
-`GET http://localhost:8070/api/isalive`.
-See [external-services.md](external-services.md) for the full setup
-(memory requirements, crash recovery).
+- Inputs: the corpus from [`corpus-assemble`](corpus.md),
+  `<data-dir>/corpus/` (`--corpus-dir` overrides).
+- Services: GROBID at `--grobid-url` (default `http://localhost:8070`),
+  started with `docker run --rm -p 8070:8070 grobid/grobid:0.9.0-crf` and
+  answering `GET /api/isalive` (see
+  [external-services.md](external-services.md#grobid) for memory and
+  macOS networking).
+- Credentials: none.
 
 The stage reads only the [corpus](corpus.md), so the machines that
 acquire PDFs need no GROBID or Docker. The PDF is the scarce artifact;
@@ -45,12 +43,6 @@ does not require re-retrieving anything.
 
 From [grobid-lessons.md](grobid-lessons.md):
 
-- Run GROBID as a Docker container (`grobid/grobid:0.9.0-crf`, the
-  CRF-only image). It is multi-arch (amd64 and arm64), so it runs natively
-  on Apple Silicon.
-- Health check: `GET /api/isalive`.
-- Memory: give Docker more than its 2 GB default (see
-  [external-services.md](external-services.md#memory-tuning)).
 - Processing endpoint: `POST /api/processFulltextDocument` with the PDF as
   multipart form data.
 - Timeout: 120 seconds per paper.

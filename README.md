@@ -36,11 +36,23 @@ git submodule update --init
 rsync -a --exclude pdfs/ data.local/ data/
 ```
 
-Stages 1 and 5 read `OPENALEX_API_KEY` and `UNPAYWALL_EMAIL` from `.env`
-automatically when their flags are absent; the LLM stages read
-`LLM_API_KEY` from the environment or `.env`. See
-[`docs/external-services.md`](docs/external-services.md) for the full
-credential setup.
+## External services
+
+[`docs/external-services.md`](docs/external-services.md) is the setup
+runbook; each stage doc opens with a Prerequisites block naming what that
+stage needs.
+
+- OpenAlex API key (stage 1) — free, register at
+  <https://openalex.org/settings/api>; `OPENALEX_API_KEY` in `.env`.
+- Unpaywall contact email (stage 5) — `UNPAYWALL_EMAIL` in `.env`.
+- An OpenAI-compatible LLM endpoint (stages 3, 7 and 8) — the base URL
+  (including `/v1`) and model are flags (`--base-url`, `--model`); the key
+  is `LLM_API_KEY`, exported or in `.env`. Stages 3 and 7 call its
+  decisions endpoint, stage 8 its chat completions.
+- GROBID (stage 6) — `docker run --rm -p 8070:8070 grobid/grobid:0.9.0-crf`.
+
+Stages read `.env` from the working directory themselves, so run them
+from the repository root.
 
 ## Tools
 
@@ -90,11 +102,14 @@ built. Each stage has its own doc under [`docs/`](docs/).
 ## Running the pipeline
 
 [`scripts/run-pipeline.sh [config.yaml]`](scripts/run-pipeline.sh) runs
-stages 1..8 end-to-end, writing outputs under `data/run/`. The runner
-exports each `.env` variable that the environment leaves unset or empty
-(an exported value wins over `.env`) and passes the OpenAlex `--api-key`
-and `--email` as flags to stages 1 and 5. The LLM key (`LLM_API_KEY`) is never passed as a flag:
-the LLM stages read it from the environment, so it stays out of the
+stages 1..8 end-to-end with `--data-dir` set to `OUTPUT_ROOT` (default
+`data/run/`). That is not the `data/` the stages default to, so the
+runner's PDF store is `data/run/pdfs/`, not the submodule's `data/pdfs/`;
+set `OUTPUT_ROOT=data` to run on the shared store. The runner exports each
+`.env` variable that the environment leaves unset or empty (an exported
+value wins over `.env`) and passes the OpenAlex key and the Unpaywall
+email as flags to stages 1 and 5. It never passes `LLM_API_KEY` as a
+flag: the LLM stages read it from the environment, so it stays out of the
 process list.
 
 The optional positional is a **per-review config** — one YAML that pins
@@ -105,22 +120,18 @@ validates it via `laglitsynth review-config` and applies **env > config >
 default** precedence to every knob. With no argument it uses the committed
 default
 [`examples/reviews/lagrangian-oceanography.yaml`](examples/reviews/lagrangian-oceanography.yaml),
-the smoke run. The screening threshold has no default: set
-`screening_threshold` in the config or export `SCREENING_THRESHOLD`, or
-the runner exits once the run reaches stage 5, after which it runs
-`corpus-assemble` with it; a run with `STOP_AFTER_STAGE` below 5 needs none. The historical `QUERY` and `N` env overrides
-still work and still win over the config. See
+the smoke run. The screening threshold has no default: a run that
+reaches stage 5, where `corpus-assemble` applies it, exits unless
+`screening_threshold` is set in the config or `SCREENING_THRESHOLD` is
+exported. The `QUERY` and `N` env overrides win over the config. See
 [`docs/configs.md`](docs/configs.md#per-review-config-the-runners-config)
 for the config shape and the full `CFG_*` knob list.
 
 Defaults:
 
-- `N=5` — max records pulled from OpenAlex.
-  The runner passes `--max-records "$N"` to stage 1 (catalogue-fetch)
-  only; downstream stages consume the already-capped catalogue, so the
-  cap propagates through the data rather than as a re-passed flag.
-  Override via the `N` env var, or pin it as `max_records` in a review
-  config.
+- `N=5` — max records pulled from OpenAlex, passed as `--max-records` to
+  stage 1 only; later stages see the capped catalogue. Pin it as
+  `max_records` in a review config.
 - `STOP_AFTER_STAGE=8` — full pipeline. Set to a smaller integer to
   cut runs short while iterating on upstream stages.
 - LLM endpoint and models have no default. `LLM_BASE_URL` (or
@@ -138,9 +149,9 @@ Defaults:
 
 ### Starting a run
 
-Start GROBID yourself first (see [GROBID](#grobid-for-full-text-extraction)
-below), set the LLM endpoint (see [LLM endpoint](#llm-endpoint)), then
-invoke the runner:
+Start GROBID first and fill in `.env` (see [External services](#external-services)),
+then invoke the runner with the review's LLM endpoint and models set in
+the review config or the environment:
 
 ```bash
 docker run --rm -p 8070:8070 grobid/grobid:0.9.0-crf        # stage 6
@@ -155,7 +166,7 @@ STOP_AFTER_STAGE=3 scripts/run-pipeline.sh                                     #
 
 For a real corpus run, raise `N` (or set `max_records` in the review
 config). `LLM_CONCURRENCY` (default `1`) sets the in-flight requests of
-the LLM stages (see
+stages 3 and 7 (see
 [LLM concurrency](docs/interfaces.md#llm-concurrency)) and
 `GROBID_CONCURRENCY` (default `3`) those of stage 6 (see
 [GROBID concurrency](docs/interfaces.md#grobid-concurrency)).
@@ -165,19 +176,21 @@ SCREENING_THRESHOLD=50 QUERY="Lagrangian particle tracking" N=500 \
     scripts/run-pipeline.sh
 ```
 
-Notes:
+`EXTRACTION_CONCURRENCY` (default `1`) sets stage 8's separately, since
+its prompts carry whole full texts. The runner starts each LLM stage's
+output afresh (stage 6 runs with `--skip-existing`), so an interrupted run
+means re-running the LLM stage it stopped in. To split a long run, use
+`STOP_AFTER_STAGE=6` first to land catalogue, retrieval, corpus and
+extraction, then run stages 7 and 8 by hand, where `--skip-existing`
+resumes an interrupted run.
 
-- Stage 8 (extraction-codebook) is the throughput floor. Stages 7 and 8
-  both honour `--concurrency` (dispatching through
-  `laglitsynth.concurrency.map_concurrent`); the runner forwards
-  `LLM_CONCURRENCY` as that flag to stages 3 and 7, and
-  `EXTRACTION_CONCURRENCY` (default `1`) to stage 8.
-- The runner starts each LLM stage's output afresh (stage 6 runs with
-  `--skip-existing`), so an interrupted run means re-running the LLM
-  stage it stopped in. To split a long run, use `STOP_AFTER_STAGE=6`
-  first to land catalogue, retrieval, corpus and extraction, then run
-  stages 7 and 8 by hand, where `--skip-existing` resumes an interrupted
-  run.
+### Running stages by hand
+
+Every stage reads its inputs from conventional paths under `--data-dir`
+(default `data/`), so a stage invoked by hand normally names no paths. The
+[end-to-end sequence](docs/interfaces.md#end-to-end-sequence) lists the
+commands in order; [`docs/run-manifest.md`](docs/run-manifest.md) has the
+layout and the run-ids.
 
 ### Reviewer export
 
@@ -199,56 +212,6 @@ laglitsynth extraction-codebook-export \
 See [docs/extraction-codebook.md](docs/extraction-codebook.md) for the
 export schema.
 
-## OpenAlex API key
-
-Since February 2026, OpenAlex requires a (free) API key. Register at
-<https://openalex.org/settings/api> and set the environment variable in `.env`:
-
-```
-OPENALEX_API_KEY=your-key-here
-```
-
-## Unpaywall email
-
-Full-text retrieval queries the Unpaywall API, which requires a contact
-email. Set it in `.env`:
-
-```
-UNPAYWALL_EMAIL=you@example.com
-```
-
-## LLM endpoint
-
-Stages 3 ([`screening-abstracts`](docs/screening-abstracts.md)), 7
-([`fulltext-eligibility`](docs/eligibility.md)), and 8
-([`extraction-codebook`](docs/extraction-codebook.md)) call one
-OpenAI-compatible endpoint per review: `--base-url` (including `/v1`),
-`--model`, and the key from `LLM_API_KEY` in the environment or `.env`:
-
-```
-LLM_API_KEY=your-key-here
-```
-
-Stages 3 and 7 ask decisions at `<base-url>/decisions` unless
-`--decisions-url` names another URL; stage 8 uses chat completions. See
-[`docs/external-services.md`](docs/external-services.md#llm-endpoint).
-
-## GROBID (for full-text extraction)
-
-The extraction stage requires a running GROBID server. One-shot via Docker:
-
-```bash
-docker run --rm -p 8070:8070 grobid/grobid:0.9.0-crf
-```
-
-The image is multi-arch (amd64 and arm64), so it runs natively on Apple
-Silicon.
-
-See [`docs/fulltext-extraction.md`](docs/fulltext-extraction.md) for details.
-
-See [`docs/external-services.md`](docs/external-services.md) for memory
-tuning and macOS workarounds.
-
 ## Documentation
 
 - [`docs/`](docs/) — component documentation
@@ -259,6 +222,12 @@ tuning and macOS workarounds.
   models
 - [`docs/run-manifest.md`](docs/run-manifest.md) — `data/manifest.json`, the
   run-id, and the fixed `data/` layout every stage reads from
+- [`docs/configs.md`](docs/configs.md) — per-stage run snapshots and the
+  per-review config the runner reads
+- [`docs/external-services.md`](docs/external-services.md) — OpenAlex,
+  Unpaywall, the LLM endpoint and GROBID
+- [`docs/cross-machine.md`](docs/cross-machine.md) — working across
+  machines and syncing `data/`
 - [`docs/pdf-store.md`](docs/pdf-store.md) — the PDF store in the `data/`
   submodule: contents, sources, how PDFs are added
 - [`plans/`](plans/) — implementation plans (active and archived)

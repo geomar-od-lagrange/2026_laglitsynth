@@ -3,6 +3,14 @@
 Search OpenAlex by keyword and write the full result set as a JSONL file.
 Each line is a validated [`Work`](data-model.md) record.
 
+## Prerequisites
+
+- Inputs: none; the search query is the positional argument.
+- Services: the OpenAlex API (network access).
+- Credentials: a free OpenAlex API key, registered at
+  <https://openalex.org/settings/api>, as `--api-key` or `OPENALEX_API_KEY`
+  in `.env` (see [external-services.md](external-services.md#openalex-and-unpaywall)).
+
 ## Usage
 
 ```bash
@@ -17,7 +25,8 @@ laglitsynth catalogue-fetch "submesoscale dynamics" --api-key $OPENALEX_API_KEY 
 |---|---|
 | `QUERY` (positional) | Search query string (required). |
 | `--api-key` | OpenAlex API key. Falls back to `OPENALEX_API_KEY` in `.env` when omitted. |
-| `-o` / `--output` | Output JSONL path. Default: `data/catalogue-fetch/<slug>_<timestamp>.jsonl`. |
+| `-o` / `--output` | Output JSONL path. Default: `<data-dir>/catalogue-fetch/<slug>_<timestamp>.jsonl`. |
+| `--data-dir` | Bucket root for stage outputs (default: `data/`). |
 | `--from-year` | Filter publications from this year onward. |
 | `--to-year` | Filter publications up to this year. |
 | `--max-records` | Cap on number of results. Omit to fetch all matching works. |
@@ -43,14 +52,11 @@ lowercased with non-alphanumeric runs replaced by underscores.
 
 ## Authentication
 
-OpenAlex requires a free API key. Register at
-<https://openalex.org/settings/api>. When `--api-key` is not passed on the
-command line the tool reads `OPENALEX_API_KEY` from `.env` in the working
-directory and emits `Loaded OPENALEX_API_KEY from .env` to stderr. The
-runner ([run-pipeline.sh](../scripts/run-pipeline.sh)) takes
-`OPENALEX_API_KEY` from the environment, else from `.env`, and passes
-`--api-key "$OPENALEX_API_KEY"` explicitly — the flag still takes
-precedence over any `.env` value.
+Without `--api-key` the stage reads `OPENALEX_API_KEY` from `.env` in the
+working directory and says so on stderr (`Loaded OPENALEX_API_KEY from
+.env`); an exported `OPENALEX_API_KEY` is not read. With neither, it exits
+naming the variable. The runner ([run-pipeline.sh](../scripts/run-pipeline.sh))
+always passes `--api-key`.
 
 ## Abstract reconstruction
 
@@ -60,7 +66,6 @@ Downstream tools never see the inverted index format.
 
 ## Error handling
 
-- `--api-key` is required (either as a CLI flag or via `OPENALEX_API_KEY` in `.env`); the tool exits with a clear error if neither is present.
 - Invalid records are logged and skipped (OpenAlex data quality issue
   affecting a small fraction of records); the count is written to
   `validation_skipped` in the meta sidecar.

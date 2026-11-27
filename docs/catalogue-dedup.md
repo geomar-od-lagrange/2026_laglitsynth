@@ -5,6 +5,14 @@ screening effort is spent. Duplicates arise when multiple keyword searches
 return overlapping result sets, or when the same work appears under different
 OpenAlex IDs.
 
+## Prerequisites
+
+- Inputs: one or more catalogue files from
+  [catalogue-fetch](catalogue-fetch.md), by default every
+  `<data-dir>/catalogue-fetch/*.jsonl` (`--input` overrides).
+- Services: none.
+- Credentials: none.
+
 ## Matching rules
 
 Three rules are applied in order. The first matching rule wins.

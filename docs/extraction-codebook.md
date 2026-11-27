@@ -17,8 +17,17 @@ synthesis step. Schema churn is expected in phase 3 human review.
 
 ## Prerequisites
 
-An OpenAI-compatible chat endpoint and its key as `LLM_API_KEY`; see
-[external-services.md](external-services.md#llm-endpoint).
+- Inputs: the corpus from [`corpus-assemble`](corpus.md),
+  `<data-dir>/corpus/` (`--corpus-dir` overrides); stage 7's
+  `verdicts.jsonl` with `eligibility-meta.json` beside it, under the same
+  analysis run-id (`--eligibility-verdicts` overrides), together with the
+  eligibility-criteria YAML stage 7 ran with (`--eligibility-criteria`);
+  stage 6's `extraction.jsonl` with `extraction-meta.json`
+  (`--extractions` overrides); the codebook YAML (`--codebook`).
+- Services: an OpenAI-compatible endpoint that serves chat completions
+  in JSON mode: `--base-url` and `--model` are required (see
+  [external-services.md](external-services.md#llm-endpoint)).
+- Credentials: `LLM_API_KEY`, exported or in `.env`, or `--api-key`.
 
 ## Scope
 

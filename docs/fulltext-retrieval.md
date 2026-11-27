@@ -20,6 +20,22 @@ join **silently drops** any work absent from the screening verdicts file
 (`_active_works` does `if sv is None: continue`), so confirm the verdicts
 file covers the catalogue before a filtered export.
 
+## Prerequisites
+
+- Inputs: the deduplicated catalogue from
+  [catalogue-dedup](catalogue-dedup.md),
+  `<data-dir>/catalogue-dedup/deduplicated.jsonl` (`--catalogue`
+  overrides). The store `<data-dir>/pdfs/` is created when absent; to fill
+  the shared store, initialise the `data/` submodule first (see
+  [pdf-store.md](pdf-store.md)). A filtered export also reads stage 3's
+  verdicts, under the run-id in `<data-dir>/manifest.json` unless `--run-id`
+  is passed. Import takes `--import-dir` and `--source`.
+- Services: `fulltext-retrieval` downloads from OpenAlex open-access URLs
+  and the Unpaywall API (network access). Export and import work offline.
+- Credentials: `fulltext-retrieval` needs a contact email for Unpaywall, as
+  `--email` or `UNPAYWALL_EMAIL` in `.env` (see
+  [external-services.md](external-services.md#openalex-and-unpaywall)).
+
 ## The persistent PDF store
 
 The store is one directory, `data/pdfs/`, holding `data/pdfs/<stem>.pdf` for
