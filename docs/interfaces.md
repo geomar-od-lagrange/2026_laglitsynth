@@ -344,8 +344,11 @@ Stage 3 truncates its `verdicts.jsonl` at the start of a run and has no
 resume mode: a killed run is re-run from scratch, and the partial file
 is still valid JSONL. Stages 7 and 8 resume with `--skip-existing`:
 within the run-id directory they load the existing sidecar, skip the
-`work_id`s already in it and append the rest, refusing when the recorded
-`prompt_sha256` or `corpus_id` differs from the current run. Without
+`work_id`s with a successful row (`reason` is `None`), drop the sentinel
+rows from the file (atomically, before any call) and append the rest, so
+a run cut short by an outage or a budget limit resumes where it stopped.
+They refuse when the recorded `prompt_sha256` or `corpus_id` differs
+from the current run. Without
 `--skip-existing` they truncate as stage 3 does.
 
 The runner passes `LLM_CONCURRENCY` (default `1`) to stage 3,

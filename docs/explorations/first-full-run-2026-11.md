@@ -69,6 +69,8 @@ proxy (LiteLLM 1.109.1) answered HTTP 422 `budget_exceeded`, which stage 8
 records as an `llm-rejected` sentinel. `--skip-existing` skips every work
 with a record, sentinels included, so the 12 budget sentinels were removed
 from `records.jsonl` by hand before resuming with a second key.
+[skip-existing-retry-sentinels.md](../../plans/done/skip-existing-retry-sentinels.md)
+makes `--skip-existing` retry sentinel rows instead.
 
 ## Codebook sample
 
