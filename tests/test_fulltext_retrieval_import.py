@@ -7,7 +7,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from pypdf import PdfWriter
+from pypdf import DocumentInformation, PdfWriter
+from pypdf.generic import NameObject, TextStringObject
 
 from laglitsynth.cli import main
 from laglitsynth.fulltext_retrieval.import_ import _ImportSummary, import_pdfs, run
@@ -427,7 +428,7 @@ class TestDoiCandidateSet:
         fake_page.extract_text.return_value = "Journal of Advances\n10.1029/2024MS004848\n"
         fake_page.get.return_value = None
         fake_reader = MagicMock()
-        fake_reader.metadata = {"/Subject": "doi:10.1002/(ISSN)1942-2466"}
+        fake_reader.metadata = _info({"/Subject": "doi:10.1002/(ISSN)1942-2466"})
         fake_reader.xmp_metadata = None
         fake_reader.pages = [fake_page]
 
@@ -461,7 +462,7 @@ class TestDoiCandidateSet:
         fake_page.extract_text.return_value = "see also 10.1234/from-text"
         fake_page.get.return_value = None
         fake_reader = MagicMock()
-        fake_reader.metadata = {"/Subject": "doi:10.1234/from-metadata"}
+        fake_reader.metadata = _info({"/Subject": "doi:10.1234/from-metadata"})
         fake_reader.xmp_metadata = None
         fake_reader.pages = [fake_page]
 
@@ -510,17 +511,27 @@ class TestAmsStyleDois:
         assert load_provenance(data_dir)["https://openalex.org/W1"].stem == "W1"
 
 
+def _info(entries: dict[str, str]) -> DocumentInformation:
+    """A real pypdf Info dictionary, as ``PdfReader.metadata`` returns it."""
+    info = DocumentInformation()
+    for key, value in entries.items():
+        info[NameObject(key)] = TextStringObject(value)
+    return info
+
+
 def _fake_reader(
     *,
     metadata: dict[str, str] | None = None,
     xmp_text: str | None = None,
+    xmp_title: str | None = None,
     page_texts: list[str] | None = None,
     annotation_uris: list[list[str]] | None = None,
 ) -> MagicMock:
     """Stand in a pypdf reader with the given sources populated.
 
-    ``annotation_uris`` is one list of link URIs per page; ``page_texts`` is
-    the extractable text per page.
+    ``metadata`` becomes a real ``DocumentInformation``; ``xmp_title`` is the
+    XMP ``dc:title``. ``annotation_uris`` is one list of link URIs per page;
+    ``page_texts`` is the extractable text per page.
     """
     page_texts = page_texts or [""]
     annotation_uris = annotation_uris or [[] for _ in page_texts]
@@ -536,11 +547,14 @@ def _fake_reader(
         page.get.return_value = annots or None
         pages.append(page)
     reader = MagicMock()
-    reader.metadata = metadata
-    if xmp_text is None:
+    reader.metadata = None if metadata is None else _info(metadata)
+    if xmp_text is None and xmp_title is None:
         reader.xmp_metadata = None
     else:
-        reader.xmp_metadata.stream.get_data.return_value = xmp_text.encode()
+        reader.xmp_metadata.stream.get_data.return_value = (xmp_text or "").encode()
+        reader.xmp_metadata.dc_title = (
+            {"x-default": xmp_title} if xmp_title is not None else {}
+        )
     reader.pages = pages
     return reader
 
@@ -628,8 +642,8 @@ class TestTextTierAmbiguity:
 class TestTitleTier:
     """Title matching runs only after every DOI, filename and sidecar route."""
 
-    TITLE = "Deep Lagrangian connectivity in the global ocean inferred from Argo floats"
-    OTHER = "Seasonal variability of surface drifter dispersion in the Gulf of Mexico"
+    TITLE = "Lagrangian pathways of intermediate water inferred from synthetic floats"
+    OTHER = "Seasonal variability of surface drifter dispersion in a model basin"
     ROWS = [
         ("https://openalex.org/W1", "W1", ""),
         ("https://openalex.org/W2", "W2", "10.1234/other"),
@@ -640,11 +654,11 @@ class TestTitleTier:
         self, tmp_path: Path
     ) -> None:
         page = (
-            "Journal of Physical Oceanography 52 (2022)\n"
-            "Deep Lagrangian Connectivity in the Global\n"
-            "Ocean Inferred from Argo Floats\n"
-            "Ryan Abernathey, Christopher Bladwell\n"
-            "Lamont-Doherty Earth Observatory, Palisades, New York\n"
+            "Journal of Example Oceanography 1 (2000)\n"
+            "Lagrangian Pathways of Intermediate\n"
+            "Water Inferred from Synthetic Floats\n"
+            "A. Author, B. Author\n"
+            "Example Institute, Example Town\n"
         )
         reader = _fake_reader(page_texts=[page])
         summary, _, data_dir = _import_with(
@@ -714,3 +728,88 @@ class TestTitleTier:
         summary, _, _ = _import_with(reader, tmp_path, self.ROWS, titles=titles)
         assert summary.copied == 0
         assert summary.skipped_unmatched == ["anything.pdf"]
+
+    def test_an_xmp_title_alone_files_the_pdf(self, tmp_path: Path) -> None:
+        reader = _fake_reader(xmp_title=self.TITLE)
+        summary, _, data_dir = _import_with(
+            reader, tmp_path, self.ROWS, titles=self.TITLES
+        )
+        assert summary.copied == 1
+        assert "https://openalex.org/W1" in load_provenance(data_dir)
+
+    def test_an_erratum_with_its_own_doi_is_not_filed_by_the_title_it_corrects(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        reader = _fake_reader(
+            metadata={"/Subject": "doi:10.9999/erratum-to-w1"},
+            page_texts=[f"Erratum\n{self.TITLE}\nA. Author"],
+        )
+        summary, _, _ = _import_with(reader, tmp_path, self.ROWS, titles=self.TITLES)
+        assert summary.copied == 0
+        assert summary.skipped_unmatched == ["anything.pdf"]
+        assert "10.9999/erratum-to-w1" in capsys.readouterr().err
+
+    def test_an_xmp_doi_outside_the_catalogue_also_blocks_the_title_tier(
+        self, tmp_path: Path
+    ) -> None:
+        reader = _fake_reader(
+            xmp_text='<rdf:Description prism:doi="10.9999/elsewhere"/>',
+            page_texts=[self.TITLE],
+        )
+        summary, _, _ = _import_with(reader, tmp_path, self.ROWS, titles=self.TITLES)
+        assert summary.copied == 0
+
+    def test_a_link_or_text_doi_outside_the_catalogue_does_not_block_it(
+        self, tmp_path: Path
+    ) -> None:
+        # Links and page-1 DOIs also point at cited works, so they do not say
+        # what this PDF is.
+        reader = _fake_reader(
+            page_texts=[f"{self.TITLE}\nSee also doi:10.9999/cited"],
+            annotation_uris=[["https://doi.org/10.9999/cited"]],
+        )
+        summary, _, data_dir = _import_with(
+            reader, tmp_path, self.ROWS, titles=self.TITLES
+        )
+        assert summary.copied == 1
+        assert "https://openalex.org/W1" in load_provenance(data_dir)
+
+
+class TestIndirectMetadata:
+    """pypdf hands indirect Info values back unresolved from ``values()``."""
+
+    def _pdf(self, path: Path, key: str, value: str) -> None:
+        writer = PdfWriter()
+        writer.add_blank_page(width=200, height=200)
+        ref = writer._add_object(TextStringObject(value))
+        writer._info.get_object()[NameObject(key)] = ref
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            writer.write(f)
+
+    def _run(
+        self,
+        tmp_path: Path,
+        rows: list[tuple[str, str, str]],
+        titles: dict[str, str] | None = None,
+    ) -> Path:
+        catalogue = tmp_path / "catalogue.jsonl"
+        _write_catalogue(catalogue, rows, titles)
+        data_dir = tmp_path / "data"
+        import_pdfs(
+            tmp_path / "incoming", catalogue, data_dir, PdfSource.manual, overwrite=False
+        )
+        return data_dir
+
+    def test_an_indirect_info_doi_resolves(self, tmp_path: Path) -> None:
+        self._pdf(tmp_path / "incoming" / "a.pdf", "/Subject", "doi:10.1234/abc")
+        data_dir = self._run(tmp_path, [("https://openalex.org/W1", "W1", "10.1234/abc")])
+        assert "https://openalex.org/W1" in load_provenance(data_dir)
+
+    def test_an_indirect_info_title_resolves(self, tmp_path: Path) -> None:
+        title = TestTitleTier.TITLE
+        self._pdf(tmp_path / "incoming" / "a.pdf", "/Title", title)
+        data_dir = self._run(
+            tmp_path, [("https://openalex.org/W1", "W1", "")], {"W1": title}
+        )
+        assert "https://openalex.org/W1" in load_provenance(data_dir)

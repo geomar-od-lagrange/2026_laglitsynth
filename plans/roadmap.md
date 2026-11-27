@@ -206,7 +206,8 @@ Update this file when a plan is written, implemented, or archived.
 - [Import title matching](done/import-title-matching.md) — a returned PDF
   with no usable DOI is filed by the catalogue title in its metadata or
   page-1 title block (`rapidfuzz` ratio), accepted only as a clear,
-  unshared winner; the rule was chosen by hiding the DOI of DOI-confirmed
+  unshared winner, and never for a PDF whose metadata names a DOI outside
+  the catalogue; the rule was chosen by hiding the DOI of DOI-confirmed
   store PDFs
   ([contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md#title-matching-measured-against-the-pdf-store)).
 

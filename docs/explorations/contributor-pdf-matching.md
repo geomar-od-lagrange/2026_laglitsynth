@@ -160,7 +160,10 @@ PDF, resolve 3992 to their own work, 135 to a different catalogue work, and
 1774 to nothing (35 fail to parse). The 3992 *DOI-confirmed* PDFs are the
 tuning set: the PDF names itself, so a title match that disagrees is a
 matcher error. The 1774 *DOI-unmatched* PDFs are what the title tier is for,
-but their labels are only the store's.
+but their labels are only the store's. The rule was chosen on the tuning
+set, so its zero wrong is an in-sample figure; the DOI-unmatched result,
+which played no part in choosing score and margin, is the closer to
+out-of-sample number.
 
 Each rule below runs with the DOI hidden: it sees only the metadata titles
 and the page-1 text. *Wrong* means filed under a work other than the
@@ -204,14 +207,15 @@ anything. The importer ships this setting.
 
 | At *T* = 95, *M* = 10, *L* = 30 | DOI-confirmed (3992) | DOI-unmatched (1774) |
 |---|---|---|
-| Filed under the labelled work | 3581 | 1224 |
+| Filed under the labelled work | 3581 | 1223 |
 | Filed under another work | 0 | 32 |
 | Refused as a near-tie or shared title | 210 | 121 |
-| Best title below 95, or shorter than 30 characters | 201 | 397 |
+| Best title below 95, or shorter than 30 characters | 201 | 398 |
 
 These are the counts of the shipped
 [title_match.py](../../src/laglitsynth/fulltext_retrieval/title_match.py),
-run over the extracted store evidence.
+run over the extracted store evidence, before the metadata-DOI gate
+described below, which takes 20 of the 1223 off.
 
 The 32 on the DOI-unmatched side were read one by one; 30 are the store's
 label, not the matcher, being off. 22 are EGU "Reply on RC1" and
@@ -230,6 +234,28 @@ question this measurement does not settle.
 The refused count is where the cost is: a title that both a preprint and
 its article carry, or that a conference abstract repeats, is refused rather
 than guessed, and those PDFs stay unmatched for a contributor to name.
+
+### Gate: no title matching for a PDF that names another DOI
+
+A PDF whose Info dictionary or XMP carries a DOI outside the catalogue is
+some other document, even when page 1 prints a catalogue title: an erratum
+printing "Erratum" over the corrected paper's title scores 100 against that
+paper. The measurement above never saw such a PDF in the tuning set, since
+every tuning PDF's own DOI is in the catalogue. So the title tier runs only
+when Info and XMP carry no DOI at all.
+
+On the DOI-unmatched set, re-read with the importer's own extraction, 27
+PDFs carry an Info or XMP DOI and are gated off. Of the title tier's 1223
+filings under the labelled work there, the gate loses 20, mostly arXiv
+preprints (13 carry an arXiv `10.48550` DOI) of works the catalogue holds as
+journal articles; of the 32 filings under another work it loses none. None
+of the 27 carries only a journal-level ISSN DOI, so treating those
+separately changes nothing here. Gating on link-annotation DOIs as well
+would have cost 32 correct filings from 44 PDFs: those links point at cited
+and corrected works as often as at the PDF itself, so they do not gate.
+
+An erratum or reply that carries no DOI in its metadata is not caught; the
+tuning set gives no measurement of how often that happens.
 
 ## Why this is deferred, and what splits cleanly
 

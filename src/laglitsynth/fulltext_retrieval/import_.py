@@ -20,7 +20,8 @@ Stem resolution order, per work, never guessed:
 3. a returned sidecar ``*.csv`` / ``*.json`` mapping the collaborator's
    filenames to DOIs;
 4. a catalogue title the PDF carries, in its metadata title or the title
-   block of page 1, accepted only as a clear winner (see ``title_match``).
+   block of page 1, accepted only as a clear winner (see ``title_match``),
+   and only when the Info dictionary and XMP carry no DOI at all.
 
 A PDF that resolves to no catalogue stem, or is not a real PDF, is reported
 and skipped.
@@ -160,15 +161,17 @@ def _strip_trailing_punct(doi: str) -> str:
 class _PdfEvidence:
     """What a PDF says about itself, read once and used by every tier.
 
-    ``metadata`` holds DOIs from the Info dictionary, XMP, and title-page link
-    annotations: each names the document itself. ``text`` holds every DOI on
-    the first page, which also catches a corrigendum's "Correction to:" line
-    or a cited companion paper, so it is only trusted when unambiguous.
-    ``titles`` holds the Info ``/Title`` and XMP ``dc:title``, and
-    ``first_page`` the extracted text of page 1, for title matching.
+    ``document`` holds DOIs from the Info dictionary and XMP, and
+    ``annotations`` those from title-page link annotations: each names the
+    document itself. ``text`` holds every DOI on the first page, which also
+    catches a corrigendum's "Correction to:" line or a cited companion paper,
+    so it is only trusted when unambiguous. ``titles`` holds the Info
+    ``/Title`` and XMP ``dc:title``, and ``first_page`` the extracted text of
+    page 1, for title matching.
     """
 
-    metadata: list[str] = field(default_factory=list)
+    document: list[str] = field(default_factory=list)
+    annotations: list[str] = field(default_factory=list)
     text: list[str] = field(default_factory=list)
     titles: list[str] = field(default_factory=list)
     first_page: str = ""
@@ -199,16 +202,17 @@ def _read_evidence(pdf_path: Path) -> _PdfEvidence:
         reader = PdfReader(str(pdf_path))
         meta = reader.metadata
         if meta is not None:
-            for value in meta.values():
+            # Indexing, unlike values(), resolves indirect objects.
+            for key in list(meta.keys()):
+                value = meta[key]
                 if isinstance(value, str):
-                    add(found.metadata, value)
-            title = meta.get("/Title")
-            if isinstance(title, str):
-                found.titles.append(title)
+                    add(found.document, value)
+            if meta.title:
+                found.titles.append(meta.title)
         try:
             xmp = reader.xmp_metadata
             if xmp is not None:
-                add(found.metadata, str(xmp.stream.get_data(), "utf-8", "replace"))
+                add(found.document, str(xmp.stream.get_data(), "utf-8", "replace"))
                 dc_title = xmp.dc_title
                 if isinstance(dc_title, dict):
                     found.titles += [t for t in dc_title.values() if isinstance(t, str)]
@@ -221,7 +225,7 @@ def _read_evidence(pdf_path: Path) -> _PdfEvidence:
                 for annotation in page.get("/Annots") or []:
                     uri = (annotation.get_object().get("/A") or {}).get("/URI")
                     if uri is not None:
-                        add(found.metadata, str(uri))
+                        add(found.annotations, str(uri))
         except (PyPdfError, OSError, ValueError, TypeError, AttributeError):
             # Damaged or absent annotation objects; other sources remain.
             pass
@@ -246,7 +250,7 @@ def _resolve_stem(
     # (a) a self-identifying DOI that lands in the catalogue. Membership
     # decides, not position: the first candidate is often a journal-level DOI.
     found = _read_evidence(pdf_path)
-    for candidate in found.metadata:
+    for candidate in found.document + found.annotations:
         embedded = _normalise_doi(candidate)
         if embedded is not None and embedded in doi_to_stem:
             return doi_to_stem[embedded]
@@ -278,6 +282,18 @@ def _resolve_stem(
         return doi_to_stem[sidecar_doi]
 
     # (d) a catalogue title, only as a clear winner; a near-tie is reported.
+    # Only for a PDF that does not name itself: an Info or XMP DOI outside the
+    # catalogue says this is some other document (an erratum, a reply, a book
+    # review) even when it prints a catalogue title. Link annotations and
+    # page text do not count, since they also point at cited or corrected
+    # works.
+    if found.document:
+        print(
+            f"  ! {pdf_path.name}: metadata names DOI {found.document[0]}, "
+            "not in the catalogue; not matching by title",
+            file=sys.stderr,
+        )
+        return None
     by_title = titles.match(found.titles, found.first_page)
     if by_title.contenders:
         print(

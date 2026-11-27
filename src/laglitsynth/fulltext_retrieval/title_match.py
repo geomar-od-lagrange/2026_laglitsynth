@@ -30,7 +30,9 @@ TITLE_MIN_SCORE = 95.0
 # ... beat the next-best different title by at least this much ...
 TITLE_MIN_MARGIN = 10.0
 # ... and have a key at least this long: short titles such as "Geophysical
-# fluid dynamics" recur verbatim in affiliations and running heads.
+# fluid dynamics" recur verbatim in affiliations and running heads. A shorter
+# title is never accepted but still counts as the runner-up, so it can block
+# a correct match; that costs recall only, never a wrong filing.
 TITLE_MIN_KEY_LENGTH = 30
 
 # Shorter strings are neither indexed nor used as candidates: they carry too
@@ -43,7 +45,15 @@ _MAX_WINDOW = 8
 _PER_CANDIDATE_LIMIT = 3
 _SCORE_CUTOFF = 70.0
 
-_TAG_RE = re.compile(r"<[^>]+>")
+# Inline markup OpenAlex titles carry: HTML emphasis and scripts, JATS
+# small caps, and MathML elements. Only these tags are dropped, so text such
+# as "u < 0 for x > 1" keeps its letters and digits.
+_TAG_RE = re.compile(
+    r"</?(?:i|b|em|strong|u|sub|sup|sc|span|scp|"
+    r"(?:mml:)?(?:math|mi|mn|mo|ms|mrow|msub|msup|msubsup|mfrac|msqrt|mtext|mover|munder|mstyle|mspace))"
+    r"""(?:\s+[\w:-]+=(?:"[^"]*"|'[^']*'))*\s*/?>""",
+    re.IGNORECASE,
+)
 
 
 def title_key(text: str) -> str:
