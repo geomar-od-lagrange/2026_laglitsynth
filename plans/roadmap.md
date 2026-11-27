@@ -231,9 +231,9 @@ Update this file when a plan is written, implemented, or archived.
   browser | institutional | manual`.
 
 - [`--skip-existing` retries sentinel rows](done/skip-existing-retry-sentinels.md)
-  — stages 7 and 8 skip only works with a successful row; sentinel rows
-  are dropped from the JSONL (atomic rewrite via the shared
-  `io.keep_jsonl_rows`) and their works sent again, so a run cut short by
+  — stages 7 and 8 skip only works with a successful row; the sentinel
+  rows of the works sent again are dropped from the JSONL (atomic rewrite
+  via the shared `io.drop_jsonl_rows`), so a run cut short by
   a budget limit or an outage resumes without hand-editing.
 
 ## In flight

@@ -345,7 +345,8 @@ resume mode: a killed run is re-run from scratch, and the partial file
 is still valid JSONL. Stages 7 and 8 resume with `--skip-existing`:
 within the run-id directory they load the existing sidecar, skip the
 `work_id`s with a successful row (`reason` is `None`), drop the sentinel
-rows from the file (atomically, before any call) and append the rest, so
+rows of the works they are about to send from the file (atomically,
+before any call) and append the new rows, so
 a run cut short by an outage or a budget limit resumes where it stopped.
 They refuse when the recorded `prompt_sha256` or `corpus_id` differs
 from the current run. Without

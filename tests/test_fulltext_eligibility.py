@@ -823,6 +823,92 @@ class TestRun:
         assert mock_classify.call_count == 1
         assert (out_dir / "verdicts.jsonl").read_text() == before
 
+    def _resume_args(
+        self,
+        tmp_path: Path,
+        work_ids: list[str],
+        prior: list[EligibilityVerdict],
+        **kwargs: Any,
+    ) -> argparse.Namespace:
+        corpus, extractions = _inputs(tmp_path, work_ids)
+        args = _make_run_args(
+            tmp_path,
+            corpus_dir=corpus,
+            extractions=extractions,
+            skip_existing=True,
+            run_id="resume-run",
+            **kwargs,
+        )
+        out_dir = _resolved_out_dir(args)
+        out_dir.mkdir(parents=True)
+        (out_dir / "verdicts.jsonl").write_text(
+            "".join(v.model_dump_json() + "\n" for v in prior)
+        )
+        return args
+
+    def _verdicts(self, args: argparse.Namespace) -> dict[str, EligibilityVerdict]:
+        lines = (_resolved_out_dir(args) / "verdicts.jsonl").read_text().splitlines()
+        verdicts = [EligibilityVerdict.model_validate_json(line) for line in lines]
+        by_id = {v.work_id: v for v in verdicts}
+        assert len(by_id) == len(verdicts)
+        return by_id
+
+    def test_skip_existing_max_records_keeps_unsent_sentinels(
+        self, tmp_path: Path
+    ) -> None:
+        prior = [
+            EligibilityVerdict(work_id=w, reason="llm-rejected", raw_response="budget")
+            for w in ["W1", "W2", "W3"]
+        ]
+        args = self._resume_args(tmp_path, ["W1", "W2", "W3"], prior, max_records=1)
+
+        mock_classify = _run_mocked(args, {"W1": {"eligible": True}})
+
+        assert [c.args[0] for c in mock_classify.call_args_list] == ["W1"]
+        verdicts = self._verdicts(args)
+        assert verdicts["W1"].eligible is True
+        assert verdicts["W2"].reason == "llm-rejected"
+        assert verdicts["W3"].raw_response == "budget"
+        meta = _meta(args)
+        assert meta["eligible_count"] == 1
+        assert meta["llm_rejected_count"] == 2
+
+    def test_skip_existing_retries_tei_parse_failure(self, tmp_path: Path) -> None:
+        prior = [EligibilityVerdict(work_id="W1", reason="tei-parse-failure")]
+        args = self._resume_args(tmp_path, ["W1"], prior)
+
+        mock_classify = _run_mocked(args, {"W1": {"eligible": True}})
+
+        assert mock_classify.call_count == 1
+        assert self._verdicts(args)["W1"].eligible is True
+        assert _meta(args)["tei_parse_failure_count"] == 0
+
+    def test_skip_existing_keeps_sentinel_outside_active_set(
+        self, tmp_path: Path
+    ) -> None:
+        # W9 is not in the corpus: its sentinel row is never re-sent and stays.
+        prior = [EligibilityVerdict(work_id="W9", reason="llm-timeout")]
+        args = self._resume_args(tmp_path, ["W1"], prior)
+
+        mock_classify = _run_mocked(args, {"W1": {"eligible": False}})
+
+        assert [c.args[0] for c in mock_classify.call_args_list] == ["W1"]
+        assert self._verdicts(args)["W9"].reason == "llm-timeout"
+        assert _meta(args)["llm_timeout_count"] == 1
+
+    def test_skip_existing_keeps_invalid_lines(self, tmp_path: Path) -> None:
+        prior = [EligibilityVerdict(work_id="W1", reason="llm-rejected")]
+        args = self._resume_args(tmp_path, ["W1"], prior)
+        path = _resolved_out_dir(args) / "verdicts.jsonl"
+        with open(path, "a") as f:
+            f.write('{"not_a_verdict": 1}\n')
+
+        _run_mocked(args, {"W1": {"eligible": True}})
+
+        lines = path.read_text().splitlines()
+        assert lines[0] == '{"not_a_verdict": 1}'
+        assert EligibilityVerdict.model_validate_json(lines[1]).eligible is True
+
 
 class TestRunOnMockEndpoint:
     """run() against a mocked decisions endpoint, without patching classify."""

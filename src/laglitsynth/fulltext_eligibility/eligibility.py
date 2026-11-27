@@ -42,7 +42,8 @@ from laglitsynth.fulltext_extraction.models import ExtractedDocument
 from laglitsynth.io import (
     JsonlReadStats,
     append_jsonl,
-    keep_jsonl_rows,
+    drop_jsonl_rows,
+    read_jsonl,
     write_meta,
 )
 from laglitsynth.layout import (
@@ -343,24 +344,27 @@ def run(args: argparse.Namespace) -> None:
     ]
     total = len(active)
 
-    skip_ids: set[str] = set()
     prior_verdicts: list[EligibilityVerdict] = []
     if args.skip_existing and verdicts_path.exists():
-        # Keep only decided verdicts; sentinel works are assessed again and
-        # their old row is dropped from the file before any call is made.
-        prior_verdicts, retried = keep_jsonl_rows(
-            verdicts_path,
-            EligibilityVerdict,
-            lambda v: v.reason is None,
-            stats=stats,
-            rewrite=not args.dry_run,
-        )
-        skip_ids = {v.work_id for v in prior_verdicts}
+        prior_verdicts = list(read_jsonl(verdicts_path, EligibilityVerdict, stats))
+    # Works to send: no decided verdict yet, capped by --max-records. A work
+    # whose verdict is a sentinel is sent again; its old row is dropped from
+    # the file before any call, every other row stays.
+    done_ids = {v.work_id for v in prior_verdicts if v.reason is None}
+    to_send = [work for work in active if work.id not in done_ids][: args.max_records]
+    send_ids = {work.id for work in to_send}
+
+    def _replaced(verdict: EligibilityVerdict) -> bool:
+        return verdict.reason is not None and verdict.work_id in send_ids
+
+    if args.skip_existing:
+        retried = len({v.work_id for v in prior_verdicts if _replaced(v)})
         print(
-            f"Skipping {len(skip_ids)} already-assessed works; "
-            f"retrying {retried} sentinel rows.",
+            f"Skipping {len(done_ids)} already-assessed works; "
+            f"retrying {retried} works with a sentinel verdict.",
             file=sys.stderr,
         )
+    prior_verdicts = [v for v in prior_verdicts if not _replaced(v)]
 
     print(f"Assessing {total} works with model {endpoint.model}", file=sys.stderr)
     if not args.dry_run:
@@ -373,6 +377,8 @@ def run(args: argparse.Namespace) -> None:
     # Start-of-run truncation: non-resuming runs rewrite verdicts.jsonl.
     if not args.dry_run and not args.skip_existing and verdicts_path.exists():
         verdicts_path.unlink()
+    if not args.dry_run and args.skip_existing and verdicts_path.exists():
+        drop_jsonl_rows(verdicts_path, EligibilityVerdict, _replaced)
 
     client = decisions_client(endpoint, _LLM_TIMEOUT_SECONDS)
 
@@ -382,14 +388,13 @@ def run(args: argparse.Namespace) -> None:
 
     try:
         for verdict in assess_works(
-            active,
+            to_send,
             extractions,
             extraction_output_dir,
             client=client,
             endpoint=endpoint,
-            max_records=args.max_records,
+            max_records=None,
             question=question,
-            skip_ids=skip_ids,
             concurrency=args.concurrency,
         ):
             index += 1

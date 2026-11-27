@@ -26,42 +26,48 @@ test than a list of retryable reasons. An `llm-rejected` that is not
 transient (a full text over the model's context) is sent again on every
 resume; it fails the same way and is recorded again.
 
-Under `--skip-existing`, before any LLM call, the stage reads the
-existing JSONL, keeps the successful rows and rewrites the file with
-only those, through a temporary file in the same directory and
-`os.replace`, so a crash leaves either the old or the new file. Skipped
-ids are the kept rows' ids; the dropped works go through the normal
-loop and are appended as before, so each work ends with exactly one
-row and the meta counts (computed from kept plus new rows) stay
-correct. A crash after the rewrite leaves those works without a row,
-which the next resume sends anyway. Lines that fail validation are
-already ignored on read and are not carried into the rewritten file.
-`--dry-run` filters in memory and writes nothing. The resume guards
+Under `--skip-existing`, `run()` reads the existing JSONL and builds
+the list of works it will send: the active works (current extraction,
+and in stage 8 an `eligible=True` verdict) without a successful row,
+capped by `--max-records`. Before any LLM call it removes from the file
+only the sentinel rows of works in that list, through a temporary file
+in the same directory that is fsynced and moved over the original with
+`os.replace` (removed again on failure), so a crash leaves either the
+old or the new file. Every other line stays as it is: successful rows,
+sentinel rows of works not sent this time (beyond `--max-records`, or
+outside the active set), and lines that fail validation. The sent works
+are appended as before, so each work ends with exactly one row, and the
+meta counts the remaining rows plus the new ones. A crash after the
+rewrite leaves the sent works without a row, which the next resume
+sends anyway. `--dry-run` writes nothing. The resume guards
 (`prompt_sha256` in both stages, `eligibility_prompt_sha256` and
 `corpus_id`) run before the rewrite and are unchanged.
 
 The helper lives in [`io.py`](../../src/laglitsynth/io.py) as
-`keep_jsonl_rows(path, model, keep, *, stats, rewrite) -> tuple[list, int]`
-(kept rows, dropped count), used by both stages with
-`keep=lambda r: r.reason is None`. The resume message names both
-numbers: `Skipping N already-assessed works; retrying M sentinel rows.`
+`drop_jsonl_rows(path, model, drop) -> int`, used by both stages with
+`drop` true for a sentinel row of a work about to be sent. The resume
+message counts works: `Skipping N already-assessed works; retrying M
+works with a sentinel verdict.`
 
 ## Implementation sequence
 
 1. This plan.
-2. `keep_jsonl_rows` in [`io.py`](../../src/laglitsynth/io.py) and its use
-   in stages 7 and 8, with `--skip-existing` help text updated. Tests:
-   `test_keep_jsonl_rows_rewrites_atomically` in `tests/test_io.py`
-   (kept rows returned, file rewritten, no temporary file left) and
-   `test_keep_jsonl_rows_without_rewrite_leaves_file`;
-   `test_skip_existing_retries_sentinels` in
+2. `drop_jsonl_rows` in [`io.py`](../../src/laglitsynth/io.py) and its
+   use in stages 7 and 8, which now build the send list in `run()`,
+   with `--skip-existing` help text updated. Tests in `tests/test_io.py`:
+   `test_drop_jsonl_rows_rewrites_and_keeps_invalid_lines`,
+   `test_drop_jsonl_rows_leaves_file_when_nothing_dropped`,
+   `test_drop_jsonl_rows_removes_temp_file_on_failure`. In
    [test_fulltext_eligibility.py](../../tests/test_fulltext_eligibility.py)
-   and [test_extraction_codebook.py](../../tests/test_extraction_codebook.py)
-   (a successful row is skipped, an `llm-rejected` row is retried, the
-   file ends with one row per work, the meta counts the retried
-   result); `test_skip_existing_dry_run_keeps_sentinel_rows` in stage 7.
-3. Docs: the `--skip-existing` entries in
-   [eligibility.md](../../docs/eligibility.md),
+   and [test_extraction_codebook.py](../../tests/test_extraction_codebook.py):
+   `test_skip_existing_retries_sentinels`,
+   `test_skip_existing_max_records_keeps_unsent_sentinels`,
+   `test_skip_existing_retries_tei_parse_failure`,
+   `test_skip_existing_keeps_sentinel_outside_active_set` and
+   `test_skip_existing_dry_run_keeps_sentinel_rows`; stage 7 also
+   `test_skip_existing_keeps_invalid_lines`.
+3. Docs: the `--skip-existing` and `--max-records` entries in
+   [eligibility.md](../../docs/eligibility.md) and
    [extraction-codebook.md](../../docs/extraction-codebook.md) and the
    resume paragraph in [interfaces.md](../../docs/interfaces.md); roadmap
    entry moved to Implemented; this plan to `plans/done/`.

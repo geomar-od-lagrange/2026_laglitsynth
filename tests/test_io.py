@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
+import pytest
 from pydantic import BaseModel
 
-from laglitsynth.io import JsonlReadStats, keep_jsonl_rows
+from laglitsynth.io import drop_jsonl_rows
 
 
 class _Row(BaseModel):
@@ -12,38 +14,47 @@ class _Row(BaseModel):
     reason: str | None = None
 
 
-def _write(path: Path, rows: list[_Row]) -> str:
-    text = "".join(r.model_dump_json() + "\n" for r in rows)
-    path.write_text(text)
-    return text
+def _line(row: _Row) -> str:
+    return row.model_dump_json() + "\n"
 
 
-def test_keep_jsonl_rows_rewrites_atomically(tmp_path: Path) -> None:
+def _is_sentinel(row: _Row) -> bool:
+    return row.reason is not None
+
+
+def test_drop_jsonl_rows_rewrites_and_keeps_invalid_lines(tmp_path: Path) -> None:
     path = tmp_path / "rows.jsonl"
-    _write(path, [_Row(work_id="A"), _Row(work_id="B", reason="llm-timeout")])
-    with open(path, "a") as f:
-        f.write('{"not_a_row": 1}\n')
-    stats = JsonlReadStats()
-
-    kept, dropped = keep_jsonl_rows(
-        path, _Row, lambda r: r.reason is None, stats=stats
+    path.write_text(
+        _line(_Row(work_id="A"))
+        + '{"not_a_row": 1}\n'
+        + _line(_Row(work_id="B", reason="llm-timeout"))
+        + "not json\n"
     )
 
-    assert [r.work_id for r in kept] == ["A"]
-    assert dropped == 1
-    assert stats.skipped == 1
-    assert path.read_text() == _Row(work_id="A").model_dump_json() + "\n"
+    assert drop_jsonl_rows(path, _Row, _is_sentinel) == 1
+
+    assert path.read_text() == _line(_Row(work_id="A")) + '{"not_a_row": 1}\nnot json\n'
     assert list(tmp_path.iterdir()) == [path]
 
 
-def test_keep_jsonl_rows_without_rewrite_leaves_file(tmp_path: Path) -> None:
+def test_drop_jsonl_rows_leaves_file_when_nothing_dropped(tmp_path: Path) -> None:
     path = tmp_path / "rows.jsonl"
-    before = _write(path, [_Row(work_id="A"), _Row(work_id="B", reason="llm-rejected")])
+    path.write_text(_line(_Row(work_id="A")))
+    mtime = path.stat().st_mtime_ns
 
-    kept, dropped = keep_jsonl_rows(
-        path, _Row, lambda r: r.reason is None, rewrite=False
-    )
+    assert drop_jsonl_rows(path, _Row, _is_sentinel) == 0
 
-    assert [r.work_id for r in kept] == ["A"]
-    assert dropped == 1
+    assert path.stat().st_mtime_ns == mtime
+
+
+def test_drop_jsonl_rows_removes_temp_file_on_failure(tmp_path: Path) -> None:
+    path = tmp_path / "rows.jsonl"
+    before = _line(_Row(work_id="A", reason="llm-rejected"))
+    path.write_text(before)
+
+    with patch("laglitsynth.io.os.replace", side_effect=OSError("disk")):
+        with pytest.raises(OSError):
+            drop_jsonl_rows(path, _Row, _is_sentinel)
+
     assert path.read_text() == before
+    assert list(tmp_path.iterdir()) == [path]
