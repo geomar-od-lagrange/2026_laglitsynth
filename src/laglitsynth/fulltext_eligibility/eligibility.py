@@ -128,23 +128,16 @@ def assess_works(
     *,
     client: httpx.Client,
     endpoint: LlmEndpoint,
-    max_records: int | None,
     question: DecisionQuestion,
-    skip_ids: set[str] | None = None,
     concurrency: int = 1,
 ) -> Iterator[EligibilityVerdict]:
-    skip_ids = skip_ids or set()
     eligible: list[Work] = []
     for work in works:
-        if work.id in skip_ids:
-            continue
         # Full-text-only: a work without a current extraction never enters
         # the loop — no verdict row, no count. The gap is visible in the
         # corpus provenance and the stage 6 meta, so we don't flag it here.
         if work.id not in extractions:
             continue
-        if max_records is not None and len(eligible) >= max_records:
-            break
         eligible.append(work)
 
     def _call_one(work: Work) -> EligibilityVerdict:
@@ -393,7 +386,6 @@ def run(args: argparse.Namespace) -> None:
             extraction_output_dir,
             client=client,
             endpoint=endpoint,
-            max_records=None,
             question=question,
             concurrency=args.concurrency,
         ):

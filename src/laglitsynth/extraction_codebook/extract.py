@@ -223,23 +223,16 @@ def extract_works(
     *,
     client: OpenAI,
     endpoint: LlmEndpoint,
-    max_records: int | None,
     ctx: CodebookContext,
-    skip_ids: set[str] | None = None,
     concurrency: int = 1,
 ) -> Iterator[ExtractionRecordProto]:
-    skip_ids = skip_ids or set()
     eligible: list[Work] = []
     for work in works:
-        if work.id in skip_ids:
-            continue
         # Full-text-only: a work without a current extraction never enters
         # the loop — no record row, no count. The gap is visible in the
         # corpus provenance and the stage 6 meta, so we don't flag it here.
         if work.id not in extractions:
             continue
-        if max_records is not None and len(eligible) >= max_records:
-            break
         eligible.append(work)
 
     def _call_one(work: Work) -> ExtractionRecordProto:
@@ -507,20 +500,17 @@ def run(args: argparse.Namespace) -> None:
     ]
     send_ids = {work.id for work in to_send}
 
-    def _replaced(record: BaseModel) -> bool:
-        proto = cast(ExtractionRecordProto, record)
-        return proto.reason is not None and proto.work_id in send_ids
+    def _replaced(record: ExtractionRecordProto) -> bool:
+        return record.reason is not None and record.work_id in send_ids
 
     if args.skip_existing:
-        retried = len(
-            {r.work_id for r in prior_records if _replaced(cast(BaseModel, r))}
-        )
+        retried = len({r.work_id for r in prior_records if _replaced(r)})
         print(
             f"Skipping {len(done_ids)} already-extracted works; "
             f"retrying {retried} works with a sentinel record.",
             file=sys.stderr,
         )
-    prior_records = [r for r in prior_records if not _replaced(cast(BaseModel, r))]
+    prior_records = [r for r in prior_records if not _replaced(r)]
 
     print(f"Extracting {total} works with model {endpoint.model}", file=sys.stderr)
     if not args.dry_run:
@@ -536,7 +526,11 @@ def run(args: argparse.Namespace) -> None:
     if not args.dry_run and not args.skip_existing and records_path.exists():
         records_path.unlink()
     if not args.dry_run and args.skip_existing and records_path.exists():
-        drop_jsonl_rows(records_path, ctx.record_model, _replaced)
+        drop_jsonl_rows(
+            records_path,
+            ctx.record_model,
+            lambda r: _replaced(cast(ExtractionRecordProto, r)),
+        )
 
     client = chat_client(endpoint, _LLM_TIMEOUT_SECONDS)
 
@@ -550,7 +544,6 @@ def run(args: argparse.Namespace) -> None:
         extraction_output_dir,
         client=client,
         endpoint=endpoint,
-        max_records=None,
         ctx=ctx,
         concurrency=args.concurrency,
     ):

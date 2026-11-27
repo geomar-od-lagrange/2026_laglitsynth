@@ -105,7 +105,6 @@ def _call_extract_works(
     extraction_output_dir: Path,
     *,
     client: Any,
-    max_records: int | None = None,
 ) -> list[BaseModel]:
     return list(
         extract_works(  # type: ignore[arg-type]
@@ -114,7 +113,6 @@ def _call_extract_works(
             extraction_output_dir,
             client=client,
             endpoint=_ENDPOINT,
-            max_records=max_records,
             ctx=ctx,
         )
     )

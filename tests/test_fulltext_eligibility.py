@@ -221,7 +221,6 @@ class TestAssessWorksCascade:
                     output_dir,
                     client=MagicMock(),
                     endpoint=_ENDPOINT,
-                    max_records=None,
                     question=_QUESTION,
                 )
             )
@@ -248,7 +247,6 @@ class TestAssessWorksCascade:
                     output_dir,
                     client=MagicMock(),
                     endpoint=_ENDPOINT,
-                    max_records=None,
                     question=_QUESTION,
                 )
             )
@@ -282,7 +280,6 @@ class TestAssessWorksCascade:
                     output_dir,
                     client=MagicMock(),
                     endpoint=_ENDPOINT,
-                    max_records=None,
                     question=_QUESTION,
                 )
             )
@@ -320,7 +317,6 @@ class TestAssessWorksCascade:
                     output_dir,
                     client=MagicMock(),
                     endpoint=_ENDPOINT,
-                    max_records=None,
                     question=_QUESTION,
                 )
             )
@@ -362,7 +358,6 @@ class TestAssessWorksCascade:
                     output_dir,
                     client=MagicMock(),
                     endpoint=_ENDPOINT,
-                    max_records=None,
                     question=_QUESTION,
                 )
             )
@@ -426,7 +421,6 @@ class TestAssessWorksCascade:
                     output_dir,
                     client=MagicMock(),
                     endpoint=_ENDPOINT,
-                    max_records=None,
                     question=_QUESTION,
                 )
             )
