@@ -275,7 +275,8 @@ Nothing.
   wording is
   [issue #26](https://github.com/geomar-od-lagrange/2026_laglitsynth/issues/26).
 - Retrieval over every OpenAlex location of a work plus Semantic Scholar
-  and arXiv (step 2 of the [pipeline restructure](done/pipeline-restructure.md)).
+  and arXiv ([issue #36](https://github.com/geomar-od-lagrange/2026_laglitsynth/issues/36); step 2 of the
+  [pipeline restructure](done/pipeline-restructure.md)).
   `fulltext-retrieval` tries only OpenAlex's best open-access URL and
   Unpaywall; the store already holds PDFs from the other routes, fetched by
   one-off scripts ([pdf-store.md](../docs/pdf-store.md)), so this does not
@@ -283,8 +284,8 @@ Nothing.
 
 ## Queued — driven by future stages
 
-- Codebook refinement, a work package of its own once the end-to-end
-  workflow is settled. Known starting point: `config_available` and
+- Codebook refinement ([issue #37](https://github.com/geomar-od-lagrange/2026_laglitsynth/issues/37)), a work package of its own
+  once the end-to-end workflow is settled. Known starting point: `config_available` and
   `rationale` come back filled for nearly every paper, because the
   questions don't separate configuration published as files from settings
   described in prose, or a rationale for the numerical choices from other
