@@ -64,6 +64,7 @@ from laglitsynth.fulltext_extraction.models import ExtractedDocument
 from laglitsynth.io import (
     JsonlReadStats,
     append_jsonl,
+    drop_jsonl_rows,
     read_jsonl,
     write_meta,
 )
@@ -222,23 +223,16 @@ def extract_works(
     *,
     client: OpenAI,
     endpoint: LlmEndpoint,
-    max_records: int | None,
     ctx: CodebookContext,
-    skip_ids: set[str] | None = None,
     concurrency: int = 1,
 ) -> Iterator[ExtractionRecordProto]:
-    skip_ids = skip_ids or set()
     eligible: list[Work] = []
     for work in works:
-        if work.id in skip_ids:
-            continue
         # Full-text-only: a work without a current extraction never enters
         # the loop — no record row, no count. The gap is visible in the
         # corpus provenance and the stage 6 meta, so we don't flag it here.
         if work.id not in extractions:
             continue
-        if max_records is not None and len(eligible) >= max_records:
-            break
         eligible.append(work)
 
     def _call_one(work: Work) -> ExtractionRecordProto:
@@ -384,7 +378,10 @@ def build_subparser(
     parser.add_argument(
         "--skip-existing",
         action="store_true",
-        help="Skip works that already have a record in records.jsonl",
+        help=(
+            "Skip works that already have a filled record in records.jsonl; "
+            "works whose record is a sentinel are extracted again"
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -488,18 +485,32 @@ def run(args: argparse.Namespace) -> None:
     ]
     total = len(eligible_works)
 
-    skip_ids: set[str] = set()
     prior_records: list[ExtractionRecordProto] = []
     if args.skip_existing and records_path.exists():
         prior_records = [
             cast(ExtractionRecordProto, r)
             for r in read_jsonl(records_path, ctx.record_model, stats)
         ]
-        skip_ids = {r.work_id for r in prior_records}
+    # Works to send: no filled record yet, capped by --max-records. A work
+    # whose record is a sentinel is sent again; its old row is dropped from
+    # the file before any call, every other row stays.
+    done_ids = {r.work_id for r in prior_records if r.reason is None}
+    to_send = [work for work in eligible_works if work.id not in done_ids][
+        : args.max_records
+    ]
+    send_ids = {work.id for work in to_send}
+
+    def _replaced(record: ExtractionRecordProto) -> bool:
+        return record.reason is not None and record.work_id in send_ids
+
+    if args.skip_existing:
+        retried = len({r.work_id for r in prior_records if _replaced(r)})
         print(
-            f"Skipping {len(skip_ids)} already-extracted works.",
+            f"Skipping {len(done_ids)} already-extracted works; "
+            f"retrying {retried} works with a sentinel record.",
             file=sys.stderr,
         )
+    prior_records = [r for r in prior_records if not _replaced(r)]
 
     print(f"Extracting {total} works with model {endpoint.model}", file=sys.stderr)
     if not args.dry_run:
@@ -514,6 +525,12 @@ def run(args: argparse.Namespace) -> None:
     # Start-of-run truncation: non-resuming runs rewrite records.jsonl.
     if not args.dry_run and not args.skip_existing and records_path.exists():
         records_path.unlink()
+    if not args.dry_run and args.skip_existing and records_path.exists():
+        drop_jsonl_rows(
+            records_path,
+            ctx.record_model,
+            lambda r: _replaced(cast(ExtractionRecordProto, r)),
+        )
 
     client = chat_client(endpoint, _LLM_TIMEOUT_SECONDS)
 
@@ -522,14 +539,12 @@ def run(args: argparse.Namespace) -> None:
     new_records: list[ExtractionRecordProto] = []
 
     for record in extract_works(
-        eligible_works,
+        to_send,
         extractions,
         extraction_output_dir,
         client=client,
         endpoint=endpoint,
-        max_records=args.max_records,
         ctx=ctx,
-        skip_ids=skip_ids,
         concurrency=args.concurrency,
     ):
         index += 1

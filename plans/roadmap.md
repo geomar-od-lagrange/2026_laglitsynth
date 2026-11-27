@@ -230,6 +230,12 @@ Update this file when a plan is written, implemented, or archived.
   matches against the whole catalogue with `--source zotero-desktop |
   browser | institutional | manual`.
 
+- [`--skip-existing` retries sentinel rows](done/skip-existing-retry-sentinels.md)
+  — stages 7 and 8 skip only works with a successful row; the sentinel
+  rows of the works sent again are dropped from the JSONL (atomic rewrite
+  via the shared `io.drop_jsonl_rows`), so a run cut short by
+  a budget limit or an outage resumes without hand-editing.
+
 ## In flight
 
 - [Usability docs](usability-docs.md) — D1 done (`docs/external-services.md` runbook); D2 (per-stage prereq blocks + `interfaces.md` STOP HERE) and D3 (README hygiene) pending. Its Ollama parts are obsolete: the [pipeline restructure](done/pipeline-restructure.md) removed local LLMs, and the runbook's LLM section is now a provider-neutral endpoint section. The complementary [running-the-pipeline.md](../docs/explorations/running-the-pipeline.md) exploration covers operationally driving stages, storage clarity, and cross-machine/collaborator runs — its top candidate is now planned as the [run manifest](done/run-manifest.md).
@@ -246,11 +252,6 @@ Update this file when a plan is written, implemented, or archived.
   eligibility verdicts on every PDF before choosing a threshold. Scope
   wording is
   [issue #26](https://github.com/geomar-od-lagrange/2026_laglitsynth/issues/26).
-- `--skip-existing` in stages 7 and 8 skips works whose last record is
-  a sentinel (`llm-rejected`, `llm-timeout`), so a run that hit a budget
-  limit or an outage cannot be resumed without editing its JSONL by hand
-  ([first-full-run-2026-11.md](../docs/explorations/first-full-run-2026-11.md)).
-  Retry sentinel works instead.
 - Title-based import matching for returned PDFs that embed no DOI
   ([contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md)),
   tuned against the measured publisher-PDF corpus rather than an invented

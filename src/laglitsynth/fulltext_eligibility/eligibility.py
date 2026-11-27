@@ -42,6 +42,7 @@ from laglitsynth.fulltext_extraction.models import ExtractedDocument
 from laglitsynth.io import (
     JsonlReadStats,
     append_jsonl,
+    drop_jsonl_rows,
     read_jsonl,
     write_meta,
 )
@@ -127,23 +128,16 @@ def assess_works(
     *,
     client: httpx.Client,
     endpoint: LlmEndpoint,
-    max_records: int | None,
     question: DecisionQuestion,
-    skip_ids: set[str] | None = None,
     concurrency: int = 1,
 ) -> Iterator[EligibilityVerdict]:
-    skip_ids = skip_ids or set()
     eligible: list[Work] = []
     for work in works:
-        if work.id in skip_ids:
-            continue
         # Full-text-only: a work without a current extraction never enters
         # the loop — no verdict row, no count. The gap is visible in the
         # corpus provenance and the stage 6 meta, so we don't flag it here.
         if work.id not in extractions:
             continue
-        if max_records is not None and len(eligible) >= max_records:
-            break
         eligible.append(work)
 
     def _call_one(work: Work) -> EligibilityVerdict:
@@ -261,7 +255,10 @@ def build_subparser(
     parser.add_argument(
         "--skip-existing",
         action="store_true",
-        help="Skip works that already have a verdict in verdicts.jsonl",
+        help=(
+            "Skip works that already have a decided verdict in verdicts.jsonl; "
+            "works whose verdict is a sentinel are assessed again"
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -340,17 +337,27 @@ def run(args: argparse.Namespace) -> None:
     ]
     total = len(active)
 
-    skip_ids: set[str] = set()
     prior_verdicts: list[EligibilityVerdict] = []
     if args.skip_existing and verdicts_path.exists():
-        prior_verdicts = list(
-            read_jsonl(verdicts_path, EligibilityVerdict, stats)
-        )
-        skip_ids = {v.work_id for v in prior_verdicts}
+        prior_verdicts = list(read_jsonl(verdicts_path, EligibilityVerdict, stats))
+    # Works to send: no decided verdict yet, capped by --max-records. A work
+    # whose verdict is a sentinel is sent again; its old row is dropped from
+    # the file before any call, every other row stays.
+    done_ids = {v.work_id for v in prior_verdicts if v.reason is None}
+    to_send = [work for work in active if work.id not in done_ids][: args.max_records]
+    send_ids = {work.id for work in to_send}
+
+    def _replaced(verdict: EligibilityVerdict) -> bool:
+        return verdict.reason is not None and verdict.work_id in send_ids
+
+    if args.skip_existing:
+        retried = len({v.work_id for v in prior_verdicts if _replaced(v)})
         print(
-            f"Skipping {len(skip_ids)} already-assessed works.",
+            f"Skipping {len(done_ids)} already-assessed works; "
+            f"retrying {retried} works with a sentinel verdict.",
             file=sys.stderr,
         )
+    prior_verdicts = [v for v in prior_verdicts if not _replaced(v)]
 
     print(f"Assessing {total} works with model {endpoint.model}", file=sys.stderr)
     if not args.dry_run:
@@ -363,6 +370,8 @@ def run(args: argparse.Namespace) -> None:
     # Start-of-run truncation: non-resuming runs rewrite verdicts.jsonl.
     if not args.dry_run and not args.skip_existing and verdicts_path.exists():
         verdicts_path.unlink()
+    if not args.dry_run and args.skip_existing and verdicts_path.exists():
+        drop_jsonl_rows(verdicts_path, EligibilityVerdict, _replaced)
 
     client = decisions_client(endpoint, _LLM_TIMEOUT_SECONDS)
 
@@ -372,14 +381,12 @@ def run(args: argparse.Namespace) -> None:
 
     try:
         for verdict in assess_works(
-            active,
+            to_send,
             extractions,
             extraction_output_dir,
             client=client,
             endpoint=endpoint,
-            max_records=args.max_records,
             question=question,
-            skip_ids=skip_ids,
             concurrency=args.concurrency,
         ):
             index += 1

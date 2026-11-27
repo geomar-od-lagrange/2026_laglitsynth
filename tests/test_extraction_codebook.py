@@ -105,7 +105,6 @@ def _call_extract_works(
     extraction_output_dir: Path,
     *,
     client: Any,
-    max_records: int | None = None,
 ) -> list[BaseModel]:
     return list(
         extract_works(  # type: ignore[arg-type]
@@ -114,7 +113,6 @@ def _call_extract_works(
             extraction_output_dir,
             client=client,
             endpoint=_ENDPOINT,
-            max_records=max_records,
             ctx=ctx,
         )
     )
@@ -843,6 +841,151 @@ class TestRun:
         meta = _meta(args)
         assert meta["full_text_count"] == 2
         assert meta["skipped_count"] == 0
+
+    def test_skip_existing_retries_sentinels(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        corpus, verdicts, extractions = _inputs(tmp_path, ["W1", "W2"])
+        args = _make_run_args(
+            tmp_path,
+            corpus_dir=corpus,
+            eligibility_verdicts=verdicts,
+            extractions=extractions,
+            skip_existing=True,
+            run_id="resume-run",
+        )
+        out_dir = _resolved_out_dir(args)
+        out_dir.mkdir(parents=True)
+        payload_fields = {name: None for name in ctx.payload_field_names}
+        done = ctx.record_model(work_id="W1", reason=None, **payload_fields)
+        budget = ctx.record_model(
+            work_id="W2",
+            reason="llm-rejected",
+            raw_response="budget_exceeded",
+            **payload_fields,
+        )
+        (out_dir / "records.jsonl").write_text(
+            done.model_dump_json() + "\n" + budget.model_dump_json() + "\n"
+        )
+
+        mock_client = _run(args, ctx)
+
+        # Only the sentinel work W2 was sent again.
+        assert mock_client.chat.completions.create.call_count == 1
+        records = [
+            json.loads(line)
+            for line in (out_dir / "records.jsonl").read_text().splitlines()
+        ]
+        assert sorted(r["work_id"] for r in records) == ["W1", "W2"]
+        assert all(r["reason"] is None for r in records)
+        meta = _meta(args)
+        assert meta["full_text_count"] == 2
+        assert meta["llm_rejected_count"] == 0
+
+    def _resume_args(
+        self,
+        tmp_path: Path,
+        ctx: CodebookContext,
+        eligible: list[str],
+        prior: dict[str, str | None],
+        *,
+        full_text: list[str] | None = None,
+        **kwargs: Any,
+    ) -> argparse.Namespace:
+        """Inputs for ``eligible`` and a records.jsonl with ``prior`` reasons."""
+        corpus, verdicts, extractions = _inputs(tmp_path, eligible, full_text=full_text)
+        args = _make_run_args(
+            tmp_path,
+            corpus_dir=corpus,
+            eligibility_verdicts=verdicts,
+            extractions=extractions,
+            skip_existing=True,
+            run_id="resume-run",
+            **kwargs,
+        )
+        out_dir = _resolved_out_dir(args)
+        out_dir.mkdir(parents=True)
+        payload_fields = {name: None for name in ctx.payload_field_names}
+        (out_dir / "records.jsonl").write_text(
+            "".join(
+                ctx.record_model(
+                    work_id=w, reason=reason, raw_response="prior", **payload_fields
+                ).model_dump_json()
+                + "\n"
+                for w, reason in prior.items()
+            )
+        )
+        return args
+
+    def _records(self, args: argparse.Namespace) -> dict[str, dict[str, Any]]:
+        lines = (_resolved_out_dir(args) / "records.jsonl").read_text().splitlines()
+        records = [json.loads(line) for line in lines]
+        by_id = {r["work_id"]: r for r in records}
+        assert len(by_id) == len(records)
+        return by_id
+
+    def test_skip_existing_max_records_keeps_unsent_sentinels(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        args = self._resume_args(
+            tmp_path,
+            ctx,
+            ["W1", "W2", "W3"],
+            {"W1": "llm-rejected", "W2": "llm-rejected", "W3": "llm-rejected"},
+            max_records=1,
+        )
+
+        mock_client = _run(args, ctx)
+
+        assert mock_client.chat.completions.create.call_count == 1
+        records = self._records(args)
+        assert records["W1"]["reason"] is None
+        assert records["W2"]["reason"] == "llm-rejected"
+        assert records["W3"]["raw_response"] == "prior"
+        meta = _meta(args)
+        assert meta["full_text_count"] == 1
+        assert meta["llm_rejected_count"] == 2
+
+    def test_skip_existing_retries_tei_parse_failure(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        args = self._resume_args(tmp_path, ctx, ["W1"], {"W1": "tei-parse-failure"})
+
+        mock_client = _run(args, ctx)
+
+        assert mock_client.chat.completions.create.call_count == 1
+        assert self._records(args)["W1"]["reason"] is None
+        assert _meta(args)["skipped_count"] == 0
+
+    def test_skip_existing_keeps_sentinel_outside_active_set(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        # W2 has no current extraction, so it is not sent and its row stays.
+        args = self._resume_args(
+            tmp_path, ctx, ["W1", "W2"], {"W2": "llm-timeout"}, full_text=["W1"]
+        )
+
+        mock_client = _run(args, ctx)
+
+        assert mock_client.chat.completions.create.call_count == 1
+        records = self._records(args)
+        assert records["W1"]["reason"] is None
+        assert records["W2"]["reason"] == "llm-timeout"
+        assert _meta(args)["llm_timeout_count"] == 1
+
+    def test_skip_existing_dry_run_keeps_sentinel_rows(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        args = self._resume_args(
+            tmp_path, ctx, ["W1"], {"W1": "llm-rejected"}, dry_run=True
+        )
+        path = _resolved_out_dir(args) / "records.jsonl"
+        before = path.read_text()
+
+        mock_client = _run(args, ctx)
+
+        assert mock_client.chat.completions.create.call_count == 1
+        assert path.read_text() == before
 
 
 def _stale_meta(

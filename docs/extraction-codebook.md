@@ -260,8 +260,16 @@ to run (see [run-manifest.md](run-manifest.md)).
 - `--config`: optional YAML config file whose values seed argparse
   defaults; explicit CLI flags still win. See [configs.md](configs.md).
 - `--skip-existing`: load any prior `records.jsonl` (in the run dir
-  pointed at by `--run-id`) and skip already-extracted `work_id`s. New
-  records are appended to the existing sidecar. If
+  pointed at by `--run-id`) and skip the `work_id`s with a filled record
+  (`reason` is `None`). Works whose record is a sentinel (`llm-timeout`,
+  `llm-rejected` — including a proxy's budget rejection —
+  `llm-parse-failure`, `tei-parse-failure`) are extracted again. Before
+  any call, the sentinel rows of the works about to be sent are dropped
+  from `records.jsonl` (written to a temporary file, fsynced and moved
+  over it with `os.replace`); every other line stays, including sentinel
+  rows of works left out by `--max-records`. Each work ends with one
+  record. New records are appended to the sidecar. `--dry-run` leaves
+  the file as it is. If
   `extraction-codebook-meta.json` already exists and its recorded
   `prompt_sha256` differs from the hash the current invocation would
   produce, its `eligibility_prompt_sha256` differs from that of the
@@ -269,7 +277,9 @@ to run (see [run-manifest.md](run-manifest.md)).
   current corpus, the run aborts with an error — mixing records from
   different prompt versions, eligibility gates or corpora in one file
   would silently corrupt any downstream analysis.
-- `--max-records`: process only the first N eligible works.
+- `--max-records`: process only the first N eligible works that have a
+  current extraction (and, under `--skip-existing`, no filled record
+  yet).
 - `--dry-run`: print summaries to stderr without writing any output.
 - `--base-url`, `--model`: the OpenAI-compatible base URL (including
   `/v1`) and the chat model. Both required.
