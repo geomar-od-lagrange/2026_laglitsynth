@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Iterator
+import os
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeVar
@@ -51,6 +52,32 @@ def read_jsonl(
                 logger.warning("Skipping invalid record on line %d: %s", line_no, exc)
                 if stats is not None:
                     stats.skipped += 1
+
+
+def keep_jsonl_rows(
+    path: Path,
+    model: type[_T],
+    keep: Callable[[_T], bool],
+    *,
+    stats: JsonlReadStats | None = None,
+    rewrite: bool = True,
+) -> tuple[list[_T], int]:
+    """Read ``path`` and keep the rows for which ``keep`` is true.
+
+    Returns the kept rows and the number dropped. With ``rewrite``, a file
+    that lost rows is replaced by one holding only the kept rows, written
+    to a temporary file beside it and moved over it with ``os.replace``,
+    so a crash leaves either the old or the new file. Lines that fail
+    validation are counted in ``stats``; a rewrite does not carry them over.
+    """
+    rows = list(read_jsonl(path, model, stats))
+    kept = [row for row in rows if keep(row)]
+    dropped = len(rows) - len(kept)
+    if rewrite and dropped:
+        tmp = path.with_name(path.name + ".tmp")
+        write_jsonl(kept, tmp)
+        os.replace(tmp, path)
+    return kept, dropped
 
 
 def write_meta(path: Path, meta: BaseModel) -> None:

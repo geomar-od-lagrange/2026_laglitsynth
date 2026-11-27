@@ -42,7 +42,7 @@ from laglitsynth.fulltext_extraction.models import ExtractedDocument
 from laglitsynth.io import (
     JsonlReadStats,
     append_jsonl,
-    read_jsonl,
+    keep_jsonl_rows,
     write_meta,
 )
 from laglitsynth.layout import (
@@ -261,7 +261,10 @@ def build_subparser(
     parser.add_argument(
         "--skip-existing",
         action="store_true",
-        help="Skip works that already have a verdict in verdicts.jsonl",
+        help=(
+            "Skip works that already have a decided verdict in verdicts.jsonl; "
+            "works whose verdict is a sentinel are assessed again"
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -343,12 +346,19 @@ def run(args: argparse.Namespace) -> None:
     skip_ids: set[str] = set()
     prior_verdicts: list[EligibilityVerdict] = []
     if args.skip_existing and verdicts_path.exists():
-        prior_verdicts = list(
-            read_jsonl(verdicts_path, EligibilityVerdict, stats)
+        # Keep only decided verdicts; sentinel works are assessed again and
+        # their old row is dropped from the file before any call is made.
+        prior_verdicts, retried = keep_jsonl_rows(
+            verdicts_path,
+            EligibilityVerdict,
+            lambda v: v.reason is None,
+            stats=stats,
+            rewrite=not args.dry_run,
         )
         skip_ids = {v.work_id for v in prior_verdicts}
         print(
-            f"Skipping {len(skip_ids)} already-assessed works.",
+            f"Skipping {len(skip_ids)} already-assessed works; "
+            f"retrying {retried} sentinel rows.",
             file=sys.stderr,
         )
 

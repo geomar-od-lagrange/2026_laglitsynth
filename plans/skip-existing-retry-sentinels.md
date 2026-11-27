@@ -51,9 +51,9 @@ numbers: `Skipping N already-assessed works; retrying M sentinel rows.`
 1. This plan.
 2. `keep_jsonl_rows` in [`io.py`](../src/laglitsynth/io.py) and its use
    in stages 7 and 8, with `--skip-existing` help text updated. Tests:
-   `tests/test_io.py::test_keep_jsonl_rows_rewrites_atomically` (kept
-   rows returned, file rewritten, no temporary file left,
-   `rewrite=False` leaves the file alone);
+   `test_keep_jsonl_rows_rewrites_atomically` in `tests/test_io.py`
+   (kept rows returned, file rewritten, no temporary file left) and
+   `test_keep_jsonl_rows_without_rewrite_leaves_file`;
    `test_skip_existing_retries_sentinels` in
    [test_fulltext_eligibility.py](../tests/test_fulltext_eligibility.py)
    and [test_extraction_codebook.py](../tests/test_extraction_codebook.py)

@@ -844,6 +844,46 @@ class TestRun:
         assert meta["full_text_count"] == 2
         assert meta["skipped_count"] == 0
 
+    def test_skip_existing_retries_sentinels(
+        self, tmp_path: Path, ctx: CodebookContext
+    ) -> None:
+        corpus, verdicts, extractions = _inputs(tmp_path, ["W1", "W2"])
+        args = _make_run_args(
+            tmp_path,
+            corpus_dir=corpus,
+            eligibility_verdicts=verdicts,
+            extractions=extractions,
+            skip_existing=True,
+            run_id="resume-run",
+        )
+        out_dir = _resolved_out_dir(args)
+        out_dir.mkdir(parents=True)
+        payload_fields = {name: None for name in ctx.payload_field_names}
+        done = ctx.record_model(work_id="W1", reason=None, **payload_fields)
+        budget = ctx.record_model(
+            work_id="W2",
+            reason="llm-rejected",
+            raw_response="budget_exceeded",
+            **payload_fields,
+        )
+        (out_dir / "records.jsonl").write_text(
+            done.model_dump_json() + "\n" + budget.model_dump_json() + "\n"
+        )
+
+        mock_client = _run(args, ctx)
+
+        # Only the sentinel work W2 was sent again.
+        assert mock_client.chat.completions.create.call_count == 1
+        records = [
+            json.loads(line)
+            for line in (out_dir / "records.jsonl").read_text().splitlines()
+        ]
+        assert sorted(r["work_id"] for r in records) == ["W1", "W2"]
+        assert all(r["reason"] is None for r in records)
+        meta = _meta(args)
+        assert meta["full_text_count"] == 2
+        assert meta["llm_rejected_count"] == 0
+
 
 def _stale_meta(
     corpus_id: str, prompt_sha256: str, eligibility_prompt_sha256: str | None = None

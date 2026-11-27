@@ -64,6 +64,7 @@ from laglitsynth.fulltext_extraction.models import ExtractedDocument
 from laglitsynth.io import (
     JsonlReadStats,
     append_jsonl,
+    keep_jsonl_rows,
     read_jsonl,
     write_meta,
 )
@@ -384,7 +385,10 @@ def build_subparser(
     parser.add_argument(
         "--skip-existing",
         action="store_true",
-        help="Skip works that already have a record in records.jsonl",
+        help=(
+            "Skip works that already have a filled record in records.jsonl; "
+            "works whose record is a sentinel are extracted again"
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -491,13 +495,20 @@ def run(args: argparse.Namespace) -> None:
     skip_ids: set[str] = set()
     prior_records: list[ExtractionRecordProto] = []
     if args.skip_existing and records_path.exists():
-        prior_records = [
-            cast(ExtractionRecordProto, r)
-            for r in read_jsonl(records_path, ctx.record_model, stats)
-        ]
+        # Keep only filled records; sentinel works are extracted again and
+        # their old row is dropped from the file before any call is made.
+        kept, retried = keep_jsonl_rows(
+            records_path,
+            ctx.record_model,
+            lambda r: cast(ExtractionRecordProto, r).reason is None,
+            stats=stats,
+            rewrite=not args.dry_run,
+        )
+        prior_records = [cast(ExtractionRecordProto, r) for r in kept]
         skip_ids = {r.work_id for r in prior_records}
         print(
-            f"Skipping {len(skip_ids)} already-extracted works.",
+            f"Skipping {len(skip_ids)} already-extracted works; "
+            f"retrying {retried} sentinel rows.",
             file=sys.stderr,
         )
 

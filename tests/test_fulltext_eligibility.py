@@ -766,6 +766,63 @@ class TestRun:
         assert meta["tei_parse_failure_count"] == 0
         assert meta["llm_parse_failure_count"] == 0
 
+    def test_skip_existing_retries_sentinels(self, tmp_path: Path) -> None:
+        corpus, extractions = _inputs(tmp_path, ["W1", "W2", "W3"])
+        args = _make_run_args(
+            tmp_path,
+            corpus_dir=corpus,
+            extractions=extractions,
+            skip_existing=True,
+            run_id="resume-run",
+        )
+        out_dir = _resolved_out_dir(args)
+        out_dir.mkdir(parents=True)
+        prior = [
+            EligibilityVerdict(work_id="W1", probability=0.9, eligible=True),
+            EligibilityVerdict(work_id="W2", reason="llm-rejected", raw_response="budget"),
+            EligibilityVerdict(work_id="W3", reason="llm-timeout"),
+        ]
+        (out_dir / "verdicts.jsonl").write_text(
+            "".join(v.model_dump_json() + "\n" for v in prior)
+        )
+
+        mock_classify = _run_mocked(
+            args, {"W2": {"eligible": False}, "W3": {"eligible": True}}
+        )
+
+        assert sorted(c.args[0] for c in mock_classify.call_args_list) == ["W2", "W3"]
+        verdicts = [
+            EligibilityVerdict.model_validate_json(line)
+            for line in (out_dir / "verdicts.jsonl").read_text().splitlines()
+        ]
+        assert sorted(v.work_id for v in verdicts) == ["W1", "W2", "W3"]
+        assert all(v.reason is None for v in verdicts)
+        meta = _meta(args)
+        assert meta["eligible_count"] == 2
+        assert meta["excluded_count"] == 1
+        assert meta["llm_rejected_count"] == 0
+        assert meta["llm_timeout_count"] == 0
+
+    def test_skip_existing_dry_run_keeps_sentinel_rows(self, tmp_path: Path) -> None:
+        corpus, extractions = _inputs(tmp_path, ["W1"])
+        args = _make_run_args(
+            tmp_path,
+            corpus_dir=corpus,
+            extractions=extractions,
+            skip_existing=True,
+            dry_run=True,
+            run_id="resume-run",
+        )
+        out_dir = _resolved_out_dir(args)
+        out_dir.mkdir(parents=True)
+        before = EligibilityVerdict(work_id="W1", reason="llm-rejected").model_dump_json() + "\n"
+        (out_dir / "verdicts.jsonl").write_text(before)
+
+        mock_classify = _run_mocked(args, {"W1": {"eligible": True}})
+
+        assert mock_classify.call_count == 1
+        assert (out_dir / "verdicts.jsonl").read_text() == before
+
 
 class TestRunOnMockEndpoint:
     """run() against a mocked decisions endpoint, without patching classify."""
