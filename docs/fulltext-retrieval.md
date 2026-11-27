@@ -237,7 +237,27 @@ For each PDF it resolves a target stem, never guessed, in this order:
 2. a filename whose stem is a catalogue stem (`<stem>.pdf`, the name the
    RIS `AN` field gives, or a bare folder named that way);
 3. a sidecar `*.csv`/`*.json` the collaborator returned that maps their
-   filenames to DOIs.
+   filenames to DOIs;
+4. a catalogue title the PDF carries
+   ([title_match.py](../src/laglitsynth/fulltext_retrieval/title_match.py)),
+   only for a PDF whose Info dictionary and XMP carry no DOI at all. A
+   DOI there that is not in the catalogue says the PDF is some other
+   document, such as an erratum, a reply or a book review, even when it
+   prints a catalogue title; import reports it and skips. DOIs from link
+   annotations and page text do not block the tier, because they also
+   point at cited or corrected works. Candidates are the Info `/Title`, the
+   XMP `dc:title`, and every run of one to eight consecutive lines among
+   the first 40 non-blank lines of page 1. Titles and candidates are
+   compared as keys (inline markup dropped, NFKC, casefolded, only letters
+   and digits kept), so line breaks, hyphenation and dropped spaces do not
+   matter, by `rapidfuzz`'s `fuzz.ratio`. A title is accepted only when it
+   scores at least 95, beats the next-best title by at least 10, has a key
+   of at least 30 characters, and belongs to one work. A shorter title is
+   never accepted but still counts as the next-best, so it can block a
+   correct match. A near-tie, or a title two works share, is reported with
+   the contending stems and skipped. The rule was chosen against the PDF
+   store
+   ([contributor-pdf-matching.md](explorations/contributor-pdf-matching.md#title-matching-measured-against-the-pdf-store)).
 
 Each candidate is validated by magic bytes, then deduplicated by
 `content_sha256`: a byte-identical re-import is a no-op, and a PDF that
@@ -247,12 +267,15 @@ their provenance is upserted with the given `--source`. A PDF that resolves
 to no catalogue stem, or is not a real PDF, is reported and skipped. Import
 prints a summary — matched and copied, skipped, and how many catalogue works
 are still without a PDF after this import. The unmatched residual is a
-matching problem, not the collaborator's: they are never asked to name anything. A
-title-matching fallback for PDFs that embed no DOI is the open follow-up —
-[contributor-pdf-matching.md](explorations/contributor-pdf-matching.md)
-records the measurement behind the current matching and what the fallback
-needs. Until it lands, renaming a residual file to `<stem>.pdf` and
-importing again files it.
+matching problem, not the collaborator's: they are never asked to name
+anything. What stays unmatched carries neither a catalogue DOI nor a
+clearly matching title, or names a DOI outside the catalogue in its
+metadata: a scanned page with no text, a record whose title is not the
+paper's (a referee report), a preprint whose metadata carries its own
+preprint DOI. Renaming such a file to `<stem>.pdf` and importing again
+files it. An erratum or reply that carries no DOI in its metadata but
+prints the corrected work's title is not caught by the gate and can be
+filed under that work.
 
 ## Collaboration model
 

@@ -203,6 +203,14 @@ Update this file when a plan is written, implemented, or archived.
   [contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md);
   the residual that embeds no DOI is the title-matching question.
 
+- [Import title matching](done/import-title-matching.md) — a returned PDF
+  with no usable DOI is filed by the catalogue title in its metadata or
+  page-1 title block (`rapidfuzz` ratio), accepted only as a clear,
+  unshared winner, and never for a PDF whose metadata names a DOI outside
+  the catalogue; the rule was chosen by hiding the DOI of DOI-confirmed
+  store PDFs
+  ([contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md#title-matching-measured-against-the-pdf-store)).
+
 - [Unscreened sample run and packed handoff](done/unscreened-sample-run.md) —
   `catalogue-sample` (seeded subset as its own catalogue),
   `screening-abstracts --pass-all` (`unscreened` sentinel, no model call),
@@ -266,10 +274,6 @@ Nothing.
   eligibility verdicts on every PDF before choosing a threshold. Scope
   wording is
   [issue #26](https://github.com/geomar-od-lagrange/2026_laglitsynth/issues/26).
-- Title-based import matching for returned PDFs that embed no DOI
-  ([contributor-pdf-matching.md](../docs/explorations/contributor-pdf-matching.md)),
-  tuned against the measured publisher-PDF corpus rather than an invented
-  threshold.
 - Retrieval over every OpenAlex location of a work plus Semantic Scholar
   and arXiv (step 2 of the [pipeline restructure](done/pipeline-restructure.md)).
   `fulltext-retrieval` tries only OpenAlex's best open-access URL and
