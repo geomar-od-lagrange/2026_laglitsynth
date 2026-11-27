@@ -8,7 +8,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from pypdf import DocumentInformation, PdfWriter
-from pypdf.generic import NameObject, TextStringObject
+from pypdf.generic import (
+    ByteStringObject,
+    NameObject,
+    NumberObject,
+    PdfObject,
+    TextStringObject,
+)
 
 from laglitsynth.cli import main
 from laglitsynth.fulltext_retrieval.import_ import _ImportSummary, import_pdfs, run
@@ -778,10 +784,11 @@ class TestTitleTier:
 class TestIndirectMetadata:
     """pypdf hands indirect Info values back unresolved from ``values()``."""
 
-    def _pdf(self, path: Path, key: str, value: str) -> None:
+    def _pdf(self, path: Path, key: str, value: str | PdfObject) -> None:
         writer = PdfWriter()
         writer.add_blank_page(width=200, height=200)
-        ref = writer._add_object(TextStringObject(value))
+        obj = TextStringObject(value) if isinstance(value, str) else value
+        ref = writer._add_object(obj)
         writer._info.get_object()[NameObject(key)] = ref
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "wb") as f:
@@ -805,6 +812,32 @@ class TestIndirectMetadata:
         self._pdf(tmp_path / "incoming" / "a.pdf", "/Subject", "doi:10.1234/abc")
         data_dir = self._run(tmp_path, [("https://openalex.org/W1", "W1", "10.1234/abc")])
         assert "https://openalex.org/W1" in load_provenance(data_dir)
+
+    @pytest.mark.parametrize("key", ["/Title", "/Subject"])
+    @pytest.mark.parametrize(
+        "value",
+        [ByteStringObject(b"\xff\xfe\x00"), NumberObject(7)],
+        ids=["undecodable-bytes", "number"],
+    )
+    def test_a_non_text_indirect_info_value_is_skipped_not_fatal(
+        self, tmp_path: Path, key: str, value: PdfObject
+    ) -> None:
+        self._pdf(tmp_path / "incoming" / "a.pdf", key, value)
+        catalogue = tmp_path / "catalogue.jsonl"
+        _write_catalogue(
+            catalogue,
+            [("https://openalex.org/W1", "W1", "")],
+            {"W1": TestTitleTier.TITLE},
+        )
+        summary, still_missing = import_pdfs(
+            tmp_path / "incoming",
+            catalogue,
+            tmp_path / "data",
+            PdfSource.manual,
+            overwrite=False,
+        )
+        assert summary.skipped_unmatched == ["a.pdf"]
+        assert still_missing == 1
 
     def test_an_indirect_info_title_resolves(self, tmp_path: Path) -> None:
         title = TestTitleTier.TITLE

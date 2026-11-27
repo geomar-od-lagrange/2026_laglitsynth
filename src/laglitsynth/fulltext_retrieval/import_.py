@@ -207,8 +207,11 @@ def _read_evidence(pdf_path: Path) -> _PdfEvidence:
                 value = meta[key]
                 if isinstance(value, str):
                     add(found.document, value)
-            if meta.title:
-                found.titles.append(meta.title)
+            # An undecodable or numeric /Title comes back as a bytes or number
+            # object, which says nothing usable about the title.
+            title = meta.title
+            if isinstance(title, str) and title:
+                found.titles.append(title)
         try:
             xmp = reader.xmp_metadata
             if xmp is not None:
