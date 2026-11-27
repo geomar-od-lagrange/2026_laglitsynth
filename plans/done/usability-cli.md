@@ -9,7 +9,7 @@ several knobs the wrapper threads silently are not reachable from the
 CLI at all (`--num-ctx`, `--concurrency` on stages 7/8), some defaults
 are documented as broken (stage 8's `--model gemma3:4b`), and the
 `.env` story leaves manual users guessing. Doc fixes for the same
-findings live in [`usability-docs.md`](../usability-docs.md); this plan
+findings live in [`usability-docs.md`](usability-docs.md); this plan
 covers code changes only.
 
 This plan has **open questions** that need answers before commits 4–7
@@ -19,7 +19,7 @@ on subcommand surface area.
 ## Non-goals
 
 - Documentation changes — covered by
-  [`usability-docs.md`](../usability-docs.md). The CLI changes here
+  [`usability-docs.md`](usability-docs.md). The CLI changes here
   invalidate some doc text; that doc lands its own re-edits.
 - Pipeline-level config file
   ([A1](../../docs/explorations/usability-review.md)). The threshold-on-
@@ -153,7 +153,7 @@ Explicit flag still wins.
 
 See [Open questions Q3](#q3-env-fallback) for whether the compromise
 is acceptable or whether the doc fix in
-[`usability-docs.md`](../usability-docs.md) (showing
+[`usability-docs.md`](usability-docs.md) (showing
 `set -a; source .env; set +a`) is the right scope.
 
 #### 6. `bake-model` subcommand
@@ -246,7 +246,7 @@ from
 [`screen.py:177–196`](../../src/laglitsynth/screening_abstracts/screen.py)
 into a shared helper module; stages 7 and 8 use it. Tests as for
 stage 3. If "no": the doc-only one-liner in
-[`usability-docs.md`](../usability-docs.md) is the closing fix.
+[`usability-docs.md`](usability-docs.md) is the closing fix.
 
 #### 5. `.env` fallback
 
@@ -339,7 +339,7 @@ out env-var fallback explicitly. Three shapes:
   loading. Compromise.
 
 Recommendation: (B). The
-[`usability-docs.md`](../usability-docs.md) plan already adds the doc
+[`usability-docs.md`](usability-docs.md) plan already adds the doc
 line; the design rule is there for a reason and the cost of "source
 your .env" is tiny. (C) feels over-designed for the problem.
 
@@ -421,7 +421,7 @@ constant in the hash input. Confirm the test
 `test_num_ctx_changes_prompt_hash` actually exercises this.
 
 **Documentation feedback loop with
-[`usability-docs.md`](../usability-docs.md).** The doc plan adds
+[`usability-docs.md`](usability-docs.md).** The doc plan adds
 "`--concurrency` is absent on stages 7/8" notes. If Q2 lands as (A),
 those notes need to be removed in the same commit that adds the
 flag. Coordinate the two plans' commits in roadmap order.
@@ -448,7 +448,7 @@ flag. Coordinate the two plans' commits in roadmap order.
 - [`scripts/run-pipeline.sh`](../../scripts/run-pipeline.sh),
   [`scripts/nesh-pipeline.sbatch`](../../scripts/nesh-pipeline.sbatch) —
   thread the new flags if/when added.
-- [`plans/usability-docs.md`](../usability-docs.md) — coordinate
+- [`plans/usability-docs.md`](usability-docs.md) — coordinate
   doc-text changes with the CLI changes here (the
   "--concurrency absent" note in particular).
 - [`plans/roadmap.md`](../roadmap.md) — index update.
