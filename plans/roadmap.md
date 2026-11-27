@@ -265,6 +265,12 @@ Nothing.
 
 ## Queued — ready to plan
 
+- Catalogue search widening
+  ([catalogue-search-widening.md](catalogue-search-widening.md)): a
+  measured list of OpenAlex queries with per-query record caps, run from
+  the review config. The query list is a candidate and gets revisited
+  before the production run; measurements in
+  [catalogue-search-widening.md](../docs/explorations/catalogue-search-widening.md).
 - Recall-oriented abstract screening
   ([issue #31](https://github.com/geomar-od-lagrange/2026_laglitsynth/issues/31)):
   the screening question asks whether the abstract shows particle tracking,
