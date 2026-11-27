@@ -18,13 +18,25 @@ from laglitsynth.layout import PDF_MANIFEST_FILENAME, deduplicated_path, export_
 from conftest import _make_work, _write_works_jsonl
 
 
-def _write_catalogue(path: Path, rows: list[tuple[str, str, str]]) -> None:
-    """rows: (work_id, stem, doi); an empty DOI means a DOI-less work."""
+def _write_catalogue(
+    path: Path,
+    rows: list[tuple[str, str, str]],
+    titles: dict[str, str] | None = None,
+) -> None:
+    """rows: (work_id, stem, doi); an empty DOI means a DOI-less work.
+
+    ``titles`` maps a stem to its title; other works keep ``_make_work``'s
+    default, which is too short to take part in title matching.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    titles = titles or {}
     works = []
     for work_id, stem, doi in rows:
         assert work_id.endswith("/" + stem)
-        works.append(_make_work(work_id, doi=doi or None))
+        if stem in titles:
+            works.append(_make_work(work_id, title=titles[stem], doi=doi or None))
+        else:
+            works.append(_make_work(work_id, doi=doi or None))
     _write_works_jsonl(path, works)
 
 
@@ -534,13 +546,18 @@ def _fake_reader(
 
 
 def _import_with(
-    reader: MagicMock, tmp_path: Path, rows: list[tuple[str, str, str]]
+    reader: MagicMock,
+    tmp_path: Path,
+    rows: list[tuple[str, str, str]],
+    *,
+    titles: dict[str, str] | None = None,
+    filename: str = "anything.pdf",
 ) -> tuple[_ImportSummary, int, Path]:
     import_dir = tmp_path / "incoming"
     data_dir = tmp_path / "data"
     catalogue = tmp_path / "catalogue.jsonl"
-    _write_catalogue(catalogue, rows)
-    _make_pdf(import_dir / "anything.pdf")
+    _write_catalogue(catalogue, rows, titles)
+    _make_pdf(import_dir / filename)
     with patch("laglitsynth.fulltext_retrieval.import_.PdfReader", return_value=reader):
         summary, still_missing = import_pdfs(
             import_dir, catalogue, data_dir, PdfSource.manual, overwrite=False
@@ -606,3 +623,94 @@ class TestTextTierAmbiguity:
         summary, _, data_dir = _import_with(reader, tmp_path, self.ROWS)
         assert summary.copied == 1
         assert load_provenance(data_dir)["https://openalex.org/W2"].stem == "W2"
+
+
+class TestTitleTier:
+    """Title matching runs only after every DOI, filename and sidecar route."""
+
+    TITLE = "Deep Lagrangian connectivity in the global ocean inferred from Argo floats"
+    OTHER = "Seasonal variability of surface drifter dispersion in the Gulf of Mexico"
+    ROWS = [
+        ("https://openalex.org/W1", "W1", ""),
+        ("https://openalex.org/W2", "W2", "10.1234/other"),
+    ]
+    TITLES = {"W1": TITLE, "W2": OTHER}
+
+    def test_a_title_broken_over_lines_on_page_one_files_a_doi_less_pdf(
+        self, tmp_path: Path
+    ) -> None:
+        page = (
+            "Journal of Physical Oceanography 52 (2022)\n"
+            "Deep Lagrangian Connectivity in the Global\n"
+            "Ocean Inferred from Argo Floats\n"
+            "Ryan Abernathey, Christopher Bladwell\n"
+            "Lamont-Doherty Earth Observatory, Palisades, New York\n"
+        )
+        reader = _fake_reader(page_texts=[page])
+        summary, _, data_dir = _import_with(
+            reader, tmp_path, self.ROWS, titles=self.TITLES
+        )
+        assert summary.copied == 1
+        assert load_provenance(data_dir)["https://openalex.org/W1"].stem == "W1"
+
+    def test_a_metadata_title_alone_files_the_pdf(self, tmp_path: Path) -> None:
+        reader = _fake_reader(metadata={"/Title": self.TITLE.upper()})
+        summary, _, data_dir = _import_with(
+            reader, tmp_path, self.ROWS, titles=self.TITLES
+        )
+        assert summary.copied == 1
+        assert "https://openalex.org/W1" in load_provenance(data_dir)
+
+    def test_a_doi_beats_the_title_of_another_work(self, tmp_path: Path) -> None:
+        reader = _fake_reader(
+            metadata={"/Subject": "doi:10.1234/other"}, page_texts=[self.TITLE]
+        )
+        summary, _, data_dir = _import_with(
+            reader, tmp_path, self.ROWS, titles=self.TITLES
+        )
+        assert summary.copied == 1
+        assert list(load_provenance(data_dir)) == ["https://openalex.org/W2"]
+
+    def test_a_stem_filename_beats_the_title_of_another_work(
+        self, tmp_path: Path
+    ) -> None:
+        reader = _fake_reader(page_texts=[self.TITLE])
+        summary, _, data_dir = _import_with(
+            reader, tmp_path, self.ROWS, titles=self.TITLES, filename="W2.pdf"
+        )
+        assert summary.copied == 1
+        assert list(load_provenance(data_dir)) == ["https://openalex.org/W2"]
+
+    def test_two_works_with_the_same_title_are_not_guessed_between(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        reader = _fake_reader(page_texts=[self.TITLE])
+        summary, still_missing, _ = _import_with(
+            reader, tmp_path, self.ROWS, titles={"W1": self.TITLE, "W2": self.TITLE}
+        )
+        assert summary.copied == 0
+        assert summary.skipped_unmatched == ["anything.pdf"]
+        assert still_missing == 2
+        assert "W1, W2" in capsys.readouterr().err
+
+    def test_a_near_same_title_is_refused(self, tmp_path: Path) -> None:
+        # A preprint and its article, retitled in a few words.
+        titles = {
+            "W1": "Lagrangian transport in a microtidal coastal area: "
+            "the Bay of Palma, Mallorca Island, Spain",
+            "W2": "Lagrangian transport in a microtidal coastal area: "
+            "the Bay of Palma, island of Mallorca, Spain",
+        }
+        reader = _fake_reader(page_texts=[titles["W1"]])
+        summary, _, _ = _import_with(reader, tmp_path, self.ROWS, titles=titles)
+        assert summary.copied == 0
+
+    def test_a_short_title_met_in_an_affiliation_is_not_accepted(
+        self, tmp_path: Path
+    ) -> None:
+        titles = {"W1": "Geophysical fluid dynamics", "W2": self.OTHER}
+        page = "Reviewed by: John Doe,\nGeophysical Fluid Dynamics\nLaboratory"
+        reader = _fake_reader(page_texts=[page])
+        summary, _, _ = _import_with(reader, tmp_path, self.ROWS, titles=titles)
+        assert summary.copied == 0
+        assert summary.skipped_unmatched == ["anything.pdf"]

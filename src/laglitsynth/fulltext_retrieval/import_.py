@@ -18,7 +18,9 @@ Stem resolution order, per work, never guessed:
 2. a filename whose stem is a catalogue stem (``<stem>.pdf``, the name the
    RIS ``AN`` field gives);
 3. a returned sidecar ``*.csv`` / ``*.json`` mapping the collaborator's
-   filenames to DOIs.
+   filenames to DOIs;
+4. a catalogue title the PDF carries, in its metadata title or the title
+   block of page 1, accepted only as a clear winner (see ``title_match``).
 
 A PDF that resolves to no catalogue stem, or is not a real PDF, is reported
 and skipped.
@@ -49,6 +51,7 @@ from laglitsynth.fulltext_retrieval.store import (
     store_pdf_path,
     upsert_provenance,
 )
+from laglitsynth.fulltext_retrieval.title_match import TitleIndex
 from laglitsynth.ids import work_id_to_filename
 from laglitsynth.io import read_jsonl
 from laglitsynth.layout import deduplicated_path, require_input
@@ -74,6 +77,7 @@ class CatalogueEntry:
     work_id: str
     stem: str
     doi: str | None  # bare, as the catalogue spells it; None for DOI-less works
+    title: str | None
 
 
 @dataclass
@@ -99,12 +103,13 @@ def _normalise_doi(doi: str | None) -> str | None:
 
 
 def read_catalogue_entries(path: Path) -> list[CatalogueEntry]:
-    """Return the work id, stem and bare DOI of every work in a catalogue."""
+    """Return the work id, stem, bare DOI and title of every work in a catalogue."""
     return [
         CatalogueEntry(
             work_id=work.id,
             stem=work_id_to_filename(work.id),
             doi=_bare_doi(work.doi),
+            title=work.title,
         )
         for work in read_jsonl(path, Work)
     ]
@@ -152,21 +157,25 @@ def _strip_trailing_punct(doi: str) -> str:
 
 
 @dataclass
-class _DoiCandidates:
-    """Self-identifying DOIs found in a PDF, split by how much to trust them.
+class _PdfEvidence:
+    """What a PDF says about itself, read once and used by every tier.
 
-    ``metadata`` holds the Info dictionary, XMP, and title-page link
+    ``metadata`` holds DOIs from the Info dictionary, XMP, and title-page link
     annotations: each names the document itself. ``text`` holds every DOI on
     the first page, which also catches a corrigendum's "Correction to:" line
     or a cited companion paper, so it is only trusted when unambiguous.
+    ``titles`` holds the Info ``/Title`` and XMP ``dc:title``, and
+    ``first_page`` the extracted text of page 1, for title matching.
     """
 
     metadata: list[str] = field(default_factory=list)
     text: list[str] = field(default_factory=list)
+    titles: list[str] = field(default_factory=list)
+    first_page: str = ""
 
 
-def _embedded_dois(pdf_path: Path) -> _DoiCandidates:
-    """Return every self-identifying DOI in a PDF, grouped by trust.
+def _read_evidence(pdf_path: Path) -> _PdfEvidence:
+    """Return every self-identifying DOI in a PDF, grouped by trust, and its titles.
 
     The caller keeps the first metadata candidate that appears in the
     catalogue, so returning several is what lets a wrong one be discarded — an
@@ -178,7 +187,7 @@ def _embedded_dois(pdf_path: Path) -> _DoiCandidates:
     catalogue, and a DOI harvested there would file the PDF under the wrong
     work.
     """
-    found = _DoiCandidates()
+    found = _PdfEvidence()
 
     def add(into: list[str], text: str) -> None:
         for match in _DOI_RE.finditer(text):
@@ -193,10 +202,16 @@ def _embedded_dois(pdf_path: Path) -> _DoiCandidates:
             for value in meta.values():
                 if isinstance(value, str):
                     add(found.metadata, value)
+            title = meta.get("/Title")
+            if isinstance(title, str):
+                found.titles.append(title)
         try:
             xmp = reader.xmp_metadata
             if xmp is not None:
                 add(found.metadata, str(xmp.stream.get_data(), "utf-8", "replace"))
+                dc_title = xmp.dc_title
+                if isinstance(dc_title, dict):
+                    found.titles += [t for t in dc_title.values() if isinstance(t, str)]
         except (PyPdfError, OSError, ValueError, TypeError, AttributeError):
             # Malformed XMP is common and never fatal: other sources remain.
             pass
@@ -211,10 +226,11 @@ def _embedded_dois(pdf_path: Path) -> _DoiCandidates:
             # Damaged or absent annotation objects; other sources remain.
             pass
         if reader.pages:
-            add(found.text, reader.pages[0].extract_text() or "")
+            found.first_page = reader.pages[0].extract_text() or ""
+            add(found.text, found.first_page)
     except (PyPdfError, OSError, ValueError) as exc:
-        # A malformed PDF yields no embedded DOI; later strategies still apply.
-        print(f"  ! could not parse {pdf_path.name} for embedded DOI: {exc}", file=sys.stderr)
+        # A malformed PDF yields no embedded DOI or title; later strategies still apply.
+        print(f"  ! could not parse {pdf_path.name} for DOI or title: {exc}", file=sys.stderr)
     return found
 
 
@@ -224,11 +240,12 @@ def _resolve_stem(
     doi_to_stem: dict[str, str],
     stems: set[str],
     sidecar: dict[str, str],
+    titles: TitleIndex,
 ) -> str | None:
     """Resolve a returned PDF to a catalogue stem, or None if unmatched."""
     # (a) a self-identifying DOI that lands in the catalogue. Membership
     # decides, not position: the first candidate is often a journal-level DOI.
-    found = _embedded_dois(pdf_path)
+    found = _read_evidence(pdf_path)
     for candidate in found.metadata:
         embedded = _normalise_doi(candidate)
         if embedded is not None and embedded in doi_to_stem:
@@ -260,7 +277,15 @@ def _resolve_stem(
     if sidecar_doi is not None and sidecar_doi in doi_to_stem:
         return doi_to_stem[sidecar_doi]
 
-    return None
+    # (d) a catalogue title, only as a clear winner; a near-tie is reported.
+    by_title = titles.match(found.titles, found.first_page)
+    if by_title.contenders:
+        print(
+            f"  ! {pdf_path.name}: title fits {len(by_title.contenders)} catalogue works "
+            f"about equally ({', '.join(by_title.contenders)}); not guessing",
+            file=sys.stderr,
+        )
+    return by_title.stem
 
 
 def import_pdfs(
@@ -285,6 +310,7 @@ def import_pdfs(
         if norm is not None:
             doi_to_stem[norm] = e.stem
     sidecar = _load_sidecar(import_dir)
+    titles = TitleIndex({e.stem: e.title for e in entries})
 
     provenance = load_provenance(data_dir)
     summary = _ImportSummary()
@@ -295,7 +321,11 @@ def import_pdfs(
             continue
 
         stem = _resolve_stem(
-            pdf_path, doi_to_stem=doi_to_stem, stems=stems, sidecar=sidecar
+            pdf_path,
+            doi_to_stem=doi_to_stem,
+            stems=stems,
+            sidecar=sidecar,
+            titles=titles,
         )
         if stem is None:
             summary.skipped_unmatched.append(pdf_path.name)

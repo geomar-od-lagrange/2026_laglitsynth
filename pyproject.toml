@@ -13,6 +13,7 @@ dependencies = [
     "pypdf>=4.0",
     "python-dotenv",
     "pyyaml>=6.0",
+    "rapidfuzz>=3.0",
 ]
 
 [project.optional-dependencies]
